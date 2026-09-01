@@ -42,9 +42,14 @@ def test_monitoring_includes_subscription_gateway_models_and_usage():
     response = controller.overview("Bearer test", page=1, page_size=12)
     payload = response.data
 
-    assert payload["summary"] == {"total": 2, "available": 2}
+    assert payload["summary"]["total"] == 2
+    assert payload["summary"]["available"] == 2
+    assert payload["summary"]["requests_24h"] == 2
+    assert payload["summary"]["tokens_24h"] == 300
+    assert payload["summary"]["overall_status"] == "正常"
     by_id = {item["id"]: item for item in payload["models"]}
     assert set(by_id) == {"yaml-model", "gpt-subscription"}
     assert by_id["gpt-subscription"]["requests_24h"] == 2
     assert by_id["gpt-subscription"]["tokens_24h"] == 300
     assert by_id["gpt-subscription"]["cost_24h"] == 0.02
+    assert by_id["gpt-subscription"]["health_history"][-1]["ok"] is True

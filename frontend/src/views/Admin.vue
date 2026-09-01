@@ -33,7 +33,7 @@
     </div>
 
     <section v-if="activeAdminSection === 'visuals'" id="admin-visuals" class="admin-visual-section">
-      <div class="admin-section-heading"><div><span class="eyebrow">DATA VISUALIZATION</span><h2>数据可视化</h2></div><p>请求、Token、费用、用户和订单均由 SQLite 聚合统计，不加载全量明细。</p></div>
+      <div class="admin-section-heading"><div><span class="eyebrow">DATA VISUALIZATION</span><h2>数据可视化</h2></div><p>请求、Token、费用、用户和订单均由服务端数据库聚合统计，不加载全量明细。</p></div>
       <div class="admin-dashboard-grid">
         <div class="panel chart-panel chart-wide">
           <div class="panel-head"><div><span class="eyebrow">LAST 14 DAYS</span><h2>每日请求趋势</h2></div><div class="chart-legend"><span><i class="legend-requests"></i>请求</span><span><i class="legend-tokens"></i>Token</span></div></div>
@@ -148,9 +148,9 @@
       </div>
 
       <div class="admin-log-export">
-        <div class="panel-head"><div><span class="eyebrow">DATA EXPORT</span><h2>调用统计导出</h2><p class="panel-note">导出文件只包含用户、模型、状态、Token、费用和时间，不包含请求正文、图片数据或模型回答。</p></div><button class="secondary-btn" @click="copyExport">复制命令</button></div>
-        <div class="code-block large"><div class="code-head"><span>Windows PowerShell · SQLite CSV</span><button @click="copyExport">复制</button></div><pre>{{ exportSqlite }}</pre></div>
-        <p class="panel-note export-note">CSV 导出和数据库备份仅供管理员合规审计，请妥善保护导出文件。</p>
+        <div class="panel-head"><div><span class="eyebrow">DATA EXPORT</span><h2>调用统计导出</h2><p class="panel-note">服务端生成 CSV，SQLite 与 MySQL 均可使用；不包含请求正文、图片数据或模型回答。</p></div><button class="secondary-btn" :disabled="exporting" @click="downloadExport">{{ exporting ? '导出中…' : '下载 CSV' }}</button></div>
+        <div class="export-controls"><label>开始时间<input v-model="exportFilters.start_at" type="datetime-local" /></label><label>结束时间<input v-model="exportFilters.end_at" type="datetime-local" /></label><label>用户 ID<input v-model.trim="exportFilters.user_id" inputmode="numeric" placeholder="全部" /></label><label>模型<input v-model.trim="exportFilters.model" placeholder="全部模型" /></label><label>状态<select v-model="exportFilters.status"><option value="">全部</option><option value="SUCCEEDED">成功</option><option value="FAILED">失败</option><option value="BILLING_FAILED">计费失败</option></select></label></div>
+        <p class="panel-note export-note">最多导出 50,000 条摘要记录。CSV 仅供管理员合规审计，请妥善保护导出文件。</p>
       </div>
     </section>
 
@@ -168,7 +168,7 @@
     <div v-if="activeAdminSection === 'business'" class="panel subscription-admin-panel">
       <div class="panel-head"><div><span class="eyebrow">SUBSCRIPTION MANAGEMENT</span><h2>套餐管理</h2><p class="panel-note">金额或 Token 未填写时按 0 处理，0 表示该项不限制。</p></div></div>
       <form class="plan-form" @submit.prevent="savePlan"><div class="plan-form-intro"><div><span class="eyebrow">{{ editingPlan ? 'EDIT PLAN' : 'NEW PLAN' }}</span><strong>{{ editingPlan ? '编辑套餐配置' : '新建套餐配置' }}</strong></div><small>空值或 0 表示不限制</small></div><label>套餐名称<input v-model.trim="planForm.name" placeholder="例如：标准版" required /></label><label class="plan-description">套餐说明<input v-model.trim="planForm.description" placeholder="面向日常对话与代码任务" /></label><label>售价<input v-model.number="planForm.price" type="number" min="0" step="0.01" placeholder="0" /></label><label>有效天数<input v-model.number="planForm.duration_days" type="number" min="1" step="1" placeholder="30" /></label><label>每日金额<input v-model.number="planForm.daily_amount" type="number" min="0" step="0.0001" placeholder="0" /></label><label>每日 Token<input v-model.number="planForm.daily_tokens" type="number" min="0" step="1" placeholder="0" /></label><div class="plan-form-actions"><button class="primary-btn" :disabled="planSaving">{{ planSaving ? '保存中…' : editingPlan ? '保存套餐' : '新建套餐' }}<span class="plan-action-arrow">→</span></button><button v-if="editingPlan" type="button" class="secondary-btn" @click="resetPlanForm">取消编辑</button></div></form>
-      <div v-if="plans.length" class="admin-plan-grid"><article v-for="plan in plans" :key="plan.id" class="admin-plan-card"><div class="admin-plan-top"><div><span class="plan-id">PLAN {{ String(plan.id).padStart(2, '0') }}</span><h3>{{ plan.name }}</h3></div><span :class="['status', plan.enabled ? 'success' : 'pending']">{{ plan.enabled ? '启用' : '停用' }}</span></div><p>{{ plan.description || '未填写套餐说明' }}</p><div class="admin-plan-price"><strong>¥{{ Number(plan.price || 0).toFixed(2) }}</strong><span>/ {{ plan.duration_days }} 天</span></div><div class="admin-plan-specs"><div><small>每日金额</small><b>{{ plan.daily_amount > 0 ? `¥${Number(plan.daily_amount).toFixed(4)}` : '不限' }}</b></div><div><small>每日 Token</small><b>{{ plan.daily_tokens > 0 ? Number(plan.daily_tokens).toLocaleString('zh-CN') : '不限' }}</b></div></div><div class="admin-plan-actions"><button class="secondary-btn" @click="editPlan(plan)">编辑</button><button class="secondary-btn" @click="togglePlan(plan)">{{ plan.enabled ? '停用' : '启用' }}</button><button class="text-btn danger" @click="removePlan(plan)">删除</button></div></article></div><div v-else class="empty compact-empty">暂无套餐，请先新建</div>
+      <div v-if="plans.length" class="admin-plan-grid"><article v-for="plan in plans" :key="plan.id" class="admin-plan-card"><div class="admin-plan-top"><div><span class="plan-id">PLAN {{ String(plan.id).padStart(2, '0') }}</span><h3>{{ plan.name }}</h3></div><span :class="['status', plan.enabled ? 'success' : 'pending']">{{ plan.enabled ? '启用' : '停用' }}</span></div><p>{{ plan.description || '未填写套餐说明' }}</p><div class="admin-plan-price"><strong>¥{{ Number(plan.price || 0).toFixed(2) }}</strong><span>/ {{ plan.duration_days }} 天</span></div><div class="admin-plan-specs"><div><small>每日金额</small><b>{{ plan.daily_amount > 0 ? `¥${Number(plan.daily_amount).toFixed(4)}` : '不限' }}</b></div><div><small>每日 Token</small><b>{{ plan.daily_tokens > 0 ? Number(plan.daily_tokens).toLocaleString('zh-CN') : '不限' }}</b></div></div><div class="admin-plan-actions"><button class="secondary-btn" @click="editPlan(plan)">编辑</button><button class="secondary-btn" @click="togglePlan(plan)">{{ plan.enabled ? '停用' : '启用' }}</button><button v-if="plan.enabled" class="text-btn danger" @click="removePlan(plan)">停用并保留历史</button></div></article></div><div v-else class="empty compact-empty">暂无套餐，请先新建</div>
       <div v-if="planPagination.pages > 1" class="pagination"><button class="secondary-btn" :disabled="planPagination.page <= 1" @click="changePlanPage(planPagination.page - 1)">上一页</button><span>第 {{ planPagination.page }} / {{ planPagination.pages }} 页，共 {{ planPagination.total }} 条</span><button class="secondary-btn" :disabled="planPagination.page >= planPagination.pages" @click="changePlanPage(planPagination.page + 1)">下一页</button></div>
     </div>
 
@@ -205,13 +205,13 @@
       <div class="pagination" v-if="userPagination.pages > 1"><button class="secondary-btn" :disabled="userPagination.page <= 1" @click="changeUserPage(userPagination.page - 1)">上一页</button><span>第 {{ userPagination.page }} / {{ userPagination.pages }} 页，共 {{ userPagination.total }} 条</span><button class="secondary-btn" :disabled="userPagination.page >= userPagination.pages" @click="changeUserPage(userPagination.page + 1)">下一页</button></div>
     </div>
 
-    <div v-if="createUserOpen" class="modal-backdrop" @click.self="closeCreateUser"><div class="modal-card admin-create-user"><button class="modal-close" aria-label="关闭" @click="closeCreateUser">×</button><span class="eyebrow">NEW USER</span><h2>新建用户</h2><p class="panel-note">创建后用户可自行在 API 密钥页面生成命名密钥。</p><form @submit.prevent="createUser"><div class="form-grid"><label>账户名<input v-model.trim="userForm.username" autocomplete="off" maxlength="32" placeholder="3-32 位字符" /></label><label>初始余额<input v-model.number="userForm.balance" type="number" min="-0.1" step="0.0001" /></label></div><label>登录密码<input v-model="userForm.password" type="password" autocomplete="new-password" minlength="6" placeholder="至少 6 位字符" /></label><label>邮箱 <span class="optional">可选</span><input v-model.trim="userForm.email" type="email" autocomplete="off" placeholder="用于接收通知" /></label><div class="form-grid"><label>角色<select v-model="userForm.role"><option value="USER">普通用户</option><option value="ADMIN">管理员</option></select></label><label class="create-toggle"><span>创建后启用</span><input v-model="userForm.enabled" type="checkbox" /></label></div><p v-if="createError" class="form-error">{{ createError }}</p><div class="feedback-actions"><button type="button" class="secondary-btn" @click="closeCreateUser">取消</button><button type="submit" class="primary-btn" :disabled="creatingUser">{{ creatingUser ? '创建中…' : '创建用户' }}</button></div></form></div></div>
+    <div v-if="createUserOpen" class="modal-backdrop" @click.self="closeCreateUser"><div ref="createUserDialog" class="modal-card admin-create-user" role="dialog" aria-modal="true" aria-labelledby="create-user-title" tabindex="-1" @keydown="trapCreateFocus" @keydown.esc.stop="closeCreateUser"><button class="modal-close" aria-label="关闭" @click="closeCreateUser">×</button><span class="eyebrow">NEW USER</span><h2 id="create-user-title">新建用户</h2><p class="panel-note">创建后用户可自行在 API 密钥页面生成命名密钥。</p><form @submit.prevent="createUser"><div class="form-grid"><label>账户名<input v-model.trim="userForm.username" autocomplete="off" maxlength="32" placeholder="3-32 位字符" autofocus /></label><label>初始余额<input v-model.number="userForm.balance" type="number" min="-0.1" step="0.0001" /></label></div><label>登录密码<input v-model="userForm.password" type="password" autocomplete="new-password" minlength="6" placeholder="至少 6 位字符" /></label><label>邮箱 <span class="optional">可选</span><input v-model.trim="userForm.email" type="email" autocomplete="off" placeholder="仅用于账户资料，暂不发送通知" /></label><div class="form-grid"><label>角色<select v-model="userForm.role"><option value="USER">普通用户</option><option value="ADMIN">管理员</option></select></label><label class="create-toggle"><span>创建后启用</span><input v-model="userForm.enabled" type="checkbox" /></label></div><p v-if="createError" class="form-error">{{ createError }}</p><div class="feedback-actions"><button type="button" class="secondary-btn" @click="closeCreateUser">取消</button><button type="submit" class="primary-btn" :disabled="creatingUser">{{ creatingUser ? '创建中…' : '创建用户' }}</button></div></form></div></div>
   </section>
 </template>
 
 <script>
 import { api } from '../api'
-import { copyToClipboard, notify, askConfirm } from '../ui'
+import { copyToClipboard, notify, askConfirm, focusDialog, trapDialogFocus } from '../ui'
 
 export default {
   data: () => ({
@@ -243,7 +243,11 @@ export default {
     createUserOpen: false,
     creatingUser: false,
     createError: '',
-    userForm: { username: '', password: '', email: '', role: 'USER', balance: 0, enabled: true }
+    userForm: { username: '', password: '', email: '', role: 'USER', balance: 0, enabled: true },
+    loadingSections: false,
+    exportFilters: { start_at: '', end_at: '', user_id: '', model: '', status: '' },
+    exporting: false,
+    dialogReturnFocus: null
   }),
   computed: {
     modelUsageMax () {
@@ -308,41 +312,36 @@ export default {
     activityLinePath () {
       return this.activityLinePoints.map(point => `${point.x},${point.activeY}`).join(' ')
     },
-    exportSqlite () {
-      return `# 在项目根目录执行
-# 导出全部调用统计摘要（不含正文）
-python -c "import sqlite3,csv; c=sqlite3.connect('data/rose.db'); rows=c.execute('SELECT id,user_id,request_id,protocol,model,status,prompt_tokens,completion_tokens,total_tokens,cost,created_at FROM conversation_records ORDER BY id DESC'); f=open('conversation_logs.csv','w',newline='',encoding='utf-8-sig'); w=csv.writer(f); w.writerow([d[0] for d in rows.description]); w.writerows(rows); f.close()"
-
-# 如需管理员备份原始记录，请直接备份数据库文件
-Copy-Item .\\data\\rose.db .\\data\\rose.db.backup`
-    }
+    exportDescription () { return '服务端 CSV 导出' }
   },
   created () { this.load() },
   methods: {
     async load () {
-      try {
-        const [s, u, c, p, l] = await Promise.all([
+      this.loadingSections = true
+      const results = await Promise.allSettled([
           api.adminSummary(),
           api.users(this.keyword, { page: this.userPagination.page, page_size: 5 }),
           api.rechargeCodes({ page: this.codePagination.page, page_size: 5 }),
           api.adminSubscriptionPlans({ page: this.planPagination.page, page_size: 5 }),
           api.adminLogs({ page: this.logPagination.page, page_size: 5 })
-        ])
+      ])
+      const [sResult, uResult, cResult, pResult, lResult] = results
+      if (sResult.status === 'fulfilled') {
+        const s = sResult.value
         this.summary = s.summary || {}
         this.modelUsage = this.summary.model_usage || []
         this.recentConversations = this.summary.recent_conversations || []
         this.analytics = this.summary.analytics || this.analytics
         this.requestMetrics = this.summary.request_metrics || {}
-        this.recentLogs = l.logs || this.summary.recent_logs || []
-        this.logPagination = l.pagination || this.logPagination
         this.device = this.summary.device || this.device
-        this.users = u.users || []
-        this.codes = c.codes || []
-        this.userPagination = u.pagination || this.userPagination
-        this.codePagination = c.pagination || this.codePagination
-        this.plans = p.plans || []
-        this.planPagination = p.pagination || this.planPagination
-      } catch (e) { notify(e.message, 'error') }
+      }
+      if (uResult.status === 'fulfilled') { const u = uResult.value; this.users = u.users || []; this.userPagination = u.pagination || this.userPagination }
+      if (cResult.status === 'fulfilled') { const c = cResult.value; this.codes = c.codes || []; this.codePagination = c.pagination || this.codePagination }
+      if (pResult.status === 'fulfilled') { const p = pResult.value; this.plans = p.plans || []; this.planPagination = p.pagination || this.planPagination }
+      if (lResult.status === 'fulfilled') { const l = lResult.value; this.recentLogs = l.logs || this.summary.recent_logs || []; this.logPagination = l.pagination || this.logPagination }
+      const failed = results.filter(item => item.status === 'rejected')
+      if (failed.length) notify(`${failed.length} 个管理区块加载失败，其余数据已保留`, 'error')
+      this.loadingSections = false
     },
     async loadUsers () {
       this.userPagination.page = 1
@@ -368,8 +367,8 @@ Copy-Item .\\data\\rose.db .\\data\\rose.db.backup`
       try { const d = await api.updateSubscriptionPlan(plan.id, { enabled: !plan.enabled }); if (!d.ok) throw new Error(d.message); await this.load(); notify('套餐状态已更新', 'success') } catch (e) { notify(e.message, 'error') }
     },
     async removePlan (plan) {
-      if (!await askConfirm(`删除套餐「${plan.name}」后，历史订阅记录仍保留但不能继续使用。确定删除吗？`)) return
-      try { const d = await api.deleteSubscriptionPlan(plan.id); if (!d.ok) throw new Error(d.message); await this.load(); notify('套餐已删除', 'success') } catch (e) { notify(e.message, 'error') }
+      if (!await askConfirm(`确定停用套餐「${plan.name}」吗？历史订阅和用量会保留。`)) return
+      try { const d = await api.deleteSubscriptionPlan(plan.id); if (!d.ok) throw new Error(d.message); await this.load(); notify('套餐已停用，历史记录已保留', 'success') } catch (e) { notify(e.message, 'error') }
     },
     barWidth (value) { return `${Math.max(2, Number(value || 0) / this.modelUsageMax * 100)}%` },
     linePoints (series) { return this.dailyLinePoints.map(point => `${point.x},${series === 'cost' ? point.costY : point.tokensY}`).join(' ') },
@@ -404,15 +403,16 @@ Copy-Item .\\data\\rose.db .\\data\\rose.db.backup`
     codeStatusClass (status) { return status === 'ACTIVE' ? 'success' : status === 'REDEEMED' ? 'pending' : 'cancelled' },
     format (value) { return value ? new Date(value).toLocaleString('zh-CN') : '-' },
     async writeClipboard (value) { const copied = await copyToClipboard(value); if (!copied) notify('复制失败，请检查浏览器权限', 'error'); return copied },
-    async copyExport () { if (await this.writeClipboard(this.exportSqlite)) notify('导出命令已复制', 'success') },
+    async downloadExport () { this.exporting = true; try { const params = { ...this.exportFilters }; if (params.start_at) params.start_at = new Date(params.start_at).toISOString(); if (params.end_at) params.end_at = new Date(params.end_at).toISOString(); const data = await api.exportUsage(params); const blob = new Blob([data.csv || ''], { type: 'text/csv;charset=utf-8' }); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = data.filename || 'usage-export.csv'; document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url); notify(`已导出 ${data.count || 0} 条记录`, 'success') } catch (e) { notify(e.message, 'error') } finally { this.exporting = false } },
     async copyCode (item) { if (await this.writeClipboard(item.code)) { this.$set(this.copiedCodes, item.id, true); notify('兑换码已复制', 'success') } },
     async copyNew (item) { if (await this.writeClipboard(item.code)) { this.$set(this.newCopied, item.id, true); this.allNewCopied = this.newCodes.every(code => this.newCopied[code.id]); notify('兑换码已复制', 'success') } },
     async copyAllNew () { const text = this.newCodes.map(item => item.code).filter(Boolean).join('\n'); if (await this.writeClipboard(text)) { this.newCodes.forEach(item => this.$set(this.newCopied, item.id, true)); this.allNewCopied = true; notify('已复制全部兑换码', 'success') } },
     async generate () { this.generating = true; try { const d = await api.createRechargeCodes(this.codeForm); if (!d.ok) throw new Error(d.message); this.newCodes = d.codes || []; this.newCopied = {}; this.allNewCopied = false; await this.load(); notify('兑换码已生成，有效期 48 小时', 'success') } catch (e) { notify(e.message, 'error') } finally { this.generating = false } },
     async revoke (item) { if (!await askConfirm('确定撤销该兑换码吗？')) return; try { const d = await api.revokeRechargeCode(item.id); if (!d.ok) throw new Error(d.message); await this.load(); notify('兑换码已撤销', 'success') } catch (e) { notify(e.message, 'error') } },
-    openCreateUser () { this.createError = ''; this.userForm = { username: '', password: '', email: '', role: 'USER', balance: 0, enabled: true }; this.createUserOpen = true },
-    closeCreateUser () { if (!this.creatingUser) this.createUserOpen = false },
-    async createUser () { this.createError = ''; if (this.userForm.username.length < 3) return (this.createError = '请输入至少 3 位账户名'); if (this.userForm.password.length < 6) return (this.createError = '密码至少 6 位'); this.creatingUser = true; try { const d = await api.createUser(this.userForm); if (!d.ok) throw new Error(d.message); this.createUserOpen = false; await this.load(); notify('用户已创建', 'success') } catch (e) { this.createError = e.message; notify(e.message, 'error') } finally { this.creatingUser = false } }
+    openCreateUser () { this.dialogReturnFocus = document.activeElement; this.createError = ''; this.userForm = { username: '', password: '', email: '', role: 'USER', balance: 0, enabled: true }; this.createUserOpen = true; this.$nextTick(() => focusDialog(this.$refs.createUserDialog)) },
+    closeCreateUser () { if (!this.creatingUser) { this.createUserOpen = false; this.$nextTick(() => this.dialogReturnFocus && this.dialogReturnFocus.focus && this.dialogReturnFocus.focus()) } },
+    trapCreateFocus (event) { trapDialogFocus(event, this.$refs.createUserDialog) },
+    async createUser () { this.createError = ''; if (this.userForm.username.length < 3) return (this.createError = '请输入至少 3 位账户名'); if (this.userForm.password.length < 6) return (this.createError = '密码至少 6 位'); this.creatingUser = true; try { const d = await api.createUser(this.userForm); if (!d.ok) throw new Error(d.message); this.createUserOpen = false; this.$nextTick(() => this.dialogReturnFocus && this.dialogReturnFocus.focus && this.dialogReturnFocus.focus()); await this.load(); notify('用户已创建', 'success') } catch (e) { this.createError = e.message; notify(e.message, 'error') } finally { this.creatingUser = false } }
   }
 }
 </script>
@@ -486,7 +486,7 @@ Copy-Item .\\data\\rose.db .\\data\\rose.db.backup`
 @media (max-width: 1050px) { .admin-runtime-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }.chart-wide { min-height: 320px; } }
 @media (max-width: 760px) {
   .admin-overview-tabs { width: 100%; overflow-x: auto; justify-content: flex-start; }.admin-overview-tabs button { white-space: nowrap; }.admin-section-heading { align-items: flex-start; flex-direction: column; gap: 8px; }.admin-dashboard-grid { grid-template-columns: 1fr; }.device-metrics-grid { grid-template-columns: 1fr; }.split-stat-block { grid-template-columns: 1fr; gap: 16px; }
-  .daily-chart { gap: 3px; }.daily-bar { width: 40%; }.daily-column small { font-size: 8px; }
+  .daily-chart { gap: 3px; }.daily-bar { width: 40%; }.daily-column small { font-size: 11px; }
   .log-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .conversation-log-row { align-items: flex-start; flex-direction: column; }
   .conversation-log-row > div:last-child { text-align: left; }
@@ -495,32 +495,32 @@ Copy-Item .\\data\\rose.db .\\data\\rose.db.backup`
 
 /* The visual dashboard follows the compact typography used by the other admin panels. */
 .admin-visual-section .admin-section-heading{margin:18px 0 8px}
-.admin-visual-section .admin-section-heading .eyebrow{display:block;font:9px var(--mono);letter-spacing:.13em;color:#7890a2}
+.admin-visual-section .admin-section-heading .eyebrow{display:block;font:11px var(--mono);letter-spacing:.13em;color:#7890a2}
 .admin-visual-section .admin-section-heading h2{margin:5px 0 0;color:#1f3652;font:500 20px/1.22 'Playfair Display',Georgia,serif;letter-spacing:-.02em}
-.admin-visual-section .admin-section-heading p{font-size:9px;line-height:1.35}
+.admin-visual-section .admin-section-heading p{font-size:12px;line-height:1.5}
 .admin-visual-section .admin-dashboard-grid{gap:12px}
 .admin-visual-section .chart-panel{min-height:220px;padding:15px}
 .admin-visual-section .chart-wide{min-height:250px}
 .admin-visual-section .chart-panel .panel-head{margin-bottom:8px}
 .admin-visual-section .chart-panel .panel-head h2{font-size:14px;line-height:1.2}
-.admin-visual-section .chart-legend{font-size:8px;gap:8px}
+.admin-visual-section .chart-legend{font-size:11px;gap:8px}
 .admin-visual-section .daily-chart{height:176px;padding-top:10px}
 .admin-visual-section .daily-bars{height:130px}
 .admin-visual-section .daily-column{gap:2px}
-.admin-visual-section .daily-column b{font-size:8px}
-.admin-visual-section .daily-column small{font-size:7px}
+.admin-visual-section .daily-column b{font-size:12px}
+.admin-visual-section .daily-column small{font-size:11px}
 .admin-visual-section .rank-list{gap:8px}
 .admin-visual-section .rank-row{gap:3px 8px}
-.admin-visual-section .rank-row strong{font-size:10px}
-.admin-visual-section .rank-row small,.admin-visual-section .rank-row>b{font-size:8px}
+.admin-visual-section .rank-row strong{font-size:12px}
+.admin-visual-section .rank-row small,.admin-visual-section .rank-row>b{font-size:11px}
 .admin-visual-section .rank-track{height:5px}
-.admin-visual-section .rank-number{width:16px;height:16px;margin-right:4px;font-size:8px}
+.admin-visual-section .rank-number{width:22px;height:22px;margin-right:5px;font-size:11px}
 .admin-visual-section .split-stat-block{gap:10px}
-.admin-visual-section .split-stat-block h3{margin-bottom:6px;font-size:8px}
+.admin-visual-section .split-stat-block h3{margin-bottom:6px;font-size:12px}
 .admin-visual-section .mini-stat{padding:6px 0}
-.admin-visual-section .mini-stat span{font-size:9px}
-.admin-visual-section .mini-stat b{font-size:9px}
-.admin-visual-section .mini-stat small{font-size:7px}
+.admin-visual-section .mini-stat span{font-size:12px}
+.admin-visual-section .mini-stat b{font-size:12px}
+.admin-visual-section .mini-stat small{font-size:11px}
 .admin-visual-section .visual-model-usage{grid-column:1/-1;min-height:0}
 .admin-visual-section .visual-model-usage .model-usage-chart{margin-top:2px}
 .admin-log-conversations{margin-top:24px;padding-top:24px;border-top:1px solid #dbe5ef}
@@ -532,8 +532,10 @@ Copy-Item .\\data\\rose.db .\\data\\rose.db.backup`
 .admin-log-export .panel-head .panel-note{max-width:680px;margin-top:8px}
 .admin-log-export .code-block{margin-top:0}
 .admin-log-export .export-note{margin:12px 0 0}
+.export-controls{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}.export-controls label{display:grid;gap:6px;color:#708595;font-size:11px}.export-controls input,.export-controls select{width:100%;height:40px;padding:0 10px;border:1px solid #cfdee9;border-radius:9px;background:#fff;color:inherit;font:11px var(--mono)}
 @media(max-width:760px){
   .admin-log-export .panel-head{align-items:flex-start;flex-direction:column;gap:12px}
   .admin-log-export .panel-head .secondary-btn{width:100%}
+  .export-controls{grid-template-columns:1fr}
 }
 </style>

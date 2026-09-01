@@ -133,6 +133,8 @@ $env:ROSE_SUBSCRIPTION_SESSION_AFFINITY_TTL_SECONDS = '3600'
 
 `ROSE_SUBSCRIPTION_QUEUE_TIMEOUT_SECONDS=0` 表示一直等待账号槽位，也是默认设置，适合只有一个订阅账号、请求以 Codex 长任务为主的个人部署。设置为正数后，超过该等待时间会返回 `503 local_queue_timeout`、`Retry-After` 和 `X-Rose-Error-Source: local_queue`；只有实际达到本地 RPM 上限或上游明确返回 429 时才会返回 429。不要为了消除排队而盲目提高单账号并发数。
 
+无限等待并不等于无限堆积：`ROSE_SUBSCRIPTION_MAX_QUEUED_REQUESTS` 默认限制为 200。超过队列上限返回 `429 local_queue_full`。本地 API Key 失败会返回 `X-Rose-Error-Source: local_auth`，本地余额失败返回 `local_billing`，便于与上游 401/429 明确区分。
+
 对外调用继续使用本系统创建的 API Key，不要把上游订阅 Token 交给客户端：
 
 ```powershell

@@ -10,7 +10,9 @@ CREATE TABLE IF NOT EXISTS users (
   enabled INTEGER NOT NULL DEFAULT 1,
   api_key TEXT NOT NULL UNIQUE,
   created_at TEXT NOT NULL,
-  last_login TEXT
+  last_login TEXT,
+  session_version INTEGER NOT NULL DEFAULT 0,
+  deleted_at TEXT
 );
 
 -- Fresh installs include the initial administrator.  The stored value is a
@@ -109,7 +111,10 @@ CREATE TABLE IF NOT EXISTS api_keys (
   enabled INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   last_used TEXT,
-  expires_at TEXT
+  expires_at TEXT,
+  api_key_hash TEXT,
+  key_prefix TEXT NOT NULL DEFAULT '',
+  key_last4 TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS recharge_codes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -174,6 +179,35 @@ CREATE TABLE IF NOT EXISTS user_quota_policies (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+-- Every entitlement portion used by one request is recorded independently.
+-- This allows a request to span several grants/plans without losing audit
+-- information in the legacy single quota_id/subscription_id columns.
+CREATE TABLE IF NOT EXISTS usage_allocations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  usage_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  entitlement_id INTEGER,
+  cost REAL NOT NULL DEFAULT 0,
+  tokens INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+-- Updating this row at the start of charge() serializes billing for one user
+-- in both SQLite and MySQL while still allowing different users in parallel.
+CREATE TABLE IF NOT EXISTS billing_locks (
+  user_id INTEGER PRIMARY KEY,
+  version INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS user_sessions (
+  id TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  user_agent TEXT NOT NULL DEFAULT '',
+  ip_address TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  revoked_at TEXT
+);
 CREATE TABLE IF NOT EXISTS upstream_subscription_accounts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   provider TEXT NOT NULL,
@@ -212,6 +246,9 @@ CREATE INDEX IF NOT EXISTS idx_recharge_codes_status ON recharge_codes(status);
 CREATE INDEX IF NOT EXISTS idx_orders_payment_amount ON payment_orders(provider, payment_amount, status);
 CREATE INDEX IF NOT EXISTS idx_subscriptions_user_period ON user_subscriptions(user_id, status, starts_at, ends_at);
 CREATE INDEX IF NOT EXISTS idx_quota_user_period ON user_quota_policies(user_id, enabled, starts_at, ends_at);
+CREATE INDEX IF NOT EXISTS idx_usage_allocations_usage ON usage_allocations(usage_id, kind);
+CREATE INDEX IF NOT EXISTS idx_usage_allocations_entitlement ON usage_allocations(user_id, kind, entitlement_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_upstream_subscription_provider ON upstream_subscription_accounts(provider, enabled, priority DESC);
 CREATE INDEX IF NOT EXISTS idx_upstream_subscription_cooldown ON upstream_subscription_accounts(provider, cooldown_until);
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_pending_payment_amount

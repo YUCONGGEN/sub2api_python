@@ -55,7 +55,7 @@ class SubscriptionAdminController:
             result = self.accounts.list_page(provider, page, page_size)
         except ValueError as exc:
             return bad(str(exc))
-        return ok({"ok": True, "accounts": result["items"], "pagination": result, "gateway_enabled": self.gateway.enabled})
+        return ok({"ok": True, "accounts": result["items"], "pagination": result, "summary": result.get("summary", {}), "gateway_enabled": self.gateway.enabled, "gateway_metrics": self.gateway.metrics()})
 
     @PostMapping("")
     def create_account(self, body: dict = RequestBody(), authorization: str = RequestHeader(name="Authorization", required=False)):

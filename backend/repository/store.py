@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import hashlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -45,10 +46,11 @@ class StoreRepository:
                 schema_path = Path(__file__).resolve().parents[1] / "resources" / "schema.sql"
                 conn.executescript(schema_path.read_text(encoding="utf-8"))
                 self._ensure_sqlite_compatibility(conn)
-
-                # Runtime/admin logs are intentionally transient. Clear them
-                # on every process start while keeping durable business data.
-                conn.execute("DELETE FROM admin_event_logs")
+                self._migrate_sqlite_api_keys(conn)
+                conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_api_key_hash "
+                    "ON api_keys(api_key_hash)"
+                )
 
         billing = get_config().get("rose", {}).get("billing", {})
         try:
@@ -99,8 +101,9 @@ class StoreRepository:
                     ).strip()
                     if statement:
                         cursor.execute(statement)
+                self._ensure_mysql_compatibility(cursor)
+                self._migrate_mysql_api_keys(cursor)
                 self._validate_mysql_schema(cursor)
-                cursor.execute("DELETE FROM admin_event_logs")
 
     def _validate_mysql_schema(self, cursor) -> None:
         """Reject an unrelated existing database with a useful startup error.
@@ -137,11 +140,16 @@ class StoreRepository:
 
     def _ensure_sqlite_compatibility(self, conn: sqlite3.Connection) -> None:
         """Apply additive upgrades used by existing SQLite installations."""
+        self._ensure_column(conn, "users", "session_version", "INTEGER NOT NULL DEFAULT 0")
+        self._ensure_column(conn, "users", "deleted_at", "TEXT")
         self._ensure_column(conn, "payment_orders", "payment_amount", "REAL")
         self._ensure_column(conn, "payment_orders", "qr_asset", "TEXT")
         self._ensure_column(conn, "recharge_codes", "code", "TEXT")
         self._ensure_column(conn, "recharge_codes", "expires_at", "TEXT")
         self._ensure_column(conn, "user_subscriptions", "auto_renew", "INTEGER NOT NULL DEFAULT 0")
+        self._ensure_column(conn, "api_keys", "api_key_hash", "TEXT")
+        self._ensure_column(conn, "api_keys", "key_prefix", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column(conn, "api_keys", "key_last4", "TEXT NOT NULL DEFAULT ''")
         for column, definition in {
             "billing_source": "TEXT NOT NULL DEFAULT 'WALLET'",
             "free_cost": "REAL NOT NULL DEFAULT 0",
@@ -169,6 +177,55 @@ class StoreRepository:
         }
         for column, definition in conversation_columns.items():
             self._ensure_column(conn, "conversation_records", column, definition)
+
+    @staticmethod
+    def _migrate_sqlite_api_keys(conn: sqlite3.Connection) -> None:
+        """Replace legacy plaintext API keys with irreversible SHA-256 hashes."""
+        rows = conn.execute(
+            "SELECT id, api_key FROM api_keys WHERE api_key_hash IS NULL OR api_key_hash = ''"
+        ).fetchall()
+        for row in rows:
+            plaintext = str(row["api_key"] or "")
+            digest = hashlib.sha256(plaintext.encode("utf-8")).hexdigest()
+            conn.execute(
+                "UPDATE api_keys SET api_key_hash=?, key_prefix=?, key_last4=?, api_key=? WHERE id=?",
+                (digest, plaintext[:12], plaintext[-4:], "hashed-" + digest, int(row["id"])),
+            )
+
+    @staticmethod
+    def _ensure_mysql_compatibility(cursor) -> None:
+        """Apply small additive upgrades for existing MySQL installations."""
+        additions = {
+            "users": {
+                "session_version": "BIGINT NOT NULL DEFAULT 0",
+                "deleted_at": "VARCHAR(40)",
+            },
+            "api_keys": {
+                "api_key_hash": "CHAR(64)",
+                "key_prefix": "VARCHAR(32) NOT NULL DEFAULT ''",
+                "key_last4": "VARCHAR(8) NOT NULL DEFAULT ''",
+            },
+        }
+        for table, columns in additions.items():
+            cursor.execute(f"SHOW COLUMNS FROM {table}")
+            existing = {str(row[0]) for row in cursor.fetchall()}
+            for column, definition in columns.items():
+                if column not in existing:
+                    cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        cursor.execute("SHOW INDEX FROM api_keys WHERE Key_name='idx_api_key_hash'")
+        if not cursor.fetchone():
+            cursor.execute("CREATE UNIQUE INDEX idx_api_key_hash ON api_keys(api_key_hash)")
+
+    @staticmethod
+    def _migrate_mysql_api_keys(cursor) -> None:
+        cursor.execute("SELECT id, api_key FROM api_keys WHERE api_key_hash IS NULL OR api_key_hash = ''")
+        for key_id, raw_key in cursor.fetchall():
+            plaintext = str(raw_key or "")
+            digest = hashlib.sha256(plaintext.encode("utf-8")).hexdigest()
+            cursor.execute(
+                "UPDATE api_keys SET api_key_hash=%s,key_prefix=%s,key_last4=%s,api_key=%s WHERE id=%s",
+                (digest, plaintext[:12], plaintext[-4:], "hashed-" + digest, int(key_id)),
+            )
 
     @staticmethod
     def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:

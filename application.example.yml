@@ -133,11 +133,13 @@ rose:
     max-keepalive-connections: ${ROSE_SUBSCRIPTION_MAX_KEEPALIVE_CONNECTIONS:20}
     # 合规保护：不模拟浏览器或人为操作，只限制单账号并发/突发流量，并把显式
     # 客户端会话稳定地粘连到同一健康账号。无法保证上游账号不会受限或封禁。
-    per-account-max-concurrency: ${ROSE_SUBSCRIPTION_ACCOUNT_CONCURRENCY:1}
+    per-account-max-concurrency: ${ROSE_SUBSCRIPTION_ACCOUNT_CONCURRENCY:3}
     per-account-requests-per-minute: ${ROSE_SUBSCRIPTION_ACCOUNT_RPM:20}
     # Codex 长上下文请求可能持续数分钟；默认一直等待账号槽位，
     # 不产生本地排队超时。需要限制等待时间时可设置为正数秒。
     account-queue-timeout-seconds: ${ROSE_SUBSCRIPTION_QUEUE_TIMEOUT_SECONDS:0}
+    # 即使设置为无限等待，也限制进程内累计排队数量，避免连接无限堆积。
+    max-queued-requests: ${ROSE_SUBSCRIPTION_MAX_QUEUED_REQUESTS:200}
     session-affinity-ttl-seconds: ${ROSE_SUBSCRIPTION_SESSION_AFFINITY_TTL_SECONDS:3600}
   proxy:
     enabled: true
@@ -306,5 +308,3 @@ rose:
         bottom: 1130
   database:
     path: ${ROSE_DB_PATH:./data/rose.db}
-
-

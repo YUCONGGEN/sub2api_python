@@ -10,6 +10,22 @@ export function askConfirm (message) {
   return new Promise(resolve => uiBus.$emit('confirm', { message: String(message || ''), resolve }))
 }
 
+export function focusDialog (element) {
+  if (!element) return
+  const target = element.querySelector('[autofocus],input,select,textarea,button,[href]') || element
+  target.focus({ preventScroll: true })
+}
+
+export function trapDialogFocus (event, element) {
+  if (event.key !== 'Tab' || !element) return
+  const items = Array.from(element.querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),a[href],[tabindex]:not([tabindex="-1"])'))
+  if (!items.length) return
+  const first = items[0]
+  const last = items[items.length - 1]
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
+}
+
 // Works on both HTTPS and ordinary localhost HTTP pages. Browsers can reject
 // navigator.clipboard outside a secure context, so retain a DOM fallback.
 export async function copyToClipboard (value) {

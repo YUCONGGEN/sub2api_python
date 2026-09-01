@@ -15,8 +15,8 @@ const router = new Router({ mode: 'history', routes: [
   { path: '/admin/users/:id', component: () => import('../views/AdminUser.vue'), props: true, meta: { admin: true } },
   { path: '/docs', component: () => import('../views/Docs.vue') },
   { path: '/keys', component: () => import('../views/Keys.vue') },
-  { path: '/monitoring', component: () => import('../views/Monitoring.vue') },
-  { path: '/profile', component: () => import('../views/Profile.vue') },
+  { path: '/monitoring', component: () => import('../views/MonitoringPanel.vue') },
+  { path: '/profile', component: () => import('../views/ProfilePanel.vue') },
   { path: '*', redirect: '/dashboard' }
 ] })
 router.beforeEach(async (to, from, next) => {

@@ -31,15 +31,24 @@ def _responses_event(event_type: str, payload: dict) -> str:
     return f"event: {event_type}\ndata: {body}\n\n"
 
 
+def _local_error(status: int, message: str, error_type: str, source: str) -> JSONResponse:
+    """Mark gateway-owned failures so clients can distinguish them upstream."""
+    return JSONResponse(
+        {"error": {"message": message, "type": error_type}},
+        status_code=status,
+        headers={"X-Rose-Error-Source": source},
+    )
+
+
 async def openai_chat(request: Request):
     service, auth, conversations = _beans(request)
     user = await asyncio.to_thread(auth.user_from_authorization, request.headers.get("Authorization"))
     if not user:
-        return JSONResponse({"error": {"message": "Invalid API key", "type": "authentication_error"}}, status_code=401)
+        return _local_error(401, "Invalid API key", "authentication_error", "local_auth")
     if not user.get("enabled"):
-        return JSONResponse({"error": {"message": "Account disabled", "type": "permission_error"}}, status_code=403)
+        return _local_error(403, "Account disabled", "permission_error", "local_auth")
     if not await asyncio.to_thread(service.store.has_usable_balance, user["id"]):
-        return JSONResponse({"error": {"message": "Insufficient balance", "type": "insufficient_quota"}}, status_code=402)
+        return _local_error(402, "Insufficient balance", "insufficient_quota", "local_billing")
     try:
         payload = await request.json()
     except Exception:
@@ -316,11 +325,11 @@ async def openai_responses(request: Request):
     service, auth, conversations = _beans(request)
     user = await asyncio.to_thread(auth.user_from_authorization, request.headers.get("Authorization"))
     if not user:
-        return JSONResponse({"error": {"message": "Invalid API key", "type": "authentication_error"}}, status_code=401)
+        return _local_error(401, "Invalid API key", "authentication_error", "local_auth")
     if not user.get("enabled"):
-        return JSONResponse({"error": {"message": "Account disabled", "type": "permission_error"}}, status_code=403)
+        return _local_error(403, "Account disabled", "permission_error", "local_auth")
     if not await asyncio.to_thread(service.store.has_usable_balance, user["id"]):
-        return JSONResponse({"error": {"message": "Insufficient balance", "type": "insufficient_quota"}}, status_code=402)
+        return _local_error(402, "Insufficient balance", "insufficient_quota", "local_billing")
     try:
         payload = await request.json()
     except Exception:
@@ -588,7 +597,7 @@ async def openai_models(request: Request):
     service, auth, _ = _beans(request)
     user = await asyncio.to_thread(auth.user_from_authorization, request.headers.get("Authorization"))
     if not user:
-        return JSONResponse({"error": {"message": "Invalid API key", "type": "authentication_error"}}, status_code=401)
+        return _local_error(401, "Invalid API key", "authentication_error", "local_auth")
     now = int(time.time())
     data = []
     context = request.app.state.spring_application.application_context

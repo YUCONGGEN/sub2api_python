@@ -90,6 +90,8 @@ class StoreService:
         data = dict(row)
         data.pop("password_hash", None)
         data.pop("api_key", None)
+        data.pop("session_version", None)
+        data.pop("deleted_at", None)
         return data
 
     # ------------------------------------------------------------------ users
@@ -100,9 +102,10 @@ class StoreService:
         return self._row(self.mapper.find_user_by_username(str(username)))
 
     def find_by_api_key(self, api_key: str) -> dict[str, Any] | None:
-        row = self._row(self.mapper.find_user_by_api_key(str(api_key)))
+        digest = hashlib.sha256(str(api_key).encode("utf-8")).hexdigest()
+        row = self._row(self.mapper.find_user_by_api_key(digest))
         if row:
-            self.mapper.touch_api_key(str(api_key), utc_now())
+            self.mapper.touch_api_key(digest, utc_now())
         return row
 
     def create_user(
@@ -163,8 +166,9 @@ class StoreService:
             "chart": list(reversed(self.mapper.user_usage_daily(user_id, None))),
         }
         orders = self.list_orders(user_id, order_page, page_size)
-        subscriptions = self.list_user_subscriptions(user_id, 1, 5)
-        quotas = self.list_user_quotas(user_id, 1, 5)
+        # Four wider cards per page keep the admin entitlement view readable.
+        subscriptions = self.list_user_subscriptions(user_id, 1, 4)
+        quotas = self.list_user_quotas(user_id, 1, 4)
         return {
             "user": self.public_user(user),
             "usage": usage,
@@ -181,11 +185,20 @@ class StoreService:
         user_id = int(user_id)
         if not self.mapper.find_user(user_id):
             return False
-        self.mapper.delete_user_api_keys(user_id)
-        self.mapper.delete_user_usage(user_id)
-        self.mapper.delete_user_orders(user_id)
-        self.mapper.detach_redeemed_codes(user_id)
-        return bool(self.mapper.delete_user(user_id))
+        deleted_at = utc_now()
+        self.mapper.revoke_user_sessions(user_id, deleted_at)
+        self.mapper.disable_user_entitlements(user_id, deleted_at)
+        self.mapper.cancel_user_entitlements(user_id)
+        for key in self.mapper.list_api_keys(user_id, 0, 10000) or []:
+            self.mapper.revoke_api_key(user_id, int(key["id"]))
+        # Keep usage, orders, subscriptions and voucher ownership for audit.
+        return bool(self.mapper.soft_delete_user(
+            user_id,
+            f"deleted-{user_id}-{secrets.token_hex(6)}",
+            self.hash_password(secrets.token_urlsafe(48)),
+            self.revoked_api_key(),
+            deleted_at,
+        ))
 
     def update_user(self, user_id: int, **changes: Any) -> dict[str, Any] | None:
         allowed = {"email", "role", "balance", "enabled", "password"}
@@ -213,21 +226,34 @@ class StoreService:
         page = max(1, int(page))
         page_size = max(1, min(int(page_size), 5))
         total = self.mapper.count_api_keys(int(user_id))
-        rows = self.mapper.list_api_keys(int(user_id), (page - 1) * page_size, page_size)
+        rows = []
+        for value in self.mapper.list_api_keys(int(user_id), (page - 1) * page_size, page_size):
+            row = dict(value)
+            row["masked_key"] = f'{row.get("key_prefix") or "sk-"}{"•" * 12}{row.get("key_last4") or ""}'
+            rows.append(row)
         return self.page_result(rows, total, page, page_size)
 
     def create_api_key(self, user_id: int, name: str, expires_at: str | None = None) -> dict[str, Any]:
+        plaintext = self.new_api_key()
+        digest = hashlib.sha256(plaintext.encode("utf-8")).hexdigest()
         key = {
             "user_id": int(user_id),
             "name": str(name)[:64] or "未命名密钥",
-            "api_key": self.new_api_key(),
+            "api_key_hash": digest,
+            "storage_key": "hashed-" + digest,
+            "key_prefix": plaintext[:12],
+            "key_last4": plaintext[-4:],
             "enabled": 1,
             "created_at": utc_now(),
             "last_used": None,
             "expires_at": expires_at,
         }
         self.mapper.insert_api_key(key)
-        return self._row(self.mapper.find_api_key(int(user_id), int(key.get("id") or 0))) or key
+        public = self._row(self.mapper.find_api_key(int(user_id), int(key.get("id") or 0))) or key
+        public["api_key"] = plaintext
+        public["masked_key"] = f'{plaintext[:12]}{"•" * 12}{plaintext[-4:]}'
+        public["reveal_once"] = True
+        return public
 
     def revoke_api_key(self, user_id: int, key_id: int) -> dict[str, Any] | None:
         if not self.mapper.revoke_api_key(int(user_id), int(key_id)):
@@ -235,7 +261,42 @@ class StoreService:
         return self._row(self.mapper.find_api_key(int(user_id), int(key_id)))
 
     def delete_api_key(self, user_id: int, key_id: int) -> bool:
-        return bool(self.mapper.delete_api_key(int(user_id), int(key_id)))
+        # Keep audit history: the legacy DELETE endpoint behaves as revocation.
+        return bool(self.mapper.revoke_api_key(int(user_id), int(key_id)))
+
+    # -------------------------------------------------------------- sessions
+    def create_session(self, user_id: int, user_agent: str = "", ip_address: str = "") -> dict[str, Any]:
+        now = utc_now()
+        session = {
+            "id": secrets.token_urlsafe(24),
+            "user_id": int(user_id),
+            "user_agent": str(user_agent or "")[:500],
+            "ip_address": str(ip_address or "")[:128],
+            "created_at": now,
+            "last_seen_at": now,
+        }
+        self.mapper.insert_user_session(session)
+        return session
+
+    def find_session(self, user_id: int, session_id: str) -> dict[str, Any] | None:
+        return self._row(self.mapper.find_user_session(int(user_id), str(session_id)))
+
+    def list_sessions(self, user_id: int, current_session_id: str = "") -> list[dict[str, Any]]:
+        rows = []
+        for value in self.mapper.list_user_sessions(int(user_id)) or []:
+            row = dict(value)
+            row["current"] = bool(current_session_id and row.get("id") == current_session_id)
+            rows.append(row)
+        return rows
+
+    def touch_session(self, user_id: int, session_id: str) -> None:
+        self.mapper.touch_user_session(int(user_id), str(session_id), utc_now())
+
+    def revoke_session(self, user_id: int, session_id: str) -> bool:
+        return bool(self.mapper.revoke_user_session(int(user_id), str(session_id), utc_now()))
+
+    def revoke_other_sessions(self, user_id: int, session_id: str) -> int:
+        return int(self.mapper.revoke_other_user_sessions(int(user_id), str(session_id), utc_now()) or 0)
 
     # --------------------------------------------------------------- orders
     def create_order(
@@ -465,13 +526,125 @@ class StoreService:
         return self._row(self.mapper.find_subscription_plan(int(plan_id)))
 
     def delete_subscription_plan(self, plan_id: int) -> bool:
-        return bool(self.mapper.delete_subscription_plan(int(plan_id)))
+        # Plans are immutable audit references once assigned. "Delete" means
+        # disable, so historical subscriptions remain visible and billable
+        # records never lose their plan name.
+        return bool(self.mapper.delete_subscription_plan(int(plan_id), utc_now()))
+
+    @staticmethod
+    def _entitlement_active(row: Mapping[str, Any], now: datetime, kind: str) -> bool:
+        """Return whether an entitlement can actually pay for a request now."""
+        if kind == "SUBSCRIPTION":
+            if str(row.get("status") or "").upper() != "ACTIVE" or not bool(row.get("plan_enabled", True)):
+                return False
+        elif not bool(row.get("enabled")):
+            return False
+        try:
+            starts_at = StoreService._subscription_datetime(row.get("starts_at"), "权益开始时间")
+            ends_value = row.get("ends_at")
+            ends_at = StoreService._subscription_datetime(ends_value, "权益结束时间") if ends_value else None
+        except ValueError:
+            return False
+        return starts_at <= now and (ends_at is None or ends_at > now)
+
+    @staticmethod
+    def _usage_dimension(limit: float | int, used: float | int, active: bool, *, money: bool = False) -> dict[str, Any]:
+        """Describe a limit without using Infinity, which is invalid JSON."""
+        unlimited = float(limit or 0) <= 0
+        if money:
+            normalized_limit: float | int = round(max(0.0, float(limit or 0)), 4)
+            normalized_used: float | int = round(max(0.0, float(used or 0)), 4)
+            remaining = None if active and unlimited else round(
+                max(0.0, float(normalized_limit) - float(normalized_used)) if active else 0.0, 4
+            )
+        else:
+            normalized_limit = max(0, int(limit or 0))
+            normalized_used = max(0, int(used or 0))
+            remaining = None if active and unlimited else (
+                max(0, int(normalized_limit) - int(normalized_used)) if active else 0
+            )
+        return {
+            "limit": normalized_limit,
+            "used": normalized_used,
+            "remaining": remaining,
+            "unlimited": unlimited,
+        }
+
+    def _subscription_with_usage(self, value: Mapping[str, Any], now: datetime) -> dict[str, Any]:
+        row = dict(value)
+        active = self._entitlement_active(row, now, "SUBSCRIPTION")
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        totals = dict(self.mapper.subscription_usage_totals(int(row.get("id") or 0), day_start, None))
+        row["usage"] = {
+            "active": active,
+            "as_of": now.isoformat(),
+            "period": "UTC_DAY",
+            "daily_amount": self._usage_dimension(
+                row.get("daily_amount") or 0, totals.get("subscription_cost") or 0, active, money=True
+            ),
+            "daily_tokens": self._usage_dimension(
+                row.get("daily_tokens") or 0, totals.get("subscription_tokens") or 0, active
+            ),
+        }
+        return row
+
+    def _quota_with_usage(self, user_id: int, value: Mapping[str, Any], now: datetime) -> dict[str, Any]:
+        row = dict(value)
+        active = self._entitlement_active(row, now, "FREE")
+        quota_id = int(row.get("id") or 0)
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        daily = dict(self.mapper.quota_usage_totals(int(user_id), quota_id, day_start, None))
+        try:
+            window_hours = max(0.1, min(168.0, float(row.get("hourly_window_hours") or 1)))
+        except (TypeError, ValueError):
+            window_hours = 1.0
+        window_start = (now - timedelta(hours=window_hours)).isoformat()
+        window = dict(self.mapper.quota_usage_totals(int(user_id), quota_id, window_start, None))
+        row["usage"] = {
+            "active": active,
+            "as_of": now.isoformat(),
+            "period": "UTC_DAY",
+            "daily_amount": self._usage_dimension(
+                row.get("daily_amount") or 0, daily.get("free_cost") or 0, active, money=True
+            ),
+            "daily_tokens": self._usage_dimension(
+                row.get("daily_tokens") or 0, daily.get("free_tokens") or 0, active
+            ),
+            "window_tokens": {
+                **self._usage_dimension(
+                    row.get("hourly_tokens") or 0, window.get("free_tokens") or 0, active
+                ),
+                "window_hours": window_hours,
+            },
+        }
+        return row
 
     def list_user_subscriptions(self, user_id: int, page: int = 1, page_size: int = 5) -> dict[str, Any]:
         page = max(1, int(page)); page_size = max(1, min(int(page_size), 5))
         total = self.mapper.count_user_subscriptions(int(user_id))
         rows = self.mapper.list_user_subscriptions(int(user_id), (page - 1) * page_size, page_size)
-        return self.page_result(rows, total, page, page_size)
+        now = datetime.now(timezone.utc)
+        enriched = [self._subscription_with_usage(row, now) for row in rows]
+        return self.page_result(enriched, total, page, page_size)
+
+    def list_user_entitlements(self, user_id: int, page: int = 1, page_size: int = 5) -> dict[str, Any]:
+        """Return paid plans and free grants in one active-first page."""
+        page = max(1, int(page)); page_size = max(1, min(int(page_size), 5))
+        user_id = int(user_id)
+        total = self.mapper.count_user_subscriptions(user_id) + self.mapper.count_user_quota_policies(user_id)
+        now = datetime.now(timezone.utc)
+        rows = self.mapper.list_user_entitlements(
+            user_id, now.isoformat(), (page - 1) * page_size, page_size
+        )
+        enriched = []
+        for value in rows:
+            row = dict(value)
+            row.pop("sort_group", None)
+            if row.get("entitlement_type") == "FREE":
+                enriched.append(self._quota_with_usage(user_id, row, now))
+            else:
+                enriched.append(self._subscription_with_usage(row, now))
+        return self.page_result(enriched, total, page, page_size)
 
     @staticmethod
     def _subscription_datetime(value: Any, field: str = "套餐时间") -> datetime:
@@ -600,7 +773,9 @@ class StoreService:
         page = max(1, int(page)); page_size = max(1, min(int(page_size), 5))
         total = self.mapper.count_user_quota_policies(int(user_id))
         rows = self.mapper.list_user_quota_policies(int(user_id), (page - 1) * page_size, page_size)
-        return self.page_result(rows, total, page, page_size)
+        now = datetime.now(timezone.utc)
+        enriched = [self._quota_with_usage(int(user_id), row, now) for row in rows]
+        return self.page_result(enriched, total, page, page_size)
 
     def create_user_quota(self, user_id: int, values: Mapping[str, Any]) -> dict[str, Any]:
         now = utc_now()
@@ -813,7 +988,7 @@ class StoreService:
         completion_tokens: int,
         cost: float,
     ) -> tuple[bool, dict[str, Any] | None]:
-        user = self._row(self.mapper.find_balance(int(user_id)))
+        user_id = int(user_id)
         billing = get_config().get("rose", {}).get("billing", {})
         try:
             prompt_tokens = max(0, int(prompt_tokens))
@@ -823,38 +998,67 @@ class StoreService:
             minimum_balance = max(-0.1, float(billing.get("minimum-balance", -0.1)))
         except (TypeError, ValueError):
             return False, user
-        if not math.isfinite(cost) or cost < 0 or not user or not user.get("enabled"):
+        if not math.isfinite(cost) or cost < 0:
+            return False, None
+        now = datetime.now(timezone.utc)
+        # The UPDATE obtains a per-user database write lock for the lifetime
+        # of this transaction. It prevents concurrent requests from reading
+        # the same remaining entitlement balance.
+        if hasattr(self.mapper, "ensure_billing_lock"):
+            self.mapper.ensure_billing_lock(user_id, now.isoformat())
+            self.mapper.acquire_billing_lock(user_id, now.isoformat())
+        user = self._row(self.mapper.find_balance(user_id))
+        if not user or not user.get("enabled"):
             return False, user
         total_tokens = prompt_tokens + completion_tokens
-        now = datetime.now(timezone.utc)
         free_cost = free_tokens = subscription_cost = subscription_tokens = 0
         quota_id = subscription_id = None
+        allocations: list[dict[str, Any]] = []
 
         # Entitlements are deliberately consumed in a deterministic order:
         # the policy/subscription expiring soonest is used first.
-        active_quotas = self.mapper.find_active_quota_policies(int(user_id), now.isoformat()) or []
-        if active_quotas:
-            quota = dict(active_quotas[0])
-            quota_id = int(quota.get("id") or 0) or None
-            free_cost, free_tokens = self._allocate_entitlement(
-                int(user_id), total_tokens, cost, quota, "FREE", now
+        active_quotas = self.mapper.find_active_quota_policies(user_id, now.isoformat()) or []
+        remaining_cost = cost
+        remaining_tokens = total_tokens
+        for value in active_quotas:
+            if remaining_cost <= 0 and remaining_tokens <= 0:
+                break
+            quota = dict(value)
+            covered_cost, covered_tokens = self._allocate_entitlement(
+                user_id, remaining_tokens, remaining_cost, quota, "FREE", now
             )
+            if covered_cost <= 0 and covered_tokens <= 0:
+                continue
+            identifier = int(quota.get("id") or 0) or None
+            quota_id = quota_id or identifier
+            free_cost = round(free_cost + covered_cost, 10)
+            free_tokens += covered_tokens
+            remaining_cost = max(0.0, round(remaining_cost - covered_cost, 10))
+            remaining_tokens = max(0, remaining_tokens - covered_tokens)
+            allocations.append({"kind": "FREE", "entitlement_id": identifier, "cost": covered_cost, "tokens": covered_tokens})
 
-        remaining_cost = max(0.0, cost - free_cost)
-        remaining_tokens = max(0, total_tokens - free_tokens)
-        active_subscriptions = self.mapper.find_active_subscriptions(int(user_id), now.isoformat()) or []
-        if remaining_cost > 0 or remaining_tokens > 0:
-            if active_subscriptions:
-                subscription = dict(active_subscriptions[0])
-                subscription_id = int(subscription.get("id") or 0) or None
-                subscription_cost, subscription_tokens = self._allocate_entitlement(
-                    int(user_id), remaining_tokens, remaining_cost, subscription, "SUBSCRIPTION", now
-                )
+        active_subscriptions = self.mapper.find_active_subscriptions(user_id, now.isoformat()) or []
+        for value in active_subscriptions:
+            if remaining_cost <= 0 and remaining_tokens <= 0:
+                break
+            subscription = dict(value)
+            covered_cost, covered_tokens = self._allocate_entitlement(
+                user_id, remaining_tokens, remaining_cost, subscription, "SUBSCRIPTION", now
+            )
+            if covered_cost <= 0 and covered_tokens <= 0:
+                continue
+            identifier = int(subscription.get("id") or 0) or None
+            subscription_id = subscription_id or identifier
+            subscription_cost = round(subscription_cost + covered_cost, 10)
+            subscription_tokens += covered_tokens
+            remaining_cost = max(0.0, round(remaining_cost - covered_cost, 10))
+            remaining_tokens = max(0, remaining_tokens - covered_tokens)
+            allocations.append({"kind": "SUBSCRIPTION", "entitlement_id": identifier, "cost": covered_cost, "tokens": covered_tokens})
 
-        wallet_cost = max(0.0, round(cost - free_cost - subscription_cost, 10))
-        wallet_tokens = max(0, total_tokens - free_tokens - subscription_tokens)
+        wallet_cost = remaining_cost
+        wallet_tokens = remaining_tokens
         if wallet_cost > 0 and self.mapper.update_balance_after_charge(
-            int(user_id), wallet_cost, minimum_balance, minimum_usable
+            user_id, wallet_cost, minimum_balance, minimum_usable
         ) != 1:
             return False, user
         sources = []
@@ -865,7 +1069,7 @@ class StoreService:
         if wallet_cost > 0 or wallet_tokens > 0:
             sources.append("WALLET")
         usage = {
-            "user_id": int(user_id),
+            "user_id": user_id,
             "model": str(model),
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
@@ -884,6 +1088,14 @@ class StoreService:
             "subscription_id": subscription_id,
         }
         self.mapper.insert_usage(usage)
+        usage_id = int(usage.get("id") or 0)
+        for allocation in allocations:
+            self.mapper.insert_usage_allocation({
+                **allocation,
+                "usage_id": usage_id,
+                "user_id": user_id,
+                "created_at": now.isoformat(),
+            })
         return True, self._row(self.mapper.find_usage(int(usage.get("id") or 0))) or usage
 
     def has_usable_balance(self, user_id: int) -> bool:
@@ -957,6 +1169,14 @@ class StoreService:
                 key=lambda item: (-int(item.get("total_tokens", 0)), item["model"]),
             ),
         }
+
+    def export_usage(self, *, start_at: str = "", end_at: str = "", user_id: int | None = None, model: str = "", status: str = "", limit: int = 50000) -> list[dict[str, Any]]:
+        limit = max(1, min(int(limit or 50000), 100000))
+        normalized_user = int(user_id) if str(user_id or "").isdigit() else None
+        return [dict(row) for row in self.mapper.list_usage_export(
+            str(start_at or ""), str(end_at or ""), normalized_user,
+            str(model or "").strip(), str(status or "").strip().upper(), limit,
+        )]
 
 
 __all__ = ["StoreService"]

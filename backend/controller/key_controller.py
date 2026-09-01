@@ -59,7 +59,7 @@ class KeyController:
         if not user:
             return unauthorized()
         deleted = self.store.delete_api_key(user["id"], key_id)
-        return ok({"ok": True}, "密钥已删除") if deleted else bad("密钥不存在", 404)
+        return ok({"ok": True}, "密钥已撤销，历史记录已保留") if deleted else bad("密钥不存在", 404)
 
 
 

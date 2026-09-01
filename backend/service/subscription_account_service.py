@@ -442,7 +442,7 @@ class SubscriptionAccountService:
         )
 
     def catalog(self) -> list[dict[str, Any]]:
-        result: dict[tuple[str, str], dict[str, Any]] = {}
+        routes: dict[tuple[str, str], list[dict[str, Any]]] = {}
         for provider in ("openai", "claude"):
             for row in self.repository.list_provider(provider):
                 public = self._public(row)
@@ -450,26 +450,51 @@ class SubscriptionAccountService:
                     if model == "*":
                         continue
                     key = (provider, str(model))
-                    result.setdefault(key, {
+                    routes.setdefault(key, []).append(public)
+        now = datetime.now(timezone.utc)
+        result = []
+        for (provider, model), accounts in routes.items():
+            available = [
+                account for account in accounts
+                if not parse_time(account.get("cooldown_until"))
+                or parse_time(account.get("cooldown_until")) <= now
+            ]
+            cooling = len(accounts) - len(available)
+            is_available = bool(available)
+            detail = f"{len(available)}/{len(accounts)} 个订阅账号可调度"
+            if cooling:
+                detail += f"，{cooling} 个冷却中"
+            if not is_available:
+                last_error = next((str(item.get("last_error") or "").strip() for item in accounts if item.get("last_error")), "")
+                if last_error:
+                    detail += f"：{last_error[:180]}"
+            sample = accounts[0]
+            result.append({
                         "id": str(model),
                         "provider": "OpenAI Subscription" if provider == "openai" else "Claude Subscription",
                         "endpoint": "Responses" if provider == "openai" else "Messages",
                         "group": "Subscription Gateway",
                         "pricing": {
-                            "input-cny-per-million": float(row.get("input_price_cny") or 0),
-                            "output-cny-per-million": float(row.get("output_price_cny") or 0),
+                            "input-cny-per-million": float(sample.get("input_price_cny") or 0),
+                            "output-cny-per-million": float(sample.get("output_price_cny") or 0),
                         },
                         "currency": "CNY",
-                        "input": float(row.get("input_price_cny") or 0),
-                        "output": float(row.get("output_price_cny") or 0),
+                        "input": float(sample.get("input_price_cny") or 0),
+                        "output": float(sample.get("output_price_cny") or 0),
                         "description": "由已授权订阅账号池提供的标准兼容 API。",
-                        "enabled": True,
+                        "enabled": is_available,
                         "upstream_model": str(model),
                         "supports_image": True,
-                        "status": "正常",
-                        "health": {"state": "ok", "label": "正常", "detail": "订阅账号池可用", "latency_ms": None},
+                        "status": "正常" if is_available else "冷却中",
+                        "health": {
+                            "state": "ok" if is_available else "cooldown",
+                            "label": "正常" if is_available else "冷却中",
+                            "detail": detail,
+                            "latency_ms": None,
+                            "checked_at": now.isoformat(),
+                        },
                     })
-        return list(result.values())
+        return result
 
     def record_success(self, row: dict[str, Any]) -> None:
         self.repository.mark_result(

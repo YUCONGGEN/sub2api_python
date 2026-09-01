@@ -21,10 +21,10 @@ class StoreMapper:
     def find_user_by_username(self, username: str) -> Mapping[str, Any] | None:
         pass
 
-    def find_user_by_api_key(self, api_key: str) -> Mapping[str, Any] | None:
+    def find_user_by_api_key(self, api_key_hash: str) -> Mapping[str, Any] | None:
         pass
 
-    def touch_api_key(self, api_key: str, last_used: str) -> int:
+    def touch_api_key(self, api_key_hash: str, last_used: str) -> int:
         pass
 
     def insert_user(self, user: Mapping[str, Any]) -> int:
@@ -60,19 +60,16 @@ class StoreMapper:
     def list_users(self, keyword: str = "", offset: int = 0, limit: int = 5) -> list[dict]:
         pass
 
-    def delete_user_api_keys(self, user_id: int) -> int:
+    def soft_delete_user(self, user_id: int, anonymized_username: str, password_hash: str, revoked_key: str, deleted_at: str) -> int:
         pass
 
-    def delete_user_usage(self, user_id: int) -> int:
+    def disable_user_entitlements(self, user_id: int, updated_at: str) -> int:
         pass
 
-    def delete_user_orders(self, user_id: int) -> int:
+    def cancel_user_entitlements(self, user_id: int) -> int:
         pass
 
-    def detach_redeemed_codes(self, user_id: int) -> int:
-        pass
-
-    def delete_user(self, user_id: int) -> int:
+    def revoke_user_sessions(self, user_id: int, revoked_at: str) -> int:
         pass
 
     def count_user_usage(self, user_id: int, start_at: str | None = None) -> Mapping[str, Any]:
@@ -107,13 +104,17 @@ class StoreMapper:
     def update_subscription_plan(self, plan_id: int, changes: Mapping[str, Any]) -> int:
         pass
 
-    def delete_subscription_plan(self, plan_id: int) -> int:
+    def delete_subscription_plan(self, plan_id: int, updated_at: str) -> int:
         pass
 
     def list_user_subscriptions(self, user_id: int, offset: int = 0, limit: int = 5) -> list[dict]:
         pass
 
     def count_user_subscriptions(self, user_id: int) -> int:
+        pass
+
+    def list_user_entitlements(self, user_id: int, now: str, offset: int = 0, limit: int = 5) -> list[dict]:
+        """List paid plans and free grants in one consistently ordered page."""
         pass
 
     def find_user_subscription(self, subscription_id: int, user_id: int | None = None) -> Mapping[str, Any] | None:
@@ -195,7 +196,33 @@ class StoreMapper:
     def revoke_api_key(self, user_id: int, key_id: int) -> int:
         pass
 
-    def delete_api_key(self, user_id: int, key_id: int) -> int:
+    # atomic billing and split entitlement audit
+    def ensure_billing_lock(self, user_id: int, updated_at: str) -> int:
+        pass
+
+    def acquire_billing_lock(self, user_id: int, updated_at: str) -> int:
+        pass
+
+    def insert_usage_allocation(self, allocation: Mapping[str, Any]) -> int:
+        pass
+
+    # login sessions
+    def insert_user_session(self, session: Mapping[str, Any]) -> int:
+        pass
+
+    def find_user_session(self, user_id: int, session_id: str) -> Mapping[str, Any] | None:
+        pass
+
+    def list_user_sessions(self, user_id: int) -> list[dict]:
+        pass
+
+    def touch_user_session(self, user_id: int, session_id: str, last_seen_at: str) -> int:
+        pass
+
+    def revoke_user_session(self, user_id: int, session_id: str, revoked_at: str) -> int:
+        pass
+
+    def revoke_other_user_sessions(self, user_id: int, session_id: str, revoked_at: str) -> int:
         pass
 
     # recharge orders and codes
@@ -280,6 +307,9 @@ class StoreMapper:
         pass
 
     def list_usage(self, user_id: int, offset: int = 0, limit: int = 5) -> list[dict]:
+        pass
+
+    def list_usage_export(self, start_at: str = "", end_at: str = "", user_id: int | None = None, model: str = "", status: str = "", limit: int = 50000) -> list[dict]:
         pass
 
     def user_usage_totals(self, user_id: int) -> Mapping[str, Any]:

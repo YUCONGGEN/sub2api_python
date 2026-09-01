@@ -9,7 +9,9 @@ CREATE TABLE IF NOT EXISTS users (
   enabled TINYINT NOT NULL DEFAULT 1,
   api_key VARCHAR(255) NOT NULL UNIQUE,
   created_at VARCHAR(40) NOT NULL,
-  last_login VARCHAR(40)
+  last_login VARCHAR(40),
+  session_version BIGINT NOT NULL DEFAULT 0,
+  deleted_at VARCHAR(40)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Fresh installs include the initial administrator.  The stored value is a
@@ -100,7 +102,9 @@ CREATE TABLE IF NOT EXISTS payment_orders (
 CREATE TABLE IF NOT EXISTS api_keys (
   id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL, name VARCHAR(64) NOT NULL DEFAULT '未命名密钥',
   api_key VARCHAR(255) NOT NULL UNIQUE, enabled TINYINT NOT NULL DEFAULT 1, created_at VARCHAR(40) NOT NULL,
-  last_used VARCHAR(40), expires_at VARCHAR(40), KEY idx_api_keys_user (user_id, created_at)
+  last_used VARCHAR(40), expires_at VARCHAR(40), api_key_hash CHAR(64) UNIQUE,
+  key_prefix VARCHAR(32) NOT NULL DEFAULT '', key_last4 VARCHAR(8) NOT NULL DEFAULT '',
+  KEY idx_api_keys_user (user_id, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS recharge_codes (
   id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY, code_hash VARCHAR(128) NOT NULL UNIQUE, code VARCHAR(128),
@@ -130,6 +134,24 @@ CREATE TABLE IF NOT EXISTS user_quota_policies (
   daily_amount DECIMAL(20,8) NOT NULL DEFAULT 0, daily_tokens BIGINT NOT NULL DEFAULT 0, hourly_tokens BIGINT NOT NULL DEFAULT 0,
   hourly_window_hours DECIMAL(10,2) NOT NULL DEFAULT 1, starts_at VARCHAR(40) NOT NULL, ends_at VARCHAR(40), enabled TINYINT NOT NULL DEFAULT 1,
   created_at VARCHAR(40) NOT NULL, updated_at VARCHAR(40) NOT NULL, KEY idx_quota_user_period (user_id, enabled, starts_at, ends_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS usage_allocations (
+  id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  usage_id BIGINT NOT NULL, user_id BIGINT NOT NULL, kind VARCHAR(20) NOT NULL,
+  entitlement_id BIGINT, cost DECIMAL(20,8) NOT NULL DEFAULT 0,
+  tokens BIGINT NOT NULL DEFAULT 0, created_at VARCHAR(40) NOT NULL,
+  KEY idx_usage_allocations_usage (usage_id, kind),
+  KEY idx_usage_allocations_entitlement (user_id, kind, entitlement_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS billing_locks (
+  user_id BIGINT NOT NULL PRIMARY KEY, version BIGINT NOT NULL DEFAULT 0,
+  updated_at VARCHAR(40) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS user_sessions (
+  id VARCHAR(64) NOT NULL PRIMARY KEY, user_id BIGINT NOT NULL,
+  user_agent VARCHAR(500) NOT NULL DEFAULT '', ip_address VARCHAR(128) NOT NULL DEFAULT '',
+  created_at VARCHAR(40) NOT NULL, last_seen_at VARCHAR(40) NOT NULL, revoked_at VARCHAR(40),
+  KEY idx_user_sessions_user (user_id, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS upstream_subscription_accounts (
   id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,

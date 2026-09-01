@@ -10,10 +10,19 @@
     </div>
 
     <div class="metric-grid gateway-metrics">
-      <div class="metric-card"><span>账号总数</span><strong>{{ accounts.length }}</strong><small>仅管理员可见</small></div>
+      <div class="metric-card"><span>账号总数</span><strong>{{ summary.total || 0 }}</strong><small>全部分页与供应商</small></div>
       <div class="metric-card"><span>OpenAI</span><strong>{{ providerCount('openai') }}</strong><small>Responses / Codex</small></div>
       <div class="metric-card"><span>Claude</span><strong>{{ providerCount('claude') }}</strong><small>Anthropic Messages</small></div>
       <div class="metric-card" :class="{ highlight: gatewayEnabled }"><span>网关状态</span><strong>{{ gatewayEnabled ? '已启用' : '已停用' }}</strong><small>凭据全程加密保存</small></div>
+    </div>
+    <div class="gateway-strip gateway-capacity" aria-label="订阅账号池实时容量">
+      <span><small>正在执行</small><b>{{ gatewayMetrics.active_requests || 0 }}</b></span>
+      <span><small>排队人数</small><b>{{ gatewayMetrics.queue_waiting || 0 }} / {{ gatewayMetrics.queue_limit || 0 }}</b></span>
+      <span><small>RPM 使用</small><b>{{ gatewayMetrics.rpm_used || 0 }} / {{ gatewayMetrics.rpm_capacity || 0 }}</b></span>
+      <span><small>账号冷却</small><b>{{ gatewayMetrics.cooldown_accounts || 0 }} / {{ gatewayMetrics.account_pool_total || 0 }}</b></span>
+      <span><small>本地限流</small><b>{{ gatewayMetrics.local_rate_limits || 0 }}</b></span>
+      <span><small>上游容量不足</small><b>{{ gatewayMetrics.upstream_capacity_failures || 0 }}</b></span>
+      <span><small>排队拒绝</small><b>{{ gatewayMetrics.queue_rejected || 0 }}</b></span>
     </div>
 
     <section v-if="showForm" class="panel account-editor">
@@ -81,6 +90,7 @@
         <div><span class="eyebrow">ACCOUNT POOL</span><h2>上游账号池</h2></div>
         <div class="provider-filter"><button :class="['secondary-btn', { active: filter === '' }]" @click="setFilter('')">全部</button><button :class="['secondary-btn', { active: filter === 'openai' }]" @click="setFilter('openai')">OpenAI</button><button :class="['secondary-btn', { active: filter === 'claude' }]" @click="setFilter('claude')">Claude</button></div>
       </div>
+      <div v-if="error" class="data-error" role="alert"><strong>订阅账号加载失败</strong><span>{{ error }}</span><button class="secondary-btn" @click="load">重试</button></div>
       <div v-if="loading" class="empty">正在加载订阅账号…</div>
       <div v-else-if="!accounts.length" class="empty">暂无订阅账号。添加后，对应模型会自动进入 `/v1/models`。</div>
       <div v-else class="account-list">
@@ -102,6 +112,7 @@
           <div class="account-actions"><button class="secondary-btn" :disabled="actionId === account.id" @click="testAccount(account)">测试</button><button v-if="account.has_refresh_token" class="secondary-btn" :disabled="actionId === account.id" @click="refreshAccount(account)">刷新 Token</button><button class="secondary-btn" @click="openEdit(account)">编辑</button><button class="secondary-btn" @click="toggleAccount(account)">{{ account.enabled ? '停用' : '启用' }}</button><button class="text-btn danger" @click="removeAccount(account)">删除</button></div>
         </article>
       </div>
+      <div class="pagination" v-if="pagination.pages > 1"><button class="secondary-btn" :disabled="loading || pagination.page <= 1" @click="changePage(pagination.page - 1)">上一页</button><span>第 {{ pagination.page }} / {{ pagination.pages }} 页，共 {{ pagination.total }} 个账号</span><button class="secondary-btn" :disabled="loading || pagination.page >= pagination.pages" @click="changePage(pagination.page + 1)">下一页</button></div>
     </section>
 
     <section class="panel endpoint-help">
@@ -120,18 +131,19 @@ const defaults = provider => ({ mode: 'oauth', provider, name: '', models: provi
 
 export default {
   name: 'UpstreamSubscriptions',
-  data: () => ({ accounts: [], loading: false, busy: false, actionId: null, filter: '', showForm: false, editingId: null, oauthSession: null, gatewayEnabled: false, form: defaults('openai') }),
+  data: () => ({ accounts: [], summary: {}, gatewayMetrics: {}, pagination: { page: 1, pages: 1, total: 0 }, error: '', loading: false, busy: false, actionId: null, filter: '', showForm: false, editingId: null, oauthSession: null, gatewayEnabled: false, form: defaults('openai') }),
   watch: { 'form.provider' (next, previous) { if (!this.editingId && !this.oauthSession && next !== previous) this.form.models = defaults(next).models } },
   created () { this.load() },
   methods: {
     providerLabel (provider) { return provider === 'openai' ? 'OpenAI / Codex' : 'Claude / Anthropic' },
-    providerCount (provider) { return this.accounts.filter(item => item.provider === provider).length },
+    providerCount (provider) { return Number(this.summary[provider] || 0) },
     statusClass (account) { return account.enabled ? String(account.status || 'READY').toLowerCase() : 'disabled' },
     statusText (account) { if (!account.enabled) return '已停用'; return ({ READY: '可用', INVALID: '凭据失效', COOLDOWN: '冷却中', DISABLED: '已停用' })[account.status] || account.status },
     displayTime (value) { if (!value) return '—'; const date = new Date(value); return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN') },
     payload () { return { provider: this.form.provider, name: this.form.name, models: this.form.models, priority: this.form.priority, weight: this.form.weight, input_price_cny: this.form.input_price_cny, output_price_cny: this.form.output_price_cny, price_multiplier: this.form.price_multiplier, enabled: this.form.enabled, compliance_confirmed: this.form.compliance_confirmed } },
-    async load () { this.loading = true; try { const data = await api.upstreamSubscriptions({ provider: this.filter, page_size: 100 }); this.accounts = data.accounts || []; this.gatewayEnabled = !!data.gateway_enabled } catch (error) { notify(error.message, 'error') } finally { this.loading = false } },
-    setFilter (provider) { this.filter = provider; this.load() },
+    async load () { this.loading = true; this.error = ''; try { const data = await api.upstreamSubscriptions({ provider: this.filter, page: this.pagination.page, page_size: 12 }); this.accounts = data.accounts || []; this.summary = data.summary || {}; this.gatewayMetrics = data.gateway_metrics || {}; this.pagination = data.pagination || this.pagination; this.gatewayEnabled = !!data.gateway_enabled } catch (error) { this.error = error.message || '请检查后端服务后重试'; notify(this.error, 'error') } finally { this.loading = false } },
+    setFilter (provider) { this.filter = provider; this.pagination.page = 1; this.load() },
+    changePage (page) { this.pagination.page = page; this.load() },
     openCreate () { this.editingId = null; this.oauthSession = null; this.form = defaults('openai'); this.showForm = true; this.$nextTick(() => document.querySelector('.account-editor')?.scrollIntoView({ behavior: 'smooth' })) },
     openEdit (account) { this.editingId = account.id; this.oauthSession = null; this.form = { ...defaults(account.provider), provider: account.provider, name: account.name, models: (account.models || []).join(', '), priority: account.priority, weight: account.weight, input_price_cny: account.input_price_cny, output_price_cny: account.output_price_cny, price_multiplier: account.price_multiplier, enabled: account.enabled, mode: 'manual' }; this.showForm = true; this.$nextTick(() => document.querySelector('.account-editor')?.scrollIntoView({ behavior: 'smooth' })) },
     closeForm () { this.showForm = false; this.editingId = null; this.oauthSession = null },
@@ -202,7 +214,7 @@ export default {
   display:block;
   overflow:hidden;
   color:#7892a2;
-  font:8px var(--mono);
+  font:11px var(--mono);
   letter-spacing:.1em;
   text-overflow:ellipsis;
   white-space:nowrap;
@@ -216,13 +228,13 @@ export default {
   text-overflow:ellipsis;
   white-space:nowrap;
 }
-.status-chip { flex:0 0 auto;font-size:9px;padding:4px 7px; }
+.status-chip { flex:0 0 auto;font-size:11px;padding:4px 7px; }
 .account-summary {
   min-height:34px;
   margin:10px 0 9px;
   overflow:hidden;
   color:#758b9a;
-  font-size:10px;
+  font-size:12px;
   line-height:1.6;
   overflow-wrap:anywhere;
 }
@@ -234,7 +246,7 @@ export default {
   border-top:1px solid #e3edf2;
   border-bottom:1px solid #e3edf2;
 }
-.account-models span { padding:4px 6px;font-size:9px; }
+.account-models span { padding:4px 6px;font-size:11px; }
 .account-facts {
   grid-template-columns:repeat(2,minmax(0,1fr));
   gap:6px;
@@ -247,16 +259,16 @@ export default {
   background:#f2f7f9;
 }
 .account-card.claude .account-facts div { background:#fff5ed; }
-.account-facts dt { font:8px var(--mono); }
+.account-facts dt { font:11px var(--mono); }
 .account-facts dd {
   overflow:hidden;
   margin-top:4px;
   color:#2a506d;
-  font:500 10px var(--mono);
+  font:500 12px var(--mono);
   text-overflow:ellipsis;
   white-space:nowrap;
 }
-.account-error { margin:9px 0 0;font-size:9px; }
+.account-error { margin:9px 0 0;font-size:12px; }
 .account-actions {
   align-items:center;
   gap:6px;
@@ -268,14 +280,14 @@ export default {
   padding:0 8px;
   border-radius:7px;
   background:#fff;
-  font-size:10px;
+  font-size:12px;
 }
 .account-actions .text-btn {
   min-height:31px;
   padding:0 5px;
   border:0;
   background:transparent;
-  font-size:10px;
+  font-size:12px;
 }
 .provider-filter .secondary-btn {
   min-height:36px;

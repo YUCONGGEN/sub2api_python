@@ -38,10 +38,11 @@ def _local_authorization(request: Request) -> str:
     return f"Bearer {api_key}" if api_key else ""
 
 
-def _error(status: int, message: str, error_type: str = "invalid_request_error") -> Response:
+def _error(status: int, message: str, error_type: str = "invalid_request_error", source: str = "") -> Response:
     return Response(
         content=json.dumps({"error": {"message": message, "type": error_type}}, ensure_ascii=False, separators=(",", ":")),
         status_code=status,
+        headers={"X-Rose-Error-Source": source} if source else None,
         media_type="application/json",
     )
 
@@ -168,7 +169,7 @@ async def anthropic_messages(request: Request):
     gateway, auth = _beans(request)
     user = await asyncio.to_thread(auth.user_from_authorization, _local_authorization(request))
     if not user:
-        return _error(401, "Invalid API key", "authentication_error")
+        return _error(401, "Invalid API key", "authentication_error", "local_auth")
     if not user.get("enabled"):
         return _error(403, "Account disabled", "permission_error")
     if not await asyncio.to_thread(gateway.store.has_usable_balance, int(user["id"])):
@@ -191,7 +192,7 @@ async def anthropic_count_tokens(request: Request):
     gateway, auth = _beans(request)
     user = await asyncio.to_thread(auth.user_from_authorization, _local_authorization(request))
     if not user:
-        return _error(401, "Invalid API key", "authentication_error")
+        return _error(401, "Invalid API key", "authentication_error", "local_auth")
     if not user.get("enabled"):
         return _error(403, "Account disabled", "permission_error")
     try:

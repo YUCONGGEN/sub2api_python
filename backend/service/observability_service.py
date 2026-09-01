@@ -8,6 +8,7 @@ are read from SQLite through the mapper.
 from __future__ import annotations
 
 import platform
+import math
 import socket
 import threading
 import time
@@ -55,6 +56,7 @@ class ObservabilityService:
         self._latency_total_ms = 0
         self._last_request_at: str | None = None
         self._recent_requests: deque[float] = deque()
+        self._recent_samples: deque[tuple[float, int, int, str]] = deque(maxlen=50000)
 
     @PostConstruct
     def init(self) -> None:
@@ -91,6 +93,7 @@ class ObservabilityService:
             self._latency_total_ms += latency
             self._last_request_at = created_at
             self._recent_requests.append(now_mono)
+            self._recent_samples.append((now_mono, latency, status, str(path or "")))
             self._prune_recent(now_mono)
         if level:
             try:
@@ -114,6 +117,9 @@ class ObservabilityService:
         cutoff = now_mono - 60
         while self._recent_requests and self._recent_requests[0] < cutoff:
             self._recent_requests.popleft()
+        history_cutoff = now_mono - 86400
+        while self._recent_samples and self._recent_samples[0][0] < history_cutoff:
+            self._recent_samples.popleft()
 
     def request_metrics(self) -> dict[str, Any]:
         with self._lock:
@@ -123,6 +129,9 @@ class ObservabilityService:
             dropped = self._dropped_requests
             recent = len(self._recent_requests)
             latency = self._latency_total_ms / total if total else 0
+            samples = list(self._recent_samples)
+            latencies = sorted(item[1] for item in samples)
+            p95_index = max(0, min(len(latencies) - 1, math.ceil(len(latencies) * 0.95) - 1)) if latencies else 0
             snapshot = {
                 "runtime_requests": total,
                 "runtime_failed_requests": failed,
@@ -135,6 +144,9 @@ class ObservabilityService:
                 "failure_rate": round((failed / total) * 100, 2) if total else 0,
                 "packet_loss_rate": round((dropped / total) * 100, 2) if total else 0,
                 "average_latency_ms": round(latency, 1),
+                "p95_latency_ms": latencies[p95_index] if latencies else 0,
+                "requests_24h_runtime": len(samples),
+                "rate_limited_24h_runtime": sum(1 for item in samples if item[2] == 429),
                 "last_request_at": self._last_request_at,
                 "uptime_seconds": max(0, int(time.monotonic() - self._started_at)),
             }

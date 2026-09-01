@@ -1,4 +1,6 @@
 from springbootai import get_config
+import csv
+import io
 import secrets
 import string
 import re
@@ -48,6 +50,19 @@ class AdminController:
         result = self.observability.logs_page(page, page_size, level)
         return ok({"ok": True, "logs": result["items"], "pagination": result})
 
+    @GetMapping("/usage-export")
+    def usage_export(self, authorization: str = RequestHeader(name="Authorization", required=False), start_at: str = RequestParam(name="start_at", required=False, default=""), end_at: str = RequestParam(name="end_at", required=False, default=""), user_id: str = RequestParam(name="user_id", required=False, default=""), model: str = RequestParam(name="model", required=False, default=""), status: str = RequestParam(name="status", required=False, default="")):
+        """Generate a database-independent, metadata-only CSV export."""
+        if not self.admin(authorization):
+            return forbidden()
+        rows = self.store.export_usage(start_at=start_at, end_at=end_at, user_id=user_id, model=model, status=status)
+        columns = ["id", "user_id", "username", "request_id", "protocol", "model", "status", "prompt_tokens", "completion_tokens", "total_tokens", "cost", "created_at", "completed_at", "latency_ms"]
+        output = io.StringIO(newline="")
+        writer = csv.DictWriter(output, fieldnames=columns, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+        return ok({"ok": True, "filename": "usage-export.csv", "csv": "\ufeff" + output.getvalue(), "count": len(rows)})
+
     @GetMapping("/subscription-plans")
     def subscription_plans(self, authorization: str = RequestHeader(name="Authorization", required=False), page: int = RequestParam(name="page", required=False, default=1), page_size: int = RequestParam(name="page_size", required=False, default=5)):
         if not self.admin(authorization):
@@ -84,7 +99,7 @@ class AdminController:
         if not self.admin(authorization):
             return forbidden()
         deleted = self.store.delete_subscription_plan(plan_id)
-        return ok({"ok": True}, "套餐已删除") if deleted else not_found("套餐不存在")
+        return ok({"ok": True}, "套餐已停用，历史订阅继续保留") if deleted else not_found("套餐不存在")
 
     @GetMapping("/users")
     def users(self, authorization: str = RequestHeader(name="Authorization", required=False), keyword: str = RequestParam(name="keyword", required=False, default=""), page: int = RequestParam(name="page", required=False, default=1), page_size: int = RequestParam(name="page_size", required=False, default=5)):
@@ -246,7 +261,7 @@ class AdminController:
         if int(admin["id"]) == int(user_id):
             return bad("不能删除当前登录的管理员账户", 409)
         deleted = self.store.delete_user(user_id)
-        return ok({"ok": True}, "账户已删除") if deleted else not_found("用户不存在")
+        return ok({"ok": True}, "账户已停用并匿名化，历史账务记录已保留") if deleted else not_found("用户不存在")
 
     @PostMapping("/recharge-codes")
     def create_recharge_codes(self, body: dict = RequestBody(), authorization: str = RequestHeader(name="Authorization", required=False)):

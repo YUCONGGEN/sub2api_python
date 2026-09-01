@@ -8,6 +8,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, AsyncIterator
 
 import httpx
@@ -57,6 +58,13 @@ class SubscriptionGatewayService:
         self._account_semaphores: dict[tuple[Any, int], asyncio.Semaphore] = {}
         self._rate_windows: dict[int, deque[float]] = {}
         self._session_affinity: dict[str, tuple[int, float]] = {}
+        self._queue_waiters = 0
+        self._queue_total = 0
+        self._queue_rejected = 0
+        self._queue_timeouts = 0
+        self._local_rate_limits = 0
+        self._upstream_capacity_failures = 0
+        self.max_queued_requests = 200
 
     @PostConstruct
     def init(self) -> None:
@@ -87,11 +95,13 @@ class SubscriptionGatewayService:
         # more than the old 30 second limit.  Zero explicitly means to wait
         # until a slot is available; positive values keep a bounded queue.
         self.queue_timeout = 0.0 if raw_queue_timeout <= 0 else min(3600.0, max(1.0, raw_queue_timeout))
+        self.max_queued_requests = max(1, min(10000, int(cfg.get("max-queued-requests", 200) or 200)))
         self.session_affinity_ttl = max(60.0, min(86400.0, float(cfg.get("session-affinity-ttl-seconds", 3600) or 3600)))
         self.logger.info(
-            "订阅网关保护已启用 per_account_concurrency=%s per_account_rpm=%s queue_timeout=%s capacity_retries=%s session_affinity_ttl=%ss",
+            "订阅网关保护已启用 per_account_concurrency=%s per_account_rpm=%s queue_timeout=%s max_queue=%s capacity_retries=%s session_affinity_ttl=%ss",
             self.per_account_concurrency, self.per_account_rpm,
             "unlimited" if self.queue_timeout <= 0 else f"{int(self.queue_timeout)}s",
+            self.max_queued_requests,
             self.capacity_retries,
             int(self.session_affinity_ttl),
         )
@@ -118,14 +128,76 @@ class SubscriptionGatewayService:
             window.append(now)
             return True
 
-    async def _acquire_account_slot(self, semaphore: asyncio.Semaphore) -> float:
+    async def _acquire_account_slot(self, semaphore: asyncio.Semaphore, account_id: int = 0) -> float:
         """Wait for an account slot and return the queue duration in milliseconds."""
         started_at = time.monotonic()
-        if self.queue_timeout <= 0:
-            await semaphore.acquire()
-        else:
-            await asyncio.wait_for(semaphore.acquire(), timeout=self.queue_timeout)
+        queued = semaphore.locked()
+        if queued:
+            with self._safety_lock:
+                if self._queue_waiters >= self.max_queued_requests:
+                    self._queue_rejected += 1
+                    raise OverflowError("subscription queue is full")
+                self._queue_waiters += 1
+                self._queue_total += 1
+        try:
+            if self.queue_timeout <= 0:
+                await semaphore.acquire()
+            else:
+                await asyncio.wait_for(semaphore.acquire(), timeout=self.queue_timeout)
+        finally:
+            if queued:
+                with self._safety_lock:
+                    self._queue_waiters = max(0, self._queue_waiters - 1)
         return (time.monotonic() - started_at) * 1000.0
+
+    def metrics(self) -> dict[str, Any]:
+        """Return privacy-safe queue/capacity counters for admin monitoring."""
+        with self._safety_lock:
+            semaphores = list(self._account_semaphores.values())
+            now_mono = time.monotonic()
+            for window in self._rate_windows.values():
+                while window and window[0] <= now_mono - 60:
+                    window.popleft()
+            rpm_used = sum(len(window) for window in self._rate_windows.values())
+            active_capacity = len(semaphores) * int(getattr(self, "per_account_concurrency", 1) or 1)
+            available = sum(max(0, int(getattr(item, "_value", 0))) for item in semaphores)
+            snapshot = {
+                "queue_waiting": self._queue_waiters,
+                "queue_limit": self.max_queued_requests,
+                "queued_total": self._queue_total,
+                "queue_rejected": self._queue_rejected,
+                "queue_timeouts": self._queue_timeouts,
+                "active_requests": max(0, active_capacity - available),
+                "local_rate_limits": self._local_rate_limits,
+                "upstream_capacity_failures": self._upstream_capacity_failures,
+                "queue_timeout_seconds": self.queue_timeout,
+                "rpm_used": rpm_used,
+            }
+        try:
+            rows = self.accounts.repository.list_provider("openai") + self.accounts.repository.list_provider("claude")
+            now = datetime.now(timezone.utc)
+            cooling = 0
+            for row in rows:
+                raw = str(row.get("cooldown_until") or "").strip()
+                if not raw:
+                    continue
+                try:
+                    until = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                    if until.tzinfo is None:
+                        until = until.replace(tzinfo=timezone.utc)
+                    cooling += int(until > now)
+                except ValueError:
+                    continue
+            account_count = len(rows)
+            snapshot.update({
+                "account_pool_total": account_count,
+                "cooldown_accounts": cooling,
+                "slot_capacity": account_count * self.per_account_concurrency,
+                "rpm_capacity": account_count * self.per_account_rpm,
+            })
+        except Exception:
+            snapshot.update({"account_pool_total": 0, "cooldown_accounts": 0, "slot_capacity": active_capacity, "rpm_capacity": 0})
+        return snapshot
 
     @staticmethod
     def _session_key(provider: str, user_id: int, payload: dict[str, Any]) -> str:
@@ -334,7 +406,9 @@ class SubscriptionGatewayService:
         last_headers: dict[str, str] = {}
         capacity_retries = max(0, int(getattr(self, "capacity_retries", 0) or 0))
         capacity_retries_left = capacity_retries
-        total_attempts = self.max_attempts + capacity_retries
+        # One loop turn may be used to reset an exhausted account set, so
+        # reserve two turns for each delayed capacity retry.
+        total_attempts = self.max_attempts + capacity_retries * 2
         for _ in range(total_attempts):
             try:
                 account, credentials = await self.accounts.acquire(
@@ -344,6 +418,13 @@ class SubscriptionGatewayService:
                 # Preserve a concrete queue/rate-limit error after all selected
                 # accounts have been tried instead of replacing it with the
                 # account pool's generic "not available" message.
+                if last_error_type == "upstream_capacity" and excluded and capacity_retries_left > 0:
+                    retry_index = capacity_retries - capacity_retries_left
+                    capacity_retries_left -= 1
+                    excluded.clear()
+                    preferred_account_id = None
+                    await asyncio.sleep(self._capacity_retry_delay(retry_index, None))
+                    continue
                 if not excluded:
                     last_detail = str(exc)
                 break
@@ -351,8 +432,20 @@ class SubscriptionGatewayService:
             excluded.add(account_id)
             semaphore = self._account_semaphore(account_id)
             try:
-                queue_wait_ms = await self._acquire_account_slot(semaphore)
+                queue_wait_ms = await self._acquire_account_slot(semaphore, account_id)
+            except OverflowError:
+                last_status = 429
+                last_detail = "本地订阅账号等待队列已满，请稍后重试"
+                last_error_type = "local_queue_full"
+                last_headers = {
+                    "content-type": "application/json; charset=utf-8",
+                    "retry-after": "5",
+                    "x-rose-error-source": "local_queue",
+                }
+                continue
             except TimeoutError:
+                with self._safety_lock:
+                    self._queue_timeouts += 1
                 last_status = 503
                 last_detail = "本地订阅账号队列等待超时，请稍后重试"
                 last_error_type = "local_queue_timeout"
@@ -376,6 +469,8 @@ class SubscriptionGatewayService:
                 # Only completed queue admissions count toward the local RPM
                 # budget.  The old order charged timed-out queue entries too.
                 if not self._reserve_rate_slot(account_id):
+                    with self._safety_lock:
+                        self._local_rate_limits += 1
                     last_status = 429
                     last_detail = "本地单账号请求频率已达到安全上限"
                     last_error_type = "local_rate_limit"
@@ -419,6 +514,8 @@ class SubscriptionGatewayService:
                     response_headers = self._safe_response_headers(response)
                     await response.aclose()
                     if self._is_capacity_error(last_detail):
+                        with self._safety_lock:
+                            self._upstream_capacity_failures += 1
                         last_status = 503
                         last_error_type = "upstream_capacity"
                         last_headers = self._capacity_headers(retry_after)
@@ -428,11 +525,9 @@ class SubscriptionGatewayService:
                             provider, model, account_id, capacity_retries_left,
                         )
                         if capacity_retries_left > 0:
-                            retry_index = capacity_retries - capacity_retries_left
-                            capacity_retries_left -= 1
-                            excluded.discard(account_id)
-                            preferred_account_id = account_id
-                            await asyncio.sleep(self._capacity_retry_delay(retry_index, retry_after))
+                            # Keep this account excluded so another healthy
+                            # account is attempted before retrying the pool.
+                            preferred_account_id = None
                         continue
                     last_error_type = "upstream_error"
                     last_headers = response_headers
@@ -452,6 +547,8 @@ class SubscriptionGatewayService:
                     if provider == "openai":
                         stream_prefix, stream_failure = await self._prefetch_openai_stream(stream_iterator)
                         if stream_failure and self._is_capacity_error(stream_failure):
+                            with self._safety_lock:
+                                self._upstream_capacity_failures += 1
                             last_status = 503
                             last_detail = stream_failure
                             last_error_type = "upstream_capacity"
@@ -463,11 +560,7 @@ class SubscriptionGatewayService:
                                 provider, model, account_id, capacity_retries_left,
                             )
                             if capacity_retries_left > 0:
-                                retry_index = capacity_retries - capacity_retries_left
-                                capacity_retries_left -= 1
-                                excluded.discard(account_id)
-                                preferred_account_id = account_id
-                                await asyncio.sleep(self._capacity_retry_delay(retry_index, None))
+                                preferred_account_id = None
                             continue
                     release_in_stream = True
                     self.logger.info(
@@ -486,17 +579,15 @@ class SubscriptionGatewayService:
                 response_failure = self._failure_from_json_bytes(body)
                 if response_failure:
                     if self._is_capacity_error(response_failure):
+                        with self._safety_lock:
+                            self._upstream_capacity_failures += 1
                         last_status = 503
                         last_detail = response_failure
                         last_error_type = "upstream_capacity"
                         last_headers = self._capacity_headers(None)
                         self._forget_account(session_key, account_id)
                         if capacity_retries_left > 0:
-                            retry_index = capacity_retries - capacity_retries_left
-                            capacity_retries_left -= 1
-                            excluded.discard(account_id)
-                            preferred_account_id = account_id
-                            await asyncio.sleep(self._capacity_retry_delay(retry_index, None))
+                            preferred_account_id = None
                         continue
                     self.accounts.record_failure(account, 502, response_failure)
                     self._forget_account(session_key, account_id)

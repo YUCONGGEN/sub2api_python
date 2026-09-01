@@ -30,6 +30,11 @@ class SubscriptionRepository:
             "page": page,
             "page_size": page_size,
             "pages": pages,
+            "summary": {
+                "total": int(self.mapper.count_accounts("") or 0),
+                "openai": int(self.mapper.count_accounts("openai") or 0),
+                "claude": int(self.mapper.count_accounts("claude") or 0),
+            },
         }
 
     def find(self, account_id: int) -> dict[str, Any] | None:

@@ -55,6 +55,14 @@ class BillingController:
         result = self.store.list_user_subscriptions(user["id"], page, page_size)
         return ok({"ok": True, "subscriptions": result["items"], "pagination": result})
 
+    @GetMapping("/entitlements")
+    def entitlements(self, authorization: str = RequestHeader(name="Authorization", required=False), page: int = RequestParam(name="page", required=False, default=1), page_size: int = RequestParam(name="page_size", required=False, default=5)):
+        user = self.auth.user_from_authorization(authorization)
+        if not user:
+            return unauthorized()
+        result = self.store.list_user_entitlements(user["id"], page, page_size)
+        return ok({"ok": True, "entitlements": result["items"], "pagination": result})
+
     @PostMapping("/subscriptions")
     def subscribe(self, body: dict = RequestBody(), authorization: str = RequestHeader(name="Authorization", required=False)):
         user = self.auth.user_from_authorization(authorization)

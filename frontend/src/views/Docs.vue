@@ -35,17 +35,33 @@
 
             <article class="codex-step">
               <div class="codex-step-index">02</div>
-              <div class="codex-step-body"><h3>安装 Codex CLI</h3><p>确认电脑已安装 Node.js，然后全局安装 Codex。最后一行应输出版本号。</p><div class="code-block large"><div class="code-head"><span>Windows PowerShell</span><button @click="copy(codexInstallText)">复制</button></div><pre>{{ codexInstallText }}</pre></div></div>
+              <div class="codex-step-body">
+                <h3>安装 Codex（Windows）</h3>
+                <p>推荐安装 Windows 桌面版；如果主要在终端工作，也可以只安装 Codex CLI。两种方式都使用用户目录下的 <code>%USERPROFILE%\.codex</code> 配置。</p>
+                <div class="codex-install-options">
+                  <div class="codex-install-option featured">
+                    <div class="codex-install-option-head"><span>推荐</span><b>Windows 桌面版</b></div>
+                    <p>打开 OpenAI Codex 官方页面，点击“下载 Windows 版”完成安装；也可在 PowerShell 中通过 Microsoft Store 安装。</p>
+                    <a class="secondary-btn codex-link" href="https://openai.com/zh-Hans-CN/codex/" target="_blank" rel="noopener">打开官方下载页 ↗</a>
+                    <div class="code-block large"><div class="code-head"><span>Windows PowerShell / winget</span><button @click="copy(codexWindowsInstallText)">复制</button></div><pre>{{ codexWindowsInstallText }}</pre></div>
+                  </div>
+                  <div class="codex-install-option">
+                    <div class="codex-install-option-head"><span>终端</span><b>Codex CLI</b></div>
+                    <p>先安装 Node.js，再用 npm 全局安装 Codex CLI。最后一行应输出版本号。</p>
+                    <div class="code-block large"><div class="code-head"><span>Windows PowerShell / npm</span><button @click="copy(codexInstallText)">复制</button></div><pre>{{ codexInstallText }}</pre></div>
+                  </div>
+                </div>
+              </div>
             </article>
 
             <article class="codex-step">
               <div class="codex-step-index">03</div>
-              <div class="codex-step-body"><h3>配置用户级 config.toml</h3><p>创建并打开 <code>%USERPROFILE%\.codex\config.toml</code>，粘贴下面内容，再把 <code>&lt;粘贴本站 API Key&gt;</code> 替换为刚创建的完整密钥。必须使用当前本站生成的 <code>sk-api-...</code>，不能沿用其他站点或上游账号的 Key。供应商配置必须放在用户级文件中，不能放在项目目录的 <code>.codex/config.toml</code>。</p><div class="code-block large"><div class="code-head"><span>~/.codex/config.toml</span><button @click="copy(codexConfigText)">复制</button></div><pre>{{ codexConfigText }}</pre></div><div class="codex-file-command"><code>notepad "$env:USERPROFILE\.codex\config.toml"</code><button @click="copy(codexOpenConfigCommand)">复制打开命令</button></div></div>
+              <div class="codex-step-body"><h3>配置用户级 config.toml</h3><p>桌面版和 Windows 原生 CLI 共用 <code>%USERPROFILE%\.codex</code>。创建并打开其中的 <code>config.toml</code>，粘贴下面内容，再把 <code>&lt;粘贴本站 API Key&gt;</code> 替换为刚创建的完整密钥。必须使用当前本站生成的 <code>sk-api-...</code>，不能沿用其他站点或上游账号的 Key。供应商配置必须放在用户级文件中，不能放在项目目录的 <code>.codex/config.toml</code>。</p><div class="code-block large"><div class="code-head"><span>~/.codex/config.toml</span><button @click="copy(codexConfigText)">复制</button></div><pre>{{ codexConfigText }}</pre></div><div class="codex-file-command"><code>notepad "$env:USERPROFILE\.codex\config.toml"</code><button @click="copy(codexOpenConfigCommand)">复制打开命令</button></div></div>
             </article>
 
             <article class="codex-step">
               <div class="codex-step-index">04</div>
-              <div class="codex-step-body"><h3>启动 Codex 并调用 GPT</h3><p>进入你的项目目录后运行 <code>codex</code> 可打开交互界面；<code>codex exec</code> 用于执行一次性任务。首次测试建议让模型只返回一行文字。</p><div class="code-block large"><div class="code-head"><span>交互调用 / 单次调用</span><button @click="copy(codexRunText)">复制</button></div><pre>{{ codexRunText }}</pre></div></div>
+              <div class="codex-step-body"><h3>启动 Codex 并调用 GPT</h3><p><strong>桌面版：</strong>配置完成后完全退出并重新打开应用，选择“添加项目”或按 <code>Ctrl+O</code> 打开项目文件夹，再创建任务。<strong>CLI：</strong>进入项目目录运行 <code>codex</code>；<code>codex exec</code> 用于执行一次性任务。首次测试建议只让模型返回一行文字。</p><div class="code-block large"><div class="code-head"><span>CLI 交互调用 / 单次调用</span><button @click="copy(codexRunText)">复制</button></div><pre>{{ codexRunText }}</pre></div></div>
             </article>
 
             <article class="codex-step">
@@ -60,7 +76,7 @@
           </div>
 
           <div class="docs-callout codex-callout"><b>安全</b><span><code>experimental_bearer_token</code> 会让密钥以明文保存在用户级配置中，请限制该文件的读取权限。远程接入请使用 HTTPS，不要把 API Key、Codex <code>auth.json</code> 或订阅账号 Token 发到聊天、截图、代码仓库中。</span></div>
-          <p class="codex-sources">参考：<a href="https://developers.openai.com/codex/auth" target="_blank" rel="noopener">OpenAI Codex 身份验证</a> · <a href="https://learn.chatgpt.com/docs/config-file/config-reference" target="_blank" rel="noopener">Codex 配置参考</a> · <a href="https://developers.openai.com/codex/cli/reference" target="_blank" rel="noopener">Codex 命令参考</a></p>
+          <p class="codex-sources">参考：<a href="https://learn.chatgpt.com/docs/windows/windows-app" target="_blank" rel="noopener">OpenAI Windows 安装说明</a> · <a href="https://developers.openai.com/codex/auth" target="_blank" rel="noopener">OpenAI Codex 身份验证</a> · <a href="https://learn.chatgpt.com/docs/config-file/config-reference" target="_blank" rel="noopener">Codex 配置参考</a> · <a href="https://developers.openai.com/codex/cli/reference" target="_blank" rel="noopener">Codex 命令参考</a></p>
         </section>
       </div>
     </div>
@@ -77,6 +93,7 @@ export default {
       openaiConfig: '',
       selectedCodexModel: '',
       codexModelIds: [],
+      codexWindowsInstallText: '',
       codexInstallText: '',
       codexConfigText: '',
       codexOpenConfigCommand: '',
@@ -110,6 +127,7 @@ export default {
       const providerName = codex.provider_name || this.appName || '大模型接口管理'
       const providerBaseUrl = String(codex.provider_base_url || this.baseUrl || '').replace(/\/$/, '')
       const codexBaseUrl = /\/v1$/i.test(providerBaseUrl) ? providerBaseUrl : `${providerBaseUrl}/v1`
+      this.codexWindowsInstallText = `winget install --id 9PLM9XGG6VKS -s msstore`
       this.codexInstallText = `node --version\nnpm install -g @openai/codex\ncodex --version`
       this.codexConfigText = `model = "${selectedModel}"\nmodel_provider = "${providerKey}"\nmodel_reasoning_effort = "${codex.model_reasoning_effort || 'high'}"\napproval_policy = "${codex.approval_policy || 'on-request'}"\nsandbox_mode = "${codex.sandbox_mode || 'workspace-write'}"\n\n[model_providers.${providerKey}]\nname = "${providerName}"\nbase_url = "${codexBaseUrl}"\nexperimental_bearer_token = "<粘贴本站 API Key>"\nwire_api = "${codex.wire_api || 'responses'}"\nrequires_openai_auth = false\nsupports_websockets = ${codex.supports_websockets === true}`
       this.codexOpenConfigCommand = `New-Item -ItemType Directory -Force "$env:USERPROFILE\\.codex" | Out-Null\nnotepad "$env:USERPROFILE\\.codex\\config.toml"`
@@ -344,6 +362,55 @@ export default {
   margin-top: 14px;
 }
 
+.codex-install-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 15px;
+}
+
+.codex-install-option {
+  min-width: 0;
+  padding: 15px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+}
+
+.codex-install-option.featured {
+  border-color: color-mix(in srgb, var(--acid) 70%, var(--line));
+  box-shadow: inset 3px 0 0 var(--acid);
+}
+
+.codex-install-option-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 8px;
+}
+
+.codex-install-option-head span {
+  padding: 4px 6px;
+  background: var(--ink);
+  color: var(--acid);
+  font: 9px var(--mono);
+  letter-spacing: .06em;
+}
+
+.codex-install-option-head b {
+  font-size: 13px;
+}
+
+.codex-install-option p {
+  min-height: 55px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+.codex-install-option .code-block {
+  margin-top: 12px;
+}
+
 .codex-link {
   min-height: 35px;
   margin-top: 13px;
@@ -467,9 +534,14 @@ export default {
 }
 
 :global(html[data-theme="dark"]) .codex-file-command,
-:global(html[data-theme="dark"]) .codex-model-list code {
+:global(html[data-theme="dark"]) .codex-model-list code,
+:global(html[data-theme="dark"]) .codex-install-option {
   background: #111d2a;
   border-color: #30485b;
+}
+
+:global(html[data-theme="dark"]) .codex-install-option.featured {
+  border-color: color-mix(in srgb, var(--acid) 65%, #30485b);
 }
 
 :global(html[data-theme="dark"]) .codex-file-command button,
@@ -494,6 +566,14 @@ export default {
 
   .codex-overview {
     grid-template-columns: 1fr;
+  }
+
+  .codex-install-options {
+    grid-template-columns: 1fr;
+  }
+
+  .codex-install-option p {
+    min-height: 0;
   }
 }
 

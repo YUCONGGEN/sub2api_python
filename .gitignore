@@ -1,0 +1,30 @@
+# Local secrets and environment overrides
+application.yml
+.env
+.env.*
+!.env.example
+
+# Runtime data
+data/
+*.db
+*.db-shm
+*.db-wal
+log/
+*.log
+*.pid
+
+# FRP binaries, archives, and machine-specific scripts
+frp/
+frp-download/
+frp-server-scripts/
+frp_*.zip
+
+# Dependencies, caches, and editor files
+frontend/node_modules/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.idea/
+.reference/
+.DS_Store
+Thumbs.db

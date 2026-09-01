@@ -1,0 +1,558 @@
+<template>
+  <section class="page">
+    <div class="page-head"><div><div class="eyebrow">DOCS / QUICK START</div><h1>配置教程</h1><p>使用主动创建的 API 密钥接入 OpenAI 兼容接口、TraeCN 或 Codex。</p></div></div>
+    <div class="docs-layout"><aside class="docs-nav"><div class="docs-nav-title">快速开始</div><a class="active" href="#unified-api">统一 API</a><a href="#traecn">TraeCN</a><a href="#codex">Codex 调用 GPT</a></aside>
+      <div class="docs-content"><section id="unified-api"><span class="eyebrow">01 / ENDPOINT</span><h2>OpenAI 兼容地址</h2><p>TraeCN 请选择 OpenAI Chat Completions 格式，并填写本系统的 API 地址。地址只填写到 <code>/v1</code>，不要再追加 <code>/chat/completions</code>。</p><div class="code-block"><div class="code-head"><span>BASE URL</span><button @click="copy(`${baseUrl}/v1`)">复制</button></div><code>{{ baseUrl }}/v1</code></div></section>
+        <section><span class="eyebrow">02 / REQUEST</span><h2>通用 OpenAI 配置</h2><div class="code-block large"><div class="code-head"><span>model_id / url / key</span><button @click="copy(openaiConfig)">复制</button></div><pre>{{ openaiConfig }}</pre></div></section>
+        <section id="traecn" class="trae-tutorial"><span class="eyebrow">03 / TRAECN</span><h2>TraeCN 软件接入</h2><p>下面按 TraeCN 当前界面说明配置流程。先在本系统的“API 密钥”页面创建密钥，再把密钥粘贴到 TraeCN；密钥删除后会立即失效。</p>
+          <div class="trae-steps">
+            <article class="trae-step"><div class="trae-step-index">01</div><div class="trae-step-copy"><h3>关闭自动模式</h3><p>打开 TraeCN 的 Agent 对话框，点击底部的 <strong>Auto</strong>，关闭 Auto Mode，改为手动选择模型。</p></div><figure><img src="/traecn-tutorial/1.png" alt="TraeCN Agent 中打开 Auto 模式菜单" loading="lazy" /></figure></article>
+            <article class="trae-step"><div class="trae-step-index">02</div><div class="trae-step-copy"><h3>确认使用手动模型</h3><p>在 Auto Mode 菜单中将开关关闭。关闭后，底部会显示当前手动模型选择入口。</p></div><figure><img src="/traecn-tutorial/2.png" alt="TraeCN 关闭 Auto Mode" loading="lazy" /></figure></article>
+            <article class="trae-step"><div class="trae-step-index">03</div><div class="trae-step-copy"><h3>进入模型管理</h3><p>点击模型选择框，在模型列表底部选择 <strong>添加模型</strong>，进入模型管理页面。</p></div><figure><img src="/traecn-tutorial/3.png" alt="TraeCN 模型列表中的添加模型入口" loading="lazy" /></figure></article>
+            <article class="trae-step"><div class="trae-step-index">04</div><div class="trae-step-copy"><h3>点击添加模型</h3><p>在模型管理页点击“添加模型”，TraeCN 会显示可接入的服务商和自定义模型选项。</p></div><figure><img src="/traecn-tutorial/4.png" alt="TraeCN 模型管理页面" loading="lazy" /></figure></article>
+            <article class="trae-step"><div class="trae-step-index">05</div><div class="trae-step-copy"><h3>选择自定义模型</h3><p>选择“自定义模型”，不要选择内置服务商，以便接入本系统的 OpenAI 兼容网关。</p></div><figure><img src="/traecn-tutorial/5.png" alt="TraeCN 添加模型时选择自定义模型" loading="lazy" /></figure></article>
+            <article class="trae-step"><div class="trae-step-index">06</div><div class="trae-step-copy"><h3>填写接口信息</h3><p>API 格式选择 <strong>OpenAI Chat Completions 格式</strong>；自定义请求地址填上方 BASE URL，模型 ID 填模型广场中的实际 ID，API 密钥填本系统创建的密钥。显示名称可按项目需要填写。</p><div class="trae-inline-code"><span>请求地址</span><code>{{ baseUrl }}/v1</code><button @click="copy(`${baseUrl}/v1`)">复制</button></div></div><figure><img src="/traecn-tutorial/6.png" alt="TraeCN 自定义模型接口和密钥配置" loading="lazy" /></figure></article>
+            <article class="trae-step trae-step-last"><div class="trae-step-index">07</div><div class="trae-step-copy"><h3>设置图片输入能力</h3><p>在高级配置中按模型实际能力选择。模型支持图片输入时选择“支持”；<strong>如果模型不支持图片输入，请勾选“不支持”</strong>，否则 TraeCN 可能会发送模型无法处理的图片消息。</p></div><figure><img src="/traecn-tutorial/7.png" alt="TraeCN 高级配置中选择不支持图片输入" loading="lazy" /><figcaption>模型不支持图片输入时，请选择“不支持”。</figcaption></figure></article>
+          </div>
+          <div class="docs-callout trae-callout"><b>提示</b><span>模型 ID、计费和图片能力以模型广场展示为准。接入后可先发送一条短消息测试；遇到 401 请检查 API 密钥，遇到 404 请确认地址包含 <code>/v1</code> 且没有重复追加路径。</span></div>
+        </section>
+        <section id="codex" class="codex-tutorial">
+          <span class="eyebrow">04 / CODEX</span>
+          <h2>在 Codex 中调用 GPT 模型</h2>
+          <p>Codex 通过 Responses API 调用本站模型。下面以 Windows 为例，将本站创建的 API Key 直接写入用户级 <code>config.toml</code>，无需额外设置环境变量。</p>
+
+          <div class="codex-overview">
+            <div><span>接口协议</span><strong>Responses API</strong><small>Codex 自定义供应商仅使用 responses 协议</small></div>
+            <div><span>接口地址</span><strong>{{ baseUrl }}/v1</strong><small>只保留一个 /v1</small></div>
+            <div><span>默认模型</span><strong>{{ selectedCodexModel }}</strong><small>也可在启动时用 -m 临时切换</small></div>
+          </div>
+
+          <div class="codex-steps">
+            <article class="codex-step">
+              <div class="codex-step-index">01</div>
+              <div class="codex-step-body"><h3>创建本站 API Key</h3><p>进入“API 密钥”页面创建一枚密钥。这里只使用本站生成的 <code>sk-api-...</code>，不要填写 OpenAI 订阅 Token、Codex <code>auth.json</code> 或浏览器 Cookie。</p><router-link class="secondary-btn codex-link" to="/keys">前往 API 密钥页面 ↗</router-link></div>
+            </article>
+
+            <article class="codex-step">
+              <div class="codex-step-index">02</div>
+              <div class="codex-step-body"><h3>安装 Codex CLI</h3><p>确认电脑已安装 Node.js，然后全局安装 Codex。最后一行应输出版本号。</p><div class="code-block large"><div class="code-head"><span>Windows PowerShell</span><button @click="copy(codexInstallText)">复制</button></div><pre>{{ codexInstallText }}</pre></div></div>
+            </article>
+
+            <article class="codex-step">
+              <div class="codex-step-index">03</div>
+              <div class="codex-step-body"><h3>配置用户级 config.toml</h3><p>创建并打开 <code>%USERPROFILE%\.codex\config.toml</code>，粘贴下面内容，再把 <code>&lt;粘贴本站 API Key&gt;</code> 替换为刚创建的完整密钥。必须使用当前本站生成的 <code>sk-api-...</code>，不能沿用其他站点或上游账号的 Key。供应商配置必须放在用户级文件中，不能放在项目目录的 <code>.codex/config.toml</code>。</p><div class="code-block large"><div class="code-head"><span>~/.codex/config.toml</span><button @click="copy(codexConfigText)">复制</button></div><pre>{{ codexConfigText }}</pre></div><div class="codex-file-command"><code>notepad "$env:USERPROFILE\.codex\config.toml"</code><button @click="copy(codexOpenConfigCommand)">复制打开命令</button></div></div>
+            </article>
+
+            <article class="codex-step">
+              <div class="codex-step-index">04</div>
+              <div class="codex-step-body"><h3>启动 Codex 并调用 GPT</h3><p>进入你的项目目录后运行 <code>codex</code> 可打开交互界面；<code>codex exec</code> 用于执行一次性任务。首次测试建议让模型只返回一行文字。</p><div class="code-block large"><div class="code-head"><span>交互调用 / 单次调用</span><button @click="copy(codexRunText)">复制</button></div><pre>{{ codexRunText }}</pre></div></div>
+            </article>
+
+            <article class="codex-step">
+              <div class="codex-step-index">05</div>
+              <div class="codex-step-body"><h3>切换 GPT 模型</h3><p>永久切换请修改配置中的 <code>model</code>；只切换当前任务可使用 <code>codex -m 模型ID</code>。模型 ID 必须与“模型广场”显示内容完全一致。</p><div class="codex-model-list"><code v-for="model in codexModelIds" :key="model">{{ model }}</code></div><div class="code-block large"><div class="code-head"><span>临时指定模型</span><button @click="copy(codexModelCommand)">复制</button></div><pre>{{ codexModelCommand }}</pre></div></div>
+            </article>
+          </div>
+
+          <div class="codex-troubleshooting">
+            <h3>常见问题</h3>
+            <dl><div><dt>401 Unauthorized</dt><dd>确认 <code>experimental_bearer_token</code> 填写的是当前本站生成的完整 <code>sk-api-...</code> 密钥，且该密钥未删除、未撤销、未过期。旧站 Key、上游订阅 Token 和掩码文本均不可用。</dd></div><div><dt>404 Not Found</dt><dd>确认 <code>base_url</code> 以一个 <code>/v1</code> 结尾，不要写成 <code>/v1/v1</code> 或追加 <code>/responses</code>。</dd></div><div><dt>429 Too Many Requests</dt><dd>表示本地 RPM 上限或上游服务实际限流，请按响应中的 <code>Retry-After</code> 稍后重试。账号正在处理另一个 Codex 长任务时会在本地排队，不再按旧逻辑于 30 秒后返回 429。</dd></div><div><dt>503 upstream_capacity</dt><dd>上游模型暂时满载。网关会在尚未输出正文或工具参数时自动退避重试 2 次；重试耗尽才返回此错误。已经开始输出后不会重放，以免重复回答或重复工具调用。</dd></div><div><dt>503 local_queue_timeout</dt><dd>表示所有可用订阅账号持续繁忙。管理员可将 <code>ROSE_SUBSCRIPTION_QUEUE_TIMEOUT_SECONDS</code> 调大，或设为 <code>0</code> 一直等待；不要通过重复提交任务增加队列压力。</dd></div><div><dt>模型不存在</dt><dd>复制模型广场里的真实模型 ID，或执行时使用 <code>-m</code> 覆盖默认模型。</dd></div><div><dt>配置无法识别</dt><dd>运行 <code>codex doctor</code> 和 <code>codex --strict-config</code> 查看诊断信息。</dd></div></dl>
+          </div>
+
+          <div class="docs-callout codex-callout"><b>安全</b><span><code>experimental_bearer_token</code> 会让密钥以明文保存在用户级配置中，请限制该文件的读取权限。远程接入请使用 HTTPS，不要把 API Key、Codex <code>auth.json</code> 或订阅账号 Token 发到聊天、截图、代码仓库中。</span></div>
+          <p class="codex-sources">参考：<a href="https://developers.openai.com/codex/auth" target="_blank" rel="noopener">OpenAI Codex 身份验证</a> · <a href="https://learn.chatgpt.com/docs/config-file/config-reference" target="_blank" rel="noopener">Codex 配置参考</a> · <a href="https://developers.openai.com/codex/cli/reference" target="_blank" rel="noopener">Codex 命令参考</a></p>
+        </section>
+      </div>
+    </div>
+  </section>
+</template>
+<script>
+import { copyToClipboard, notify } from '../ui'
+
+export default {
+  props: { appName: String, apiBaseUrl: String, codexConfig: Object, modelOptions: { type: Array, default: () => [] } },
+  data () {
+    return {
+      baseUrl: this.apiBaseUrl || '',
+      openaiConfig: '',
+      selectedCodexModel: '',
+      codexModelIds: [],
+      codexInstallText: '',
+      codexConfigText: '',
+      codexOpenConfigCommand: '',
+      codexRunText: '',
+      codexModelCommand: '',
+      copying: false
+    }
+  },
+  created () { this.buildConfigs() },
+  watch: { appName () { this.buildConfigs() }, apiBaseUrl (value) { if (value) { this.baseUrl = value.replace(/\/$/, ''); this.buildConfigs() } }, codexConfig: { deep: true, handler () { this.buildConfigs() } }, modelOptions: { deep: true, handler () { this.buildConfigs() } } },
+  methods: {
+    buildConfigs () {
+      const codex = this.codexConfig || {}
+      const selectedModel = codex.model || 'gpt-5.6-sol'
+      const configuredSolModels = this.modelOptions.filter(item => String(item.id || '').startsWith('gpt-5.6-sol'))
+      const models = configuredSolModels.length ? configuredSolModels : [{ id: selectedModel, reasoning_effort: codex.model_reasoning_effort }]
+      const gptModels = this.modelOptions
+        .map(item => String(item.id || '').trim())
+        .filter((id, index, values) => id.startsWith('gpt-') && values.indexOf(id) === index)
+      this.selectedCodexModel = selectedModel
+      this.codexModelIds = [selectedModel, ...gptModels.filter(id => id !== selectedModel)].slice(0, 12)
+      const modelLines = models.map(item => {
+        const defaultEffort = item.reasoning_effort ? `默认 ${item.reasoning_effort}` : ''
+        const levels = Array.isArray(item.reasoning_levels) && item.reasoning_levels.length ? `可选 ${item.reasoning_levels.join('/')}` : ''
+        return `- ${item.id}${defaultEffort || levels ? `（${[defaultEffort, levels].filter(Boolean).join('，')}）` : ''}`
+      }).join('\n')
+      this.openaiConfig = `model_id: ${selectedModel}\nurl: ${this.baseUrl}/v1\nkey: <在 API 密钥页面创建后填入>\n\n可用 gpt-5.6-sol 档位：\n${modelLines}\n\nPOST ${this.baseUrl}/v1/chat/completions\nAuthorization: Bearer <key>`
+      // Keep Codex as the final tutorial section. The gateway URL and provider
+      // name come from public server configuration; no upstream key is exposed.
+      const providerKey = String(codex.model_provider || 'rose').replace(/[^a-zA-Z0-9_-]/g, '') || 'rose'
+      const providerName = codex.provider_name || this.appName || '大模型接口管理'
+      const providerBaseUrl = String(codex.provider_base_url || this.baseUrl || '').replace(/\/$/, '')
+      const codexBaseUrl = /\/v1$/i.test(providerBaseUrl) ? providerBaseUrl : `${providerBaseUrl}/v1`
+      this.codexInstallText = `node --version\nnpm install -g @openai/codex\ncodex --version`
+      this.codexConfigText = `model = "${selectedModel}"\nmodel_provider = "${providerKey}"\nmodel_reasoning_effort = "${codex.model_reasoning_effort || 'high'}"\napproval_policy = "${codex.approval_policy || 'on-request'}"\nsandbox_mode = "${codex.sandbox_mode || 'workspace-write'}"\n\n[model_providers.${providerKey}]\nname = "${providerName}"\nbase_url = "${codexBaseUrl}"\nexperimental_bearer_token = "<粘贴本站 API Key>"\nwire_api = "${codex.wire_api || 'responses'}"\nrequires_openai_auth = false\nsupports_websockets = ${codex.supports_websockets === true}`
+      this.codexOpenConfigCommand = `New-Item -ItemType Directory -Force "$env:USERPROFILE\\.codex" | Out-Null\nnotepad "$env:USERPROFILE\\.codex\\config.toml"`
+      this.codexRunText = `cd "C:\\你的项目目录"\n\n# 打开交互界面\ncodex --strict-config -m "${selectedModel}"\n\n# 执行一次任务后退出\ncodex exec -m "${selectedModel}" "请只回复：Codex 接入成功"`
+      this.codexModelCommand = `codex --strict-config -m "${selectedModel}" "请分析当前项目并给出三个改进建议"`
+    },
+    async copy (value) {
+      const text = String(value || '')
+      if (!text) {
+        notify('暂无可复制内容', 'error')
+        return
+      }
+      if (this.copying) return
+      this.copying = true
+      const copied = await copyToClipboard(text)
+      notify(copied ? '已完整复制配置' : '复制失败，请检查浏览器权限', copied ? 'success' : 'error')
+      this.copying = false
+    }
+  }
+}
+</script>
+
+<style scoped>
+.trae-tutorial > p {
+  max-width: 780px;
+}
+
+.trae-steps {
+  display: grid;
+  gap: 14px;
+  margin-top: 22px;
+}
+
+.trae-step {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) minmax(210px, 320px);
+  gap: 20px;
+  align-items: start;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+}
+
+.trae-step-index {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--acid);
+  color: var(--ink);
+  font: 10px var(--mono);
+  font-weight: 600;
+}
+
+.trae-step-copy {
+  min-width: 0;
+  padding-top: 2px;
+}
+
+.trae-step-copy h3 {
+  margin: 0 0 8px;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -.02em;
+}
+
+.trae-step-copy p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.75;
+}
+
+.trae-step-copy strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.trae-step figure {
+  width: 100%;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #f0f2ef;
+  text-align: center;
+}
+
+.trae-step figure img {
+  display: block;
+  width: 100%;
+  max-height: 390px;
+  object-fit: contain;
+}
+
+.trae-step figure figcaption {
+  padding: 8px 10px 10px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+  text-align: left;
+}
+
+.trae-inline-code {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 14px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--paper) 72%, transparent);
+  font-size: 10px;
+}
+
+.trae-inline-code span {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.trae-inline-code code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 10px var(--mono);
+}
+
+.trae-inline-code button {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: 10px var(--mono);
+  white-space: nowrap;
+}
+
+.trae-callout {
+  margin-top: 18px;
+}
+
+.docs-content section {
+  scroll-margin-top: 24px;
+}
+
+.codex-tutorial > p {
+  max-width: 790px;
+}
+
+.codex-overview {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 22px 0 16px;
+}
+
+.codex-overview > div {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  background: var(--card);
+}
+
+.codex-overview span,
+.codex-overview small {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.codex-overview span {
+  font-family: var(--mono);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.codex-overview strong {
+  display: block;
+  overflow: hidden;
+  margin: 9px 0 5px;
+  font: 500 17px 'Playfair Display', Georgia, serif;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.codex-steps {
+  display: grid;
+  gap: 12px;
+}
+
+.codex-step {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 15px;
+  padding: 19px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+}
+
+.codex-step-index {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: var(--ink);
+  color: var(--acid);
+  font: 10px var(--mono);
+}
+
+.codex-step-body {
+  min-width: 0;
+}
+
+.codex-step-body h3,
+.codex-troubleshooting h3 {
+  margin: 2px 0 7px;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -.02em;
+}
+
+.codex-step-body p {
+  margin: 0;
+  font-size: 12px;
+}
+
+.codex-step-body .code-block {
+  margin-top: 14px;
+}
+
+.codex-link {
+  min-height: 35px;
+  margin-top: 13px;
+  padding: 0 13px;
+  font-size: 11px;
+}
+
+.codex-file-command {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px dashed var(--line);
+}
+
+.codex-file-command code {
+  min-width: 0;
+  overflow: hidden;
+  font: 10px var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.codex-file-command button {
+  flex: 0 0 auto;
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: 10px var(--mono);
+}
+
+.codex-model-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 13px;
+}
+
+.codex-model-list code {
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  font: 10px var(--mono);
+}
+
+.codex-troubleshooting {
+  margin-top: 16px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--blue) 35%, var(--card));
+}
+
+.codex-troubleshooting dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 24px;
+  margin: 13px 0 0;
+}
+
+.codex-troubleshooting dl > div {
+  padding: 11px 0;
+  border-top: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
+}
+
+.codex-troubleshooting dt {
+  font: 10px var(--mono);
+  font-weight: 600;
+}
+
+.codex-troubleshooting dd {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+.codex-callout {
+  margin-top: 16px;
+}
+
+.codex-sources {
+  font-size: 11px !important;
+}
+
+.codex-sources a {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+:global(html[data-theme="dark"]) .trae-step {
+  background: linear-gradient(145deg, #182735, #162330);
+  border-color: #30485b;
+}
+
+:global(html[data-theme="dark"]) .trae-step-copy strong,
+:global(html[data-theme="dark"]) .trae-inline-code button {
+  color: #e0ebf3;
+}
+
+:global(html[data-theme="dark"]) .trae-step figure {
+  background: #202b35;
+  border-color: #3a5265;
+}
+
+:global(html[data-theme="dark"]) .trae-inline-code {
+  background: #111d2a;
+  border-color: #30485b;
+}
+
+:global(html[data-theme="dark"]) .codex-overview > div,
+:global(html[data-theme="dark"]) .codex-step {
+  background: linear-gradient(145deg, #182735, #162330);
+  border-color: #30485b;
+}
+
+:global(html[data-theme="dark"]) .codex-step-index {
+  background: var(--acid);
+  color: #17212a;
+}
+
+:global(html[data-theme="dark"]) .codex-file-command,
+:global(html[data-theme="dark"]) .codex-model-list code {
+  background: #111d2a;
+  border-color: #30485b;
+}
+
+:global(html[data-theme="dark"]) .codex-file-command button,
+:global(html[data-theme="dark"]) .codex-sources a {
+  color: #d9e5ed;
+}
+
+:global(html[data-theme="dark"]) .codex-troubleshooting {
+  background: #172a38;
+  border-color: #30485b;
+}
+
+@media (max-width: 900px) {
+  .trae-step {
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+
+  .trae-step figure {
+    grid-column: 2;
+    max-width: 430px;
+  }
+
+  .codex-overview {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .trae-step {
+    gap: 12px;
+    padding: 14px;
+  }
+
+  .trae-step-copy h3 {
+    font-size: 15px;
+  }
+
+  .trae-step figure {
+    max-width: none;
+  }
+
+  .trae-step figure img {
+    max-height: 460px;
+  }
+
+  .trae-inline-code {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .trae-inline-code code {
+    flex: 1 1 100%;
+    order: 3;
+  }
+
+  .codex-step {
+    grid-template-columns: 32px minmax(0, 1fr);
+    gap: 11px;
+    padding: 14px;
+  }
+
+  .codex-step-index {
+    width: 28px;
+    height: 28px;
+  }
+
+  .codex-troubleshooting dl {
+    grid-template-columns: 1fr;
+  }
+
+  .codex-file-command {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .codex-file-command code {
+    width: 100%;
+    white-space: normal;
+    word-break: break-all;
+  }
+
+  .codex-file-command button {
+    margin-left: 0;
+  }
+}
+</style>

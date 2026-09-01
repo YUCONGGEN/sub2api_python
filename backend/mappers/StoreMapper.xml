@@ -1,0 +1,489 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mapper namespace="backend.mappers.store_mapper.StoreMapper">
+    <sql id="UserColumns">id, username, password_hash, email, role, balance, enabled, api_key, created_at, last_login</sql>
+    <sql id="KeyColumns">id, user_id, name, api_key, enabled, created_at, last_used, expires_at</sql>
+    <sql id="OrderColumns">id, user_id, provider, trade_no, amount, credits, status, qr_code, created_at, paid_at, payment_amount, qr_asset</sql>
+    <sql id="UsageColumns">id, user_id, model, prompt_tokens, completion_tokens, total_tokens, cost, status, created_at, billing_source, free_cost, free_tokens, subscription_cost, subscription_tokens, wallet_cost, wallet_tokens, quota_id, subscription_id</sql>
+    <sql id="CodeColumns">id, code_hash, code, amount, created_by, created_at, expires_at, redeemed_by, redeemed_at, status</sql>
+    <!-- Content columns are legacy compatibility fields only.  Conversation
+         queries intentionally expose metadata and usage counters, never
+         prompts, completions, raw JSON, or image data. -->
+    <sql id="ConversationColumns">id, user_id, request_id, protocol, model, prompt_tokens, completion_tokens, total_tokens, cost, status, created_at, completed_at, latency_ms</sql>
+
+    <select id="find_user">SELECT <include refid="UserColumns"/> FROM users WHERE id = #{user_id}</select>
+    <select id="find_user_by_username">SELECT <include refid="UserColumns"/> FROM users WHERE LOWER(username) = LOWER(#{username}) LIMIT 1</select>
+    <select id="find_user_by_api_key">
+        SELECT u.id,u.username,u.password_hash,u.email,u.role,u.balance,u.enabled,u.api_key,u.created_at,u.last_login
+        FROM api_keys k JOIN users u ON u.id = k.user_id
+        WHERE k.api_key = #{api_key} AND k.enabled = 1
+          AND (k.expires_at IS NULL OR k.expires_at &gt; CURRENT_TIMESTAMP)
+          AND u.enabled = 1 LIMIT 1
+    </select>
+    <update id="touch_api_key">UPDATE api_keys SET last_used = #{last_used} WHERE api_key = #{api_key}</update>
+    <insert id="insert_user" useGeneratedKeys="true" keyProperty="user.id">
+        INSERT INTO users(username,password_hash,email,role,balance,enabled,api_key,created_at)
+        VALUES(#{user.username},#{user.password_hash},#{user.email},#{user.role},#{user.balance},#{user.enabled},#{user.api_key},#{user.created_at})
+    </insert>
+    <update id="update_login">UPDATE users SET last_login = #{last_login} WHERE id = #{user_id}</update>
+    <update id="update_password">UPDATE users SET password_hash = #{password_hash} WHERE id = #{user_id}</update>
+    <update id="update_user">
+        UPDATE users
+        <set>
+            <if test="changes.email != null">email = #{changes.email},</if>
+            <if test="changes.role != null">role = #{changes.role},</if>
+            <if test="changes.balance != null">balance = #{changes.balance},</if>
+            <if test="changes.enabled != null">enabled = #{changes.enabled},</if>
+            <if test="changes.api_key != null">api_key = #{changes.api_key},</if>
+            <if test="changes.password_hash != null">password_hash = #{changes.password_hash},</if>
+        </set>
+        WHERE id = #{user_id}
+    </update>
+    <update id="update_user_api_key">UPDATE users SET api_key = #{api_key} WHERE id = #{user_id}</update>
+    <select id="count_users" resultType="int">
+        SELECT COUNT(*) FROM users
+        WHERE (#{keyword} IS NULL OR #{keyword} = '' OR username LIKE '%' || #{keyword} || '%' OR email LIKE '%' || #{keyword} || '%')
+    </select>
+    <select id="count_users" databaseId="mysql" resultType="int">
+        SELECT COUNT(*) FROM users
+        WHERE (#{keyword} IS NULL OR #{keyword} = '' OR username LIKE CONCAT('%', #{keyword}, '%') OR email LIKE CONCAT('%', #{keyword}, '%'))
+    </select>
+    <select id="count_active_users" resultType="int">SELECT COUNT(*) FROM users WHERE enabled = 1</select>
+    <select id="find_recharge_codes_without_expiry">
+        SELECT id, created_at FROM recharge_codes WHERE expires_at IS NULL
+    </select>
+    <update id="set_recharge_code_expiry">UPDATE recharge_codes SET expires_at = #{expires_at} WHERE id = #{code_id} AND expires_at IS NULL</update>
+    <update id="revoke_legacy_user_keys">
+        UPDATE users SET api_key = 'revoked-' || lower(hex(randomblob(16))) WHERE api_key LIKE 'sk-%'
+    </update>
+    <update id="revoke_legacy_user_keys" databaseId="mysql">
+        UPDATE users SET api_key = CONCAT('revoked-', UUID()) WHERE api_key LIKE 'sk-%'
+    </update>
+    <select id="list_users">
+        SELECT <include refid="UserColumns"/> FROM users
+        WHERE (#{keyword} IS NULL OR #{keyword} = '' OR username LIKE '%' || #{keyword} || '%' OR email LIKE '%' || #{keyword} || '%')
+        ORDER BY id DESC LIMIT #{limit} OFFSET #{offset}
+    </select>
+    <select id="list_users" databaseId="mysql">
+        SELECT <include refid="UserColumns"/> FROM users
+        WHERE (#{keyword} IS NULL OR #{keyword} = '' OR username LIKE CONCAT('%', #{keyword}, '%') OR email LIKE CONCAT('%', #{keyword}, '%'))
+        ORDER BY id DESC LIMIT #{limit} OFFSET #{offset}
+    </select>
+    <delete id="delete_user_api_keys">DELETE FROM api_keys WHERE user_id = #{user_id}</delete>
+    <delete id="delete_user_usage">DELETE FROM usage_records WHERE user_id = #{user_id}</delete>
+    <delete id="delete_user_orders">DELETE FROM payment_orders WHERE user_id = #{user_id}</delete>
+    <update id="detach_redeemed_codes">UPDATE recharge_codes SET redeemed_by = NULL, redeemed_at = NULL WHERE redeemed_by = #{user_id}</update>
+    <delete id="delete_user">DELETE FROM users WHERE id = #{user_id}</delete>
+    <select id="count_user_usage">
+        SELECT COALESCE(SUM(total_tokens),0) total_tokens, COALESCE(SUM(cost),0) total_cost, COUNT(*) requests
+        FROM usage_records WHERE user_id = #{user_id} AND (#{start_at} IS NULL OR created_at &gt;= #{start_at})
+    </select>
+    <select id="user_usage_daily">
+        SELECT substr(created_at,1,10) day, COALESCE(SUM(total_tokens),0) tokens, COALESCE(SUM(cost),0) cost, COUNT(*) requests
+        FROM usage_records WHERE user_id = #{user_id} AND (#{start_at} IS NULL OR created_at &gt;= #{start_at})
+        GROUP BY substr(created_at,1,10) ORDER BY day ASC
+    </select>
+    <select id="user_usage_by_model">
+        SELECT model, COALESCE(SUM(total_tokens),0) tokens, COALESCE(SUM(cost),0) cost, COUNT(*) requests
+        FROM usage_records
+        WHERE user_id = #{user_id} AND created_at &gt;= #{start_at}
+        GROUP BY model
+        ORDER BY tokens DESC, model ASC
+    </select>
+    <select id="list_user_orders">SELECT <include refid="OrderColumns"/> FROM payment_orders WHERE user_id = #{user_id} ORDER BY id DESC LIMIT #{limit} OFFSET #{offset}</select>
+    <select id="count_user_orders" resultType="int">SELECT COUNT(*) FROM payment_orders WHERE user_id = #{user_id}</select>
+
+    <select id="count_subscription_plans" resultType="int">
+        SELECT COUNT(*) FROM subscription_plans WHERE (#{enabled_only} = 0 OR enabled = 1)
+    </select>
+    <select id="list_subscription_plans">
+        SELECT id, name, description, price, duration_days, daily_amount, daily_tokens, enabled, created_at, updated_at
+        FROM subscription_plans
+        WHERE (#{enabled_only} = 0 OR enabled = 1)
+        ORDER BY enabled DESC, id DESC LIMIT #{limit} OFFSET #{offset}
+    </select>
+    <select id="find_subscription_plan">
+        SELECT id, name, description, price, duration_days, daily_amount, daily_tokens, enabled, created_at, updated_at
+        FROM subscription_plans WHERE id = #{plan_id}
+    </select>
+    <insert id="insert_subscription_plan" useGeneratedKeys="true" keyProperty="plan.id">
+        INSERT INTO subscription_plans(name, description, price, duration_days, daily_amount, daily_tokens, enabled, created_at, updated_at)
+        VALUES(#{plan.name}, #{plan.description}, #{plan.price}, #{plan.duration_days}, #{plan.daily_amount}, #{plan.daily_tokens}, #{plan.enabled}, #{plan.created_at}, #{plan.updated_at})
+    </insert>
+    <update id="update_subscription_plan">
+        UPDATE subscription_plans
+        <set>
+            <if test="changes.name != null">name = #{changes.name},</if>
+            <if test="changes.description != null">description = #{changes.description},</if>
+            <if test="changes.price != null">price = #{changes.price},</if>
+            <if test="changes.duration_days != null">duration_days = #{changes.duration_days},</if>
+            <if test="changes.daily_amount != null">daily_amount = #{changes.daily_amount},</if>
+            <if test="changes.daily_tokens != null">daily_tokens = #{changes.daily_tokens},</if>
+            <if test="changes.enabled != null">enabled = #{changes.enabled},</if>
+            updated_at = #{changes.updated_at}
+        </set>
+        WHERE id = #{plan_id}
+    </update>
+    <delete id="delete_subscription_plan">DELETE FROM subscription_plans WHERE id = #{plan_id}</delete>
+    <select id="count_user_subscriptions" resultType="int">SELECT COUNT(*) FROM user_subscriptions WHERE user_id = #{user_id}</select>
+    <select id="list_user_subscriptions">
+        SELECT s.id, s.user_id, s.plan_id, s.starts_at, s.ends_at, s.status, s.auto_renew, s.created_at,
+               p.name plan_name, p.description plan_description, p.price, p.duration_days, p.daily_amount, p.daily_tokens
+        FROM user_subscriptions s JOIN subscription_plans p ON p.id = s.plan_id
+        WHERE s.user_id = #{user_id} ORDER BY s.id DESC LIMIT #{limit} OFFSET #{offset}
+    </select>
+    <select id="find_user_subscription">
+        SELECT s.id, s.user_id, s.plan_id, s.starts_at, s.ends_at, s.status, s.auto_renew, s.created_at,
+               p.name plan_name, p.description plan_description, p.price, p.duration_days, p.daily_amount, p.daily_tokens, p.enabled plan_enabled
+        FROM user_subscriptions s JOIN subscription_plans p ON p.id = s.plan_id
+        WHERE s.id = #{subscription_id}
+          AND (#{user_id} IS NULL OR s.user_id = #{user_id})
+        LIMIT 1
+    </select>
+    <select id="find_active_subscriptions">
+        SELECT s.id, s.user_id, s.plan_id, s.starts_at, s.ends_at, s.status, s.auto_renew, s.created_at,
+               p.name plan_name, p.description plan_description, p.price, p.duration_days, p.daily_amount, p.daily_tokens
+        FROM user_subscriptions s JOIN subscription_plans p ON p.id = s.plan_id
+        WHERE s.user_id = #{user_id} AND s.status = 'ACTIVE' AND p.enabled = 1
+          AND s.starts_at &lt;= #{now} AND s.ends_at &gt; #{now}
+        ORDER BY s.ends_at ASC, s.id ASC
+    </select>
+    <select id="find_active_subscription_for_plan">
+        SELECT s.id, s.user_id, s.plan_id, s.starts_at, s.ends_at, s.status, s.auto_renew, s.created_at,
+               p.name plan_name, p.description plan_description, p.price, p.duration_days, p.daily_amount, p.daily_tokens
+        FROM user_subscriptions s JOIN subscription_plans p ON p.id = s.plan_id
+        WHERE s.user_id = #{user_id} AND s.plan_id = #{plan_id} AND s.status = 'ACTIVE' AND p.enabled = 1
+          AND s.starts_at &lt;= #{now} AND s.ends_at &gt; #{now}
+        ORDER BY s.ends_at DESC, s.id DESC
+        LIMIT 1
+    </select>
+    <select id="list_due_auto_renew_subscriptions">
+        SELECT s.id, s.user_id, s.plan_id, s.starts_at, s.ends_at, s.status, s.auto_renew, s.created_at,
+               p.name plan_name, p.description plan_description, p.price, p.duration_days, p.daily_amount, p.daily_tokens
+        FROM user_subscriptions s JOIN subscription_plans p ON p.id = s.plan_id
+        WHERE s.status = 'ACTIVE' AND s.auto_renew = 1 AND s.ends_at &lt;= #{now} AND p.enabled = 1
+        ORDER BY s.ends_at ASC, s.id ASC
+    </select>
+    <insert id="insert_user_subscription" useGeneratedKeys="true" keyProperty="subscription.id">
+        INSERT INTO user_subscriptions(user_id, plan_id, starts_at, ends_at, status, created_at)
+        VALUES(#{subscription.user_id}, #{subscription.plan_id}, #{subscription.starts_at}, #{subscription.ends_at}, #{subscription.status}, #{subscription.created_at})
+    </insert>
+    <update id="extend_user_subscription">
+        UPDATE user_subscriptions
+        SET ends_at = #{ends_at}
+        WHERE id = #{subscription_id} AND user_id = #{user_id} AND plan_id = #{plan_id} AND status = 'ACTIVE'
+    </update>
+    <update id="cancel_user_subscription">UPDATE user_subscriptions SET auto_renew = 0 WHERE id = #{subscription_id} AND user_id = #{user_id} AND status = 'ACTIVE'</update>
+    <update id="set_subscription_auto_renew">
+        UPDATE user_subscriptions SET auto_renew = #{enabled}
+        WHERE id = #{subscription_id} AND user_id = #{user_id} AND status = 'ACTIVE'
+    </update>
+    <update id="update_user_subscription">
+        UPDATE user_subscriptions
+        <set>
+            <if test="changes.starts_at != null">starts_at = #{changes.starts_at},</if>
+            <if test="changes.ends_at != null">ends_at = #{changes.ends_at},</if>
+            <if test="changes.status != null">status = #{changes.status},</if>
+            <if test="changes.auto_renew != null">auto_renew = #{changes.auto_renew},</if>
+        </set>
+        WHERE id = #{subscription_id} AND user_id = #{user_id}
+    </update>
+    <delete id="delete_user_subscription">DELETE FROM user_subscriptions WHERE id = #{subscription_id} AND user_id = #{user_id}</delete>
+    <update id="expire_subscriptions">
+        UPDATE user_subscriptions SET status = 'EXPIRED', auto_renew = 0
+        WHERE status = 'ACTIVE' AND ends_at &lt;= #{now} AND auto_renew = 0
+    </update>
+    <update id="expire_subscription">UPDATE user_subscriptions SET status = 'EXPIRED', auto_renew = 0 WHERE id = #{subscription_id} AND status = 'ACTIVE'</update>
+    <select id="count_user_quota_policies" resultType="int">SELECT COUNT(*) FROM user_quota_policies WHERE user_id = #{user_id}</select>
+    <select id="list_user_quota_policies">
+        SELECT id, user_id, name, daily_amount, daily_tokens, hourly_tokens, hourly_window_hours, starts_at, ends_at, enabled, created_at, updated_at
+        FROM user_quota_policies WHERE user_id = #{user_id} ORDER BY id DESC LIMIT #{limit} OFFSET #{offset}
+    </select>
+    <select id="find_active_quota_policies">
+        SELECT id, user_id, name, daily_amount, daily_tokens, hourly_tokens, hourly_window_hours, starts_at, ends_at, enabled, created_at, updated_at
+        FROM user_quota_policies
+        WHERE user_id = #{user_id} AND enabled = 1 AND starts_at &lt;= #{now} AND (ends_at IS NULL OR ends_at &gt; #{now})
+        ORDER BY ends_at ASC, id ASC
+    </select>
+    <insert id="insert_user_quota_policy" useGeneratedKeys="true" keyProperty="quota.id">
+        INSERT INTO user_quota_policies(user_id, name, daily_amount, daily_tokens, hourly_tokens, hourly_window_hours, starts_at, ends_at, enabled, created_at, updated_at)
+        VALUES(#{quota.user_id}, #{quota.name}, #{quota.daily_amount}, #{quota.daily_tokens}, #{quota.hourly_tokens}, #{quota.hourly_window_hours}, #{quota.starts_at}, #{quota.ends_at}, #{quota.enabled}, #{quota.created_at}, #{quota.updated_at})
+    </insert>
+    <update id="update_user_quota_policy">
+        UPDATE user_quota_policies
+        <set>
+            <if test="changes.name != null">name = #{changes.name},</if>
+            <if test="changes.daily_amount != null">daily_amount = #{changes.daily_amount},</if>
+            <if test="changes.daily_tokens != null">daily_tokens = #{changes.daily_tokens},</if>
+            <if test="changes.hourly_tokens != null">hourly_tokens = #{changes.hourly_tokens},</if>
+            <if test="changes.hourly_window_hours != null">hourly_window_hours = #{changes.hourly_window_hours},</if>
+            <if test="changes.starts_at != null">starts_at = #{changes.starts_at},</if>
+            <if test="changes.ends_at != null">ends_at = #{changes.ends_at},</if>
+            <if test="changes.enabled != null">enabled = #{changes.enabled},</if>
+            updated_at = #{changes.updated_at}
+        </set>
+        WHERE id = #{quota_id} AND user_id = #{user_id}
+    </update>
+    <delete id="delete_user_quota_policy">DELETE FROM user_quota_policies WHERE id = #{quota_id} AND user_id = #{user_id}</delete>
+    <select id="quota_usage_totals">
+        SELECT COALESCE(SUM(free_cost),0) free_cost, COALESCE(SUM(free_tokens),0) free_tokens
+        FROM usage_records WHERE user_id = #{user_id} AND quota_id = #{quota_id} AND created_at &gt;= #{start_at}
+          AND (#{end_at} IS NULL OR created_at &lt; #{end_at})
+    </select>
+    <select id="subscription_usage_totals">
+        SELECT COALESCE(SUM(subscription_cost),0) subscription_cost, COALESCE(SUM(subscription_tokens),0) subscription_tokens
+        FROM usage_records WHERE subscription_id = #{subscription_id} AND created_at &gt;= #{start_at}
+          AND (#{end_at} IS NULL OR created_at &lt; #{end_at})
+    </select>
+    <select id="has_active_entitlement" resultType="int">
+        SELECT CASE WHEN EXISTS(
+            SELECT 1 FROM user_quota_policies WHERE user_id = #{user_id} AND enabled = 1 AND starts_at &lt;= #{now} AND (ends_at IS NULL OR ends_at &gt; #{now})
+        ) OR EXISTS(
+            SELECT 1 FROM user_subscriptions s JOIN subscription_plans p ON p.id = s.plan_id
+            WHERE s.user_id = #{user_id} AND s.status = 'ACTIVE' AND p.enabled = 1 AND s.starts_at &lt;= #{now} AND s.ends_at &gt; #{now}
+        ) THEN 1 ELSE 0 END
+    </select>
+
+    <select id="count_api_keys" resultType="int">SELECT COUNT(*) FROM api_keys WHERE user_id = #{user_id}</select>
+    <select id="list_api_keys">SELECT <include refid="KeyColumns"/> FROM api_keys WHERE user_id = #{user_id} ORDER BY id DESC LIMIT #{limit} OFFSET #{offset}</select>
+    <insert id="insert_api_key" useGeneratedKeys="true" keyProperty="key.id">
+        INSERT INTO api_keys(user_id,name,api_key,enabled,created_at,last_used,expires_at)
+        VALUES(#{key.user_id},#{key.name},#{key.api_key},#{key.enabled},#{key.created_at},#{key.last_used},#{key.expires_at})
+    </insert>
+    <select id="find_api_key">SELECT <include refid="KeyColumns"/> FROM api_keys WHERE id = #{key_id} AND user_id = #{user_id}</select>
+    <update id="revoke_api_key">UPDATE api_keys SET enabled = 0 WHERE id = #{key_id} AND user_id = #{user_id}</update>
+    <delete id="delete_api_key">DELETE FROM api_keys WHERE id = #{key_id} AND user_id = #{user_id}</delete>
+
+    <insert id="insert_order" useGeneratedKeys="true" keyProperty="order.id">
+        INSERT INTO payment_orders(user_id,provider,trade_no,amount,credits,status,qr_code,created_at,paid_at,payment_amount,qr_asset)
+        VALUES(#{order.user_id},#{order.provider},#{order.trade_no},#{order.amount},#{order.credits},#{order.status},#{order.qr_code},#{order.created_at},#{order.paid_at},#{order.payment_amount},#{order.qr_asset})
+    </insert>
+    <select id="find_order_by_id">SELECT <include refid="OrderColumns"/> FROM payment_orders WHERE id = #{order_id}</select>
+    <select id="find_order">
+        SELECT <include refid="OrderColumns"/> FROM payment_orders
+        WHERE trade_no = #{trade_no} AND (#{user_id} IS NULL OR user_id = #{user_id}) LIMIT 1
+    </select>
+    <select id="count_orders" resultType="int">SELECT COUNT(*) FROM payment_orders WHERE user_id = #{user_id}</select>
+    <select id="list_orders">SELECT <include refid="OrderColumns"/> FROM payment_orders WHERE user_id = #{user_id} ORDER BY id DESC LIMIT #{limit} OFFSET #{offset}</select>
+    <update id="update_order_qr">UPDATE payment_orders SET qr_code = #{qr_code} WHERE trade_no = #{trade_no}</update>
+    <update id="mark_order_paid">UPDATE payment_orders SET status = 'PAID', paid_at = #{paid_at} WHERE trade_no = #{trade_no} AND status = 'PENDING'</update>
+    <update id="cancel_order">UPDATE payment_orders SET status = 'CANCELLED' WHERE trade_no = #{trade_no} AND user_id = #{user_id} AND status = 'PENDING'</update>
+
+    <insert id="insert_recharge_code" useGeneratedKeys="true" keyProperty="code.id">
+        INSERT INTO recharge_codes(code_hash,code,amount,created_by,created_at,expires_at,redeemed_by,redeemed_at,status)
+        VALUES(#{code.code_hash},#{code.code},#{code.amount},#{code.created_by},#{code.created_at},#{code.expires_at},#{code.redeemed_by},#{code.redeemed_at},#{code.status})
+    </insert>
+    <select id="find_recharge_code">SELECT <include refid="CodeColumns"/> FROM recharge_codes WHERE code_hash = #{code_hash}</select>
+    <select id="count_recharge_codes" resultType="int">SELECT COUNT(*) FROM recharge_codes</select>
+    <select id="list_recharge_codes">SELECT <include refid="CodeColumns"/> FROM recharge_codes ORDER BY id DESC LIMIT #{limit} OFFSET #{offset}</select>
+    <update id="expire_recharge_codes">UPDATE recharge_codes SET status = 'EXPIRED' WHERE status = 'ACTIVE' AND expires_at IS NOT NULL AND expires_at &lt;= #{now}</update>
+    <update id="redeem_recharge_code">UPDATE recharge_codes SET status='REDEEMED', redeemed_by=#{user_id}, redeemed_at=#{redeemed_at} WHERE id=#{code_id} AND status='ACTIVE'</update>
+    <update id="revoke_recharge_code">UPDATE recharge_codes SET status='REVOKED' WHERE id=#{code_id} AND status='ACTIVE'</update>
+
+    <select id="find_pending_order_by_amount">
+        SELECT <include refid="OrderColumns"/> FROM payment_orders
+        WHERE provider=#{provider} AND status='PENDING' AND ABS(payment_amount - #{payment_amount}) &lt; 0.0001 ORDER BY id ASC LIMIT 1
+    </select>
+    <select id="count_pending_amount" resultType="int">SELECT COUNT(*) FROM payment_orders WHERE provider=#{provider} AND status='PENDING' AND ABS(payment_amount - #{payment_amount}) &lt; 0.0001</select>
+    <select id="list_pending_orders_by_amount">SELECT <include refid="OrderColumns"/> FROM payment_orders WHERE provider='WECHAT_PERSONAL' AND status='PENDING' AND ABS(payment_amount - #{payment_amount}) &lt; 0.0001 ORDER BY id ASC</select>
+    <select id="has_qr_asset" resultType="int">SELECT COUNT(*) FROM payment_orders WHERE provider='WECHAT_PERSONAL' AND qr_asset=#{filename}</select>
+    <select id="find_callback">SELECT id,callback_hash,provider,payment_amount,trade_no,received_at FROM payment_callbacks WHERE callback_hash=#{callback_hash}</select>
+    <insert id="insert_callback" useGeneratedKeys="true" keyProperty="callback.id">
+        INSERT INTO payment_callbacks(callback_hash,provider,payment_amount,trade_no,received_at)
+        VALUES(#{callback.callback_hash},#{callback.provider},#{callback.payment_amount},#{callback.trade_no},#{callback.received_at})
+    </insert>
+    <update id="settle_order">UPDATE payment_orders SET status='PAID', paid_at=#{paid_at} WHERE id=#{order_id} AND status='PENDING'</update>
+
+    <select id="find_balance">SELECT id,balance,enabled FROM users WHERE id=#{user_id}</select>
+    <insert id="insert_usage" useGeneratedKeys="true" keyProperty="usage.id">
+        INSERT INTO usage_records(user_id,model,prompt_tokens,completion_tokens,total_tokens,cost,status,created_at,billing_source,free_cost,free_tokens,subscription_cost,subscription_tokens,wallet_cost,wallet_tokens,quota_id,subscription_id)
+        VALUES(#{usage.user_id},#{usage.model},#{usage.prompt_tokens},#{usage.completion_tokens},#{usage.total_tokens},#{usage.cost},#{usage.status},#{usage.created_at},#{usage.billing_source},#{usage.free_cost},#{usage.free_tokens},#{usage.subscription_cost},#{usage.subscription_tokens},#{usage.wallet_cost},#{usage.wallet_tokens},#{usage.quota_id},#{usage.subscription_id})
+    </insert>
+    <select id="find_usage">SELECT <include refid="UsageColumns"/> FROM usage_records WHERE id=#{usage_id}</select>
+    <select id="count_usage" resultType="int">SELECT COUNT(*) FROM usage_records WHERE user_id=#{user_id}</select>
+    <select id="list_usage">SELECT <include refid="UsageColumns"/> FROM usage_records WHERE user_id=#{user_id} ORDER BY id DESC LIMIT #{limit} OFFSET #{offset}</select>
+    <select id="user_usage_totals">SELECT COALESCE(SUM(total_tokens),0) total_tokens,COALESCE(SUM(cost),0) total_cost,COUNT(*) requests FROM usage_records WHERE user_id=#{user_id}</select>
+    <select id="admin_totals">SELECT COALESCE(SUM(total_tokens),0) total_tokens,COALESCE(SUM(cost),0) total_cost,COUNT(*) total_requests FROM usage_records</select>
+    <select id="admin_model_usage">
+        SELECT model,COALESCE(SUM(CASE WHEN created_at &gt;= #{start_at} THEN total_tokens ELSE 0 END),0) month_tokens,
+               COALESCE(SUM(total_tokens),0) total_tokens,
+               COALESCE(SUM(CASE WHEN created_at &gt;= #{start_at} THEN cost ELSE 0 END),0) month_cost,
+               COALESCE(SUM(cost),0) total_cost,
+               COALESCE(SUM(CASE WHEN created_at &gt;= #{start_at} THEN 1 ELSE 0 END),0) month_requests,
+               COUNT(*) total_requests
+        FROM usage_records GROUP BY model ORDER BY total_tokens DESC,model ASC
+    </select>
+    <update id="update_balance_after_charge">
+        UPDATE users SET balance = balance - #{cost}
+        WHERE id=#{user_id} AND enabled=1 AND balance &gt;= #{minimum_usable} AND balance - #{cost} &gt;= #{minimum_balance}
+    </update>
+    <update id="credit_balance">UPDATE users SET balance = balance + #{amount} WHERE id = #{user_id} AND enabled = 1</update>
+    <select id="sum_paid_orders" resultType="float">SELECT COALESCE(SUM(amount), 0) FROM payment_orders WHERE status = 'PAID'</select>
+    <select id="count_active_recharge_codes" resultType="int">SELECT COUNT(*) FROM recharge_codes WHERE status = 'ACTIVE'</select>
+
+    <select id="admin_daily_usage">
+        SELECT substr(created_at,1,10) day,COUNT(*) requests,
+               COALESCE(SUM(total_tokens),0) total_tokens,
+               COALESCE(SUM(cost),0) total_cost,
+               COALESCE(SUM(CASE WHEN status IN ('FAILED','BILLING_FAILED') THEN 1 ELSE 0 END),0) failed_requests
+        FROM usage_records
+        WHERE created_at &gt;= #{start_at}
+        GROUP BY substr(created_at,1,10)
+        ORDER BY day ASC
+        LIMIT #{limit}
+    </select>
+    <select id="admin_daily_activity">
+        SELECT substr(created_at,1,10) day,
+               COUNT(DISTINCT user_id) active_users,
+               COUNT(*) requests
+        FROM usage_records
+        WHERE created_at &gt;= #{start_at}
+        GROUP BY substr(created_at,1,10)
+        ORDER BY day ASC
+        LIMIT #{limit}
+    </select>
+    <select id="admin_user_usage">
+        SELECT ur.user_id,COALESCE(u.username,'已删除用户') username,
+               COUNT(*) requests,COALESCE(SUM(ur.total_tokens),0) total_tokens,
+               COALESCE(SUM(ur.cost),0) total_cost
+        FROM usage_records ur LEFT JOIN users u ON u.id=ur.user_id
+        GROUP BY ur.user_id,u.username
+        ORDER BY total_tokens DESC,requests DESC,username ASC
+        LIMIT #{limit}
+    </select>
+    <select id="admin_status_usage">
+        SELECT status,COUNT(*) requests,COALESCE(SUM(total_tokens),0) total_tokens,
+               COALESCE(SUM(cost),0) total_cost
+        FROM usage_records
+        GROUP BY status
+        ORDER BY requests DESC,status ASC
+    </select>
+    <select id="admin_billing_usage">
+        SELECT COALESCE(billing_source,'WALLET') billing_source,COUNT(*) requests,
+               COALESCE(SUM(total_tokens),0) total_tokens,
+               COALESCE(SUM(cost),0) total_cost
+        FROM usage_records
+        GROUP BY COALESCE(billing_source,'WALLET')
+        ORDER BY total_tokens DESC,billing_source ASC
+    </select>
+    <select id="admin_order_status">
+        SELECT status,COUNT(*) orders,COALESCE(SUM(amount),0) amount
+        FROM payment_orders
+        GROUP BY status
+        ORDER BY orders DESC,status ASC
+    </select>
+    <insert id="insert_admin_event" useGeneratedKeys="true" keyProperty="event.id">
+        INSERT INTO admin_event_logs(level,event_type,message,method,path,status_code,latency_ms,request_id,created_at)
+        VALUES(#{event.level},#{event.event_type},#{event.message},#{event.method},#{event.path},#{event.status_code},#{event.latency_ms},#{event.request_id},#{event.created_at})
+    </insert>
+    <select id="count_admin_events" resultType="int">
+        SELECT COUNT(*) FROM admin_event_logs
+        WHERE (#{level} IS NULL OR #{level}='' OR level=#{level})
+    </select>
+    <select id="list_admin_events">
+        SELECT id,level,event_type,message,method,path,status_code,latency_ms,request_id,created_at
+        FROM admin_event_logs
+        WHERE (#{level} IS NULL OR #{level}='' OR level=#{level})
+        ORDER BY created_at DESC,id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+    <delete id="clear_admin_events">
+        DELETE FROM admin_event_logs
+    </delete>
+
+    <select id="find_listener_status">SELECT id,available,reason,updated_at,last_alert_at FROM payment_listener_status WHERE id=1</select>
+    <insert id="upsert_listener_status">
+        INSERT INTO payment_listener_status(id,available,reason,updated_at) VALUES(1,#{available},#{reason},#{updated_at})
+        ON CONFLICT(id) DO UPDATE SET available=excluded.available,reason=excluded.reason,updated_at=excluded.updated_at
+    </insert>
+    <insert id="upsert_listener_status" databaseId="mysql">
+        INSERT INTO payment_listener_status(id,available,reason,updated_at) VALUES(1,#{available},#{reason},#{updated_at})
+        ON DUPLICATE KEY UPDATE available=VALUES(available),reason=VALUES(reason),updated_at=VALUES(updated_at)
+    </insert>
+    <update id="mark_listener_alert">UPDATE payment_listener_status SET last_alert_at=#{value} WHERE id=1</update>
+
+    <insert id="insert_conversation" useGeneratedKeys="true" keyProperty="conversation.id">
+        INSERT INTO conversation_records(user_id,request_id,protocol,model,request_json,messages_json,response_json,answer_text,prompt_tokens,completion_tokens,total_tokens,cost,status,error_message,created_at,completed_at,latency_ms)
+        VALUES(#{conversation.user_id},#{conversation.request_id},#{conversation.protocol},#{conversation.model},'{}','[]',NULL,'',#{conversation.prompt_tokens},#{conversation.completion_tokens},#{conversation.total_tokens},#{conversation.cost},#{conversation.status},NULL,#{conversation.created_at},#{conversation.completed_at},#{conversation.latency_ms})
+    </insert>
+    <insert id="insert_conversation_asset" useGeneratedKeys="true" keyProperty="asset.id">
+        INSERT INTO conversation_assets(conversation_id,request_id,asset_index,source_type,mime_type,storage_path,sha256,size_bytes,created_at)
+        VALUES(#{asset.conversation_id},#{asset.request_id},#{asset.asset_index},#{asset.source_type},#{asset.mime_type},#{asset.storage_path},#{asset.sha256},#{asset.size_bytes},#{asset.created_at})
+    </insert>
+    <select id="find_conversation">
+        SELECT c.id,c.user_id,COALESCE(u.username,'已删除用户') username,c.request_id,c.protocol,c.model,
+               0 answer_length,
+               c.prompt_tokens,c.completion_tokens,c.total_tokens,c.cost,c.status,
+               c.created_at,c.completed_at,c.latency_ms
+        FROM conversation_records c LEFT JOIN users u ON u.id=c.user_id
+        WHERE c.id=#{conversation_id} AND (#{user_id} IS NULL OR c.user_id=#{user_id}) LIMIT 1
+    </select>
+    <select id="count_conversations" resultType="int">
+        SELECT COUNT(*) FROM conversation_records WHERE (#{user_id} IS NULL OR user_id=#{user_id})
+    </select>
+    <select id="list_conversations">
+        SELECT c.id,c.user_id,COALESCE(u.username,'已删除用户') username,c.request_id,c.protocol,c.model,
+               0 answer_length,
+               c.prompt_tokens,c.completion_tokens,c.total_tokens,c.cost,c.status,
+               c.created_at,c.completed_at,c.latency_ms
+        FROM conversation_records c LEFT JOIN users u ON u.id=c.user_id
+        WHERE (#{user_id} IS NULL OR c.user_id=#{user_id})
+        ORDER BY c.created_at DESC, c.id DESC LIMIT #{limit} OFFSET #{offset}
+    </select>
+    <select id="conversation_totals">
+        SELECT COUNT(*) total_records,
+               COALESCE(SUM(CASE WHEN status='SUCCEEDED' THEN 1 ELSE 0 END),0) answered_records,
+               COALESCE(SUM(CASE WHEN status IN ('FAILED','BILLING_FAILED') THEN 1 ELSE 0 END),0) failed_records,
+               COALESCE(SUM(total_tokens),0) total_tokens,
+               COALESCE(SUM(cost),0) total_cost
+        FROM conversation_records
+    </select>
+    <select id="conversation_model_totals">
+        SELECT model,COUNT(*) requests,COALESCE(SUM(CASE WHEN status='SUCCEEDED' THEN 1 ELSE 0 END),0) answered_records,
+               COALESCE(SUM(total_tokens),0) total_tokens,COALESCE(SUM(cost),0) total_cost
+        FROM conversation_records GROUP BY model ORDER BY requests DESC,model ASC
+    </select>
+    <!-- Privacy migration: legacy columns remain only so old databases can
+         be opened, but their values are always scrubbed and never returned. -->
+    <update id="clear_conversation_content">
+        UPDATE conversation_records
+        SET request_json='{}', messages_json='[]', response_json=NULL, answer_text='', error_message=NULL
+    </update>
+    <delete id="delete_conversation_assets">DELETE FROM conversation_assets</delete>
+    <update id="update_conversation">
+        UPDATE conversation_records
+        <set>
+            <if test="changes.model != null">model=#{changes.model},</if>
+            <if test="changes.prompt_tokens != null">prompt_tokens=#{changes.prompt_tokens},</if>
+            <if test="changes.completion_tokens != null">completion_tokens=#{changes.completion_tokens},</if>
+            <if test="changes.total_tokens != null">total_tokens=#{changes.total_tokens},</if>
+            <if test="changes.cost != null">cost=#{changes.cost},</if>
+            <if test="changes.status != null">status=#{changes.status},</if>
+            <if test="changes.completed_at != null">completed_at=#{changes.completed_at},</if>
+            <if test="changes.latency_ms != null">latency_ms=#{changes.latency_ms},</if>
+        </set>
+        WHERE id=#{conversation_id}
+    </update>
+    <delete id="delete_conversations_before">DELETE FROM conversation_records WHERE created_at &lt; #{created_before}</delete>
+    <select id="list_usage_for_conversation_backfill">
+        SELECT ur.id usage_id,ur.user_id,ur.model,ur.prompt_tokens,ur.completion_tokens,
+               ur.total_tokens,ur.cost,ur.status,ur.created_at
+        FROM usage_records ur
+        WHERE NOT EXISTS(
+            SELECT 1 FROM conversation_records cr
+            WHERE cr.request_id = 'legacy-usage-' || ur.id
+        )
+        ORDER BY ur.id ASC
+        LIMIT 1000
+    </select>
+    <select id="list_usage_for_conversation_backfill" databaseId="mysql">
+        SELECT ur.id usage_id,ur.user_id,ur.model,ur.prompt_tokens,ur.completion_tokens,
+               ur.total_tokens,ur.cost,ur.status,ur.created_at
+        FROM usage_records ur
+        WHERE NOT EXISTS(
+            SELECT 1 FROM conversation_records cr
+            WHERE cr.request_id = CONCAT('legacy-usage-', ur.id)
+        )
+        ORDER BY ur.id ASC
+        LIMIT 1000
+    </select>
+</mapper>

@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mapper namespace="backend.mappers.subscription_mapper.SubscriptionMapper">
+    <sql id="AccountColumns">id, provider, name, auth_type, email, account_ref, credentials_encrypted, models_json, enabled, priority, weight, input_price_cny, output_price_cny, price_multiplier, status, error_count, last_error, expires_at, cooldown_until, last_used_at, compliance_confirmed_at, created_at, updated_at</sql>
+
+    <select id="count_accounts" resultType="int">
+        SELECT COUNT(*) FROM upstream_subscription_accounts
+        WHERE (#{provider} IS NULL OR #{provider} = '' OR provider = #{provider})
+    </select>
+    <select id="list_accounts">
+        SELECT <include refid="AccountColumns"/> FROM upstream_subscription_accounts
+        WHERE (#{provider} IS NULL OR #{provider} = '' OR provider = #{provider})
+        ORDER BY priority DESC, id DESC LIMIT #{limit} OFFSET #{offset}
+    </select>
+    <select id="find_account">
+        SELECT <include refid="AccountColumns"/> FROM upstream_subscription_accounts WHERE id = #{account_id} LIMIT 1
+    </select>
+    <select id="list_provider_accounts">
+        SELECT <include refid="AccountColumns"/> FROM upstream_subscription_accounts
+        WHERE provider = #{provider} AND enabled = 1 AND status != 'INVALID'
+        ORDER BY priority DESC, last_used_at ASC, id ASC
+    </select>
+    <insert id="insert_account" useGeneratedKeys="true" keyProperty="account.id">
+        INSERT INTO upstream_subscription_accounts(
+          provider,name,auth_type,email,account_ref,credentials_encrypted,models_json,
+          enabled,priority,weight,input_price_cny,output_price_cny,price_multiplier,
+          status,error_count,last_error,expires_at,cooldown_until,last_used_at,
+          compliance_confirmed_at,created_at,updated_at
+        ) VALUES(
+          #{account.provider},#{account.name},#{account.auth_type},#{account.email},#{account.account_ref},#{account.credentials_encrypted},#{account.models_json},
+          #{account.enabled},#{account.priority},#{account.weight},#{account.input_price_cny},#{account.output_price_cny},#{account.price_multiplier},
+          #{account.status},#{account.error_count},#{account.last_error},#{account.expires_at},#{account.cooldown_until},#{account.last_used_at},
+          #{account.compliance_confirmed_at},#{account.created_at},#{account.updated_at}
+        )
+    </insert>
+    <update id="update_account">
+        UPDATE upstream_subscription_accounts
+        <set>
+            <if test="changes.name != null">name = #{changes.name},</if>
+            <if test="changes.auth_type != null">auth_type = #{changes.auth_type},</if>
+            <if test="changes.email != null">email = #{changes.email},</if>
+            <if test="changes.account_ref != null">account_ref = #{changes.account_ref},</if>
+            <if test="changes.credentials_encrypted != null">credentials_encrypted = #{changes.credentials_encrypted},</if>
+            <if test="changes.models_json != null">models_json = #{changes.models_json},</if>
+            <if test="changes.enabled != null">enabled = #{changes.enabled},</if>
+            <if test="changes.priority != null">priority = #{changes.priority},</if>
+            <if test="changes.weight != null">weight = #{changes.weight},</if>
+            <if test="changes.input_price_cny != null">input_price_cny = #{changes.input_price_cny},</if>
+            <if test="changes.output_price_cny != null">output_price_cny = #{changes.output_price_cny},</if>
+            <if test="changes.price_multiplier != null">price_multiplier = #{changes.price_multiplier},</if>
+            <if test="changes.status != null">status = #{changes.status},</if>
+            <if test="changes.error_count != null">error_count = #{changes.error_count},</if>
+            <if test="changes.last_error != null">last_error = #{changes.last_error},</if>
+            <if test="changes.expires_at != null">expires_at = #{changes.expires_at},</if>
+            <if test="changes.cooldown_until != null">cooldown_until = #{changes.cooldown_until},</if>
+            <if test="changes.updated_at != null">updated_at = #{changes.updated_at},</if>
+        </set>
+        WHERE id = #{account_id}
+    </update>
+    <update id="update_credentials">
+        UPDATE upstream_subscription_accounts
+        SET credentials_encrypted = #{credentials_encrypted}, email = #{email}, account_ref = #{account_ref},
+            expires_at = #{expires_at}, status = 'READY', error_count = 0, last_error = '', cooldown_until = NULL, updated_at = #{updated_at}
+        WHERE id = #{account_id}
+    </update>
+    <update id="mark_account_result">
+        UPDATE upstream_subscription_accounts
+        SET status = #{status}, error_count = #{error_count}, last_error = #{last_error},
+            cooldown_until = #{cooldown_until}, last_used_at = #{last_used_at}, updated_at = #{updated_at}
+        WHERE id = #{account_id}
+    </update>
+    <delete id="delete_account">DELETE FROM upstream_subscription_accounts WHERE id = #{account_id}</delete>
+</mapper>

@@ -1,0 +1,310 @@
+server:
+  host: 0.0.0.0
+  port: 8241
+  cors:
+    allow-origins:
+      - http://localhost:8240
+      - http://127.0.0.1:8240
+    allow-credentials: true
+    allow-methods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
+    allow-headers: [Content-Type, Authorization, x-api-key, anthropic-version, anthropic-beta]
+
+# SpringBootAI 统一日志配置。未单独指定 log_format 时使用框架默认格式，
+# 控制台与文件格式保持一致；业务运行日志只写入项目根目录下的 log/。
+logging:
+  level: ${LOG_LEVEL:INFO}
+  log_format: "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan> | <cyan>{file.path}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | <level>{message}</level>"
+  log_dir: ${LOG_DIR:./log}
+  retention: ${LOG_RETENTION:30 days}
+  rotation: ${LOG_ROTATION:100 MB}
+
+# SpringBootAI's JWT initializer reads this top-level section. Keep the
+# secret in an environment variable in production; the local value is only a
+# development fallback and must be replaced before exposing the service.
+jwt:
+  secret_key: ${ROSE_JWT_SECRET:}
+  expires_in: 259200
+
+spring:
+  swagger:
+    enabled: false
+    docs-url: null
+    redoc-url: null
+    openapi-url: null
+
+springbootai:
+  application:
+    name: rose-ai-proxy
+  ai:
+    default-provider: openai
+    allow-fake: true
+    openai:
+      # Codex / SpringBootAI 默认上游。生产环境可用环境变量覆盖，避免把
+      # 密钥提交到版本库；当前默认值用于本机开箱即用。
+      api-key: ${ROSE_OPENAI_API_KEY:}
+      base-url: ${ROSE_OPENAI_BASE_URL:https://coloful-rose.com/v1}
+      chat:
+        model: ${OPENAI_MODEL:gpt-5.6-sol}
+        temperature: ${OPENAI_TEMPERATURE:0.7}
+        timeout: 180
+
+# SpringBootAI PyMyBatis infrastructure. Mapper method signatures live in
+# backend/mappers and all business SQL is loaded from the XML resource below.
+# DataStore only performs schema bootstrap/compatibility work at startup;
+# runtime reads and writes go through the injected Mapper proxy.
+database:
+  enabled: true
+  orm: mybatis
+  # sqlite 适合本地单机；切换 MySQL 时改为 mysql，并填写 database/username/password。
+  driver: ${DB_DRIVER:${ROSE_DB_DRIVER:sqlite}}
+  database: ${DB_NAME:${ROSE_DB_PATH:./data/rose.db}}
+#  driver: ${DB_DRIVER:${ROSE_DB_DRIVER:mysql}}
+#  database: ${DB_NAME:${ROSE_DB_PATH:rose_proxy}}
+  host: ${DB_HOST:${ROSE_DB_HOST:127.0.0.1}}
+  port: ${DB_PORT:${ROSE_DB_PORT:3306}}
+  username: ${DB_USERNAME:${ROSE_DB_USERNAME:root}}
+  password: ${DB_PASSWORD:${ROSE_DB_PASSWORD:}}
+  charset: utf8mb4
+  min_size: 1
+  max_size: 8
+  mapper_locations:
+    - backend/mappers/StoreMapper.xml
+    - backend/mappers/SubscriptionMapper.xml
+  ddl-auto:
+    mode: none
+  security:
+    # 关闭框架的启发式 SQL 注入检测，避免模型工具描述/用户提示词被误判。
+    # 业务 SQL 仍全部使用 Mapper XML 参数绑定，不允许拼接 SQL。
+    sql_injection_detection: ${ROSE_SQL_INJECTION_DETECTION:false}
+    ast_validation_enabled: false
+    block_ddl: true
+    allow_raw_params: false
+
+rose:
+  application:
+    name: ${ROSE_APPLICATION_NAME:大模型接口管理}
+  conversation:
+    # 隐私模式：只记录调用元数据、Token、费用、状态和耗时，绝不保存
+    # 用户问题、模型回答、原始 JSON、错误正文或图片。
+    enabled: ${ROSE_CONVERSATION_ENABLED:true}
+    # 0 表示永久保存；设置为正数后由后台定时任务清理过期记录。
+    retention-days: ${ROSE_CONVERSATION_RETENTION_DAYS:0}
+    store-content: false
+    store-media: false
+    # 旧版 media 配置仅为兼容已有安装；服务端不会再调用图片持久化流程。
+    media:
+      enabled: false
+      directory: ${ROSE_CONVERSATION_MEDIA_DIR:./data/conversation-assets}
+  api:
+    # 对外提供给 OpenAI 兼容客户端的服务端地址；前端开发端口 8240 不应填写到第三方客户端。
+    # 对外展示给 OpenAI/Codex 客户端的网关根地址，必须包含协议。
+    # 生产部署可用 ROSE_PUBLIC_API_BASE_URL 覆盖，例如
+    # https://api.example.com 或 http://10.34.150.114:8241。
+    public-base-url: ${ROSE_PUBLIC_API_BASE_URL:http://www.yucg.cn:8241}
+  security:
+    # API Key 与兑换码使用不同前缀。兑换码由 rose.billing.recharge-code-prefix 控制。
+    # 仅影响之后新建的 API Key；已有密钥保持不变，避免现有客户端突然失效。
+    api-key-prefix: ${ROSE_API_KEY_PREFIX:sk-api-CODE}
+  bootstrap:
+    # 本地系统账户与参考站点账户解耦；生产环境请通过环境变量覆盖。
+    admin-username: ${ROSE_ADMIN_USERNAME:admin}
+    admin-password: ${ROSE_ADMIN_PASSWORD:}
+    admin-email: ${ROSE_ADMIN_EMAIL:admin@example.com}
+    # 管理员初始余额为 0；充值和兑换码到账后才增加余额。
+    initial-balance: ${ROSE_INITIAL_BALANCE:0}
+  subscription-gateway:
+    # 仅管理员可接入自己有权使用的 Claude/OpenAI 订阅账号。OAuth 凭据在数据库中
+    # 使用独立密钥加密；生产环境必须设置为随机值，修改后旧凭据需要重新授权。
+    enabled: ${ROSE_SUBSCRIPTION_GATEWAY_ENABLED:true}
+    credential-secret: ${ROSE_SUBSCRIPTION_CREDENTIAL_SECRET:}
+    oauth-timeout-seconds: ${ROSE_SUBSCRIPTION_OAUTH_TIMEOUT_SECONDS:60}
+    request-timeout-seconds: ${ROSE_SUBSCRIPTION_REQUEST_TIMEOUT_SECONDS:600}
+    connect-timeout-seconds: ${ROSE_SUBSCRIPTION_CONNECT_TIMEOUT_SECONDS:10}
+    # Windows/macOS 会通过 Python 系统代理发现机制读取操作系统代理；Linux
+    # 读取 HTTP_PROXY/HTTPS_PROXY/NO_PROXY。可显式设为 false 强制直连。
+    trust-env: ${ROSE_SUBSCRIPTION_TRUST_ENV:true}
+    max-account-attempts: ${ROSE_SUBSCRIPTION_MAX_ATTEMPTS:3}
+    # 模型容量不足可能以 HTTP 200 内的 response.failed 返回。仅在尚未向
+    # 客户端输出正文/工具参数时自动重试，避免重复回答或重复执行工具。
+    capacity-retries: ${ROSE_SUBSCRIPTION_CAPACITY_RETRIES:2}
+    capacity-retry-base-seconds: ${ROSE_SUBSCRIPTION_CAPACITY_RETRY_BASE_SECONDS:1}
+    stream-prefetch-bytes: ${ROSE_SUBSCRIPTION_STREAM_PREFETCH_BYTES:65536}
+    max-connections: ${ROSE_SUBSCRIPTION_MAX_CONNECTIONS:100}
+    max-keepalive-connections: ${ROSE_SUBSCRIPTION_MAX_KEEPALIVE_CONNECTIONS:20}
+    # 合规保护：不模拟浏览器或人为操作，只限制单账号并发/突发流量，并把显式
+    # 客户端会话稳定地粘连到同一健康账号。无法保证上游账号不会受限或封禁。
+    per-account-max-concurrency: ${ROSE_SUBSCRIPTION_ACCOUNT_CONCURRENCY:1}
+    per-account-requests-per-minute: ${ROSE_SUBSCRIPTION_ACCOUNT_RPM:20}
+    # Codex 长上下文请求可能持续数分钟；默认一直等待账号槽位，
+    # 不产生本地排队超时。需要限制等待时间时可设置为正数秒。
+    account-queue-timeout-seconds: ${ROSE_SUBSCRIPTION_QUEUE_TIMEOUT_SECONDS:0}
+    session-affinity-ttl-seconds: ${ROSE_SUBSCRIPTION_SESSION_AFFINITY_TTL_SECONDS:3600}
+  proxy:
+    enabled: true
+    default-model: ${ROSE_PROXY_MODEL:gpt-5.6-sol}
+    demo-mode-when-key-missing: true
+    # 上游转发连接池。客户端按事件循环复用 TCP/TLS 连接，避免每次
+    # 请求重新握手；调整这些参数无需修改代码。http2 需要安装 h2，
+    # 未安装时会自动回退 HTTP/1.1 keep-alive。
+    transport:
+      http2: ${ROSE_UPSTREAM_HTTP2:false}
+      max-connections: ${ROSE_UPSTREAM_MAX_CONNECTIONS:100}
+      max-keepalive-connections: ${ROSE_UPSTREAM_MAX_KEEPALIVE_CONNECTIONS:20}
+      keepalive-expiry-seconds: ${ROSE_UPSTREAM_KEEPALIVE_EXPIRY_SECONDS:60}
+      connect-timeout-seconds: ${ROSE_UPSTREAM_CONNECT_TIMEOUT_SECONDS:10}
+      pool-timeout-seconds: ${ROSE_UPSTREAM_POOL_TIMEOUT_SECONDS:30}
+      trust-env: ${ROSE_UPSTREAM_TRUST_ENV:false}
+      # 仅连接失败、429、5xx 时重试；流式已输出内容后绝不重放。
+      max-retries: ${ROSE_UPSTREAM_MAX_RETRIES:1}
+      retry-delay-ms: ${ROSE_UPSTREAM_RETRY_DELAY_MS:200}
+    # 模型目录和监控页按此配置自动探测上游 /models，状态会缓存指定秒数。
+    health-check:
+      interval-seconds: ${ROSE_HEALTH_INTERVAL_SECONDS:60}
+      timeout-seconds: ${ROSE_HEALTH_TIMEOUT_SECONDS:5}
+    max-tokens-per-request: 100000
+    request-timeout-seconds: 180
+  # 模型目录完全配置驱动。新增模型只需复制一个条目，无需修改 Python 代码。
+  models:
+    # 本机已配置 DeepSeek V4 密钥；部署到其他环境时请替换为环境变量引用。
+    - id: deepseek-v4-flash
+      enabled: true
+      provider: DeepSeek
+      endpoint: Chat
+      group: DeepSeek V4
+      upstream-model: deepseek-v4-flash
+      base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com/v1}
+      api-key: ${DEEPSEEK_API_KEY:}
+      temperature: ${DEEPSEEK_TEMPERATURE:0.7}
+      timeout-seconds: 180
+      demo-mode-when-key-missing: false
+      currency: CNY
+      pricing:
+        # DeepSeek 价格按人民币配置，单位为元 / 1M tokens，可用环境变量覆盖。
+        input-cny-per-million: ${DEEPSEEK_V4_FLASH_INPUT_CNY_PER_MILLION:2}
+        output-cny-per-million: ${DEEPSEEK_V4_FLASH_OUTPUT_CNY_PER_MILLION:8}
+        cache-cny-per-million: ${DEEPSEEK_V4_FLASH_CACHE_CNY_PER_MILLION:2}
+        multiplier: 1.0
+      description: DeepSeek V4 Flash，适合高吞吐对话和代码任务。
+    - id: deepseek-v4-pro
+      enabled: true
+      provider: DeepSeek
+      endpoint: Chat
+      group: DeepSeek V4
+      upstream-model: deepseek-v4-pro
+      base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com/v1}
+      api-key: ${DEEPSEEK_API_KEY:}
+      temperature: ${DEEPSEEK_TEMPERATURE:0.7}
+      timeout-seconds: 180
+      demo-mode-when-key-missing: false
+      currency: CNY
+      pricing:
+        # DeepSeek 价格按人民币配置，单位为元 / 1M tokens，可用环境变量覆盖。
+        input-cny-per-million: ${DEEPSEEK_V4_PRO_INPUT_CNY_PER_MILLION:4}
+        output-cny-per-million: ${DEEPSEEK_V4_PRO_OUTPUT_CNY_PER_MILLION:16}
+        cache-cny-per-million: ${DEEPSEEK_V4_PRO_CACHE_CNY_PER_MILLION:4}
+        multiplier: 1.0
+      description: DeepSeek V4 Pro，适合复杂推理和长上下文任务。
+    - id: deepseek-v4-flash-vision-exp
+      enabled: true
+      provider: DeepSeek
+      endpoint: Chat
+      group: DeepSeek V4
+      upstream-model: deepseek-v4-flash-vision-exp
+      base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com/v1}
+      api-key: ${DEEPSEEK_API_KEY:}
+      temperature: ${DEEPSEEK_TEMPERATURE:0.7}
+      timeout-seconds: 180
+      demo-mode-when-key-missing: false
+      supports-image: true
+      currency: CNY
+      pricing:
+        # 视觉实验模型按 DeepSeek V4 Flash 的人民币价格计费，可独立覆盖。
+        input-cny-per-million: ${DEEPSEEK_V4_FLASH_VISION_INPUT_CNY_PER_MILLION:2}
+        output-cny-per-million: ${DEEPSEEK_V4_FLASH_VISION_OUTPUT_CNY_PER_MILLION:8}
+        cache-cny-per-million: ${DEEPSEEK_V4_FLASH_VISION_CACHE_CNY_PER_MILLION:2}
+        multiplier: 1.0
+      description: DeepSeek V4 Flash Vision Experimental，支持图像理解与高吞吐对话。
+  billing:
+    currency: CNY
+    # 兑换码前缀由配置统一控制，修改后新生成的兑换码和前端占位提示会同步更新。
+    recharge-code-prefix: ${ROSE_RECHARGE_CODE_PREFIX:CODE}
+    # 按上游原始 token 数计费，倍率为 1.0，可按环境覆盖
+    price-multiplier: 1.0
+    default-input-usd-per-million: 4.0
+    default-output-usd-per-million: 20.0
+    default-cache-usd-per-million: 0.4
+    usd-to-cny: 7.2
+    min-recharge: 10
+    # 管理员生成的兑换码默认 48 小时内有效，过期后自动失效。
+    recharge-code-expire-hours: 48
+    # 余额低于 0.001 元时拒绝模型请求；任何扣费后余额都不会低于 -0.1 元。
+    min-usable-balance: 0.001
+    minimum-balance: -0.1
+  # Codex CLI / App / IDE 的配置来源。前端教程和部署脚本可据此生成
+  # ~/.codex/config.toml；密钥字段仍支持环境变量覆盖。
+  codex:
+    model: gpt-5.6-sol
+    model-provider: rose
+    model-reasoning-effort: high
+    approval-policy: on-request
+    sandbox-mode: workspace-write
+    disable-response-storage: true
+    providers:
+      rose:
+        name: Rose API
+        base-url: ${ROSE_OPENAI_BASE_URL:https://coloful-rose.com/v1}
+        experimental-bearer-token: ${ROSE_OPENAI_API_KEY:}
+        wire-api: responses
+        supports-websockets: false
+  payment:
+    demo-mode: true
+    notify-base-url: ${PAYMENT_NOTIFY_BASE_URL:http://localhost:8241}
+    wechat:
+      enabled: ${WECHAT_PAY_ENABLED:false}
+      gateway: ${WECHAT_PAY_GATEWAY:https://api.mch.weixin.qq.com}
+      app-id: ${WECHAT_APP_ID:}
+      mch-id: ${WECHAT_MCH_ID:}
+      api-v3-key: ${WECHAT_API_V3_KEY:}
+      private-key-path: ${WECHAT_PRIVATE_KEY_PATH:}
+      private-key: ${WECHAT_PRIVATE_KEY:}
+      cert-serial-no: ${WECHAT_CERT_SERIAL_NO:}
+      platform-cert-path: ${WECHAT_PLATFORM_CERT_PATH:}
+      platform-cert-serial-no: ${WECHAT_PLATFORM_CERT_SERIAL_NO:}
+    alipay:
+      enabled: ${ALIPAY_ENABLED:false}
+      app-id: ${ALIPAY_APP_ID:}
+      seller-id: ${ALIPAY_SELLER_ID:}
+      private-key: ${ALIPAY_PRIVATE_KEY:}
+      private-key-path: ${ALIPAY_PRIVATE_KEY_PATH:}
+      public-key: ${ALIPAY_PUBLIC_KEY:}
+      public-key-path: ${ALIPAY_PUBLIC_KEY_PATH:}
+      gateway: ${ALIPAY_GATEWAY:https://openapi.alipay.com/gateway.do}
+    personal-wechat:
+      enabled: ${PERSONAL_WECHAT_ENABLED:true}
+      asset-dir: ${PERSONAL_WECHAT_QR_DIR:./wexin_pay}
+      fallback-asset-dir: ./weixin_pay
+      tail-min: 0.01
+      tail-max: 0.05
+      contact-qq: "1516933915"
+      contact-wechat: "17739798184"
+      # 配置后，独立监听器需在 X-Personal-Callback-Token 请求头携带同值
+      callback-token: ${PERSONAL_WECHAT_CALLBACK_TOKEN:}
+      listener-stale-seconds: 15
+      alert-email:
+        recipient: "1516933915@qq.com"
+        smtp:
+          host: ${PERSONAL_WECHAT_SMTP_HOST:smtp.qq.com}
+          port: ${PERSONAL_WECHAT_SMTP_PORT:465}
+          ssl: ${PERSONAL_WECHAT_SMTP_SSL:true}
+          username: ${PERSONAL_WECHAT_SMTP_USERNAME:}
+          password: ${PERSONAL_WECHAT_SMTP_PASSWORD:}
+          sender: ${PERSONAL_WECHAT_SMTP_SENDER:}
+      qr-crop:
+        left: 330
+        top: 500
+        right: 950
+        bottom: 1130
+  database:
+    path: ${ROSE_DB_PATH:./data/rose.db}
+
+

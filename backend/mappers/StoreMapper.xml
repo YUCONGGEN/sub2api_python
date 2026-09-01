@@ -317,7 +317,14 @@
         VALUES(#{session.id},#{session.user_id},#{session.user_agent},#{session.ip_address},#{session.created_at},#{session.last_seen_at},NULL)
     </insert>
     <select id="find_user_session">SELECT id,user_id,user_agent,ip_address,created_at,last_seen_at,revoked_at FROM user_sessions WHERE id=#{session_id} AND user_id=#{user_id} LIMIT 1</select>
-    <select id="list_user_sessions">SELECT id,user_id,user_agent,ip_address,created_at,last_seen_at,revoked_at FROM user_sessions WHERE user_id=#{user_id} ORDER BY created_at DESC LIMIT 20</select>
+    <select id="list_user_sessions">
+        SELECT id,user_id,user_agent,ip_address,created_at,last_seen_at,revoked_at
+        FROM user_sessions
+        WHERE user_id=#{user_id} AND revoked_at IS NULL
+        ORDER BY CASE WHEN id=#{current_session_id} THEN 0 ELSE 1 END,last_seen_at DESC,created_at DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+    <select id="count_active_user_sessions" resultType="int">SELECT COUNT(*) FROM user_sessions WHERE user_id=#{user_id} AND revoked_at IS NULL</select>
     <update id="touch_user_session">UPDATE user_sessions SET last_seen_at=#{last_seen_at} WHERE id=#{session_id} AND user_id=#{user_id} AND revoked_at IS NULL</update>
     <update id="revoke_user_session">UPDATE user_sessions SET revoked_at=#{revoked_at} WHERE id=#{session_id} AND user_id=#{user_id} AND revoked_at IS NULL</update>
     <update id="revoke_other_user_sessions">UPDATE user_sessions SET revoked_at=#{revoked_at} WHERE user_id=#{user_id} AND id!=#{session_id} AND revoked_at IS NULL</update>

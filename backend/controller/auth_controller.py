@@ -81,7 +81,7 @@ class AuthController:
         return ok({"ok": True}, "密码已更新，请重新登录")
 
     @GetMapping("/sessions")
-    def sessions(self, authorization: str = RequestHeader(name="Authorization", required=False)):
+    def sessions(self, authorization: str = RequestHeader(name="Authorization", required=False), page: int = RequestParam(name="page", required=False, default=1), page_size: int = RequestParam(name="page_size", required=False, default=5)):
         user = self.auth.user_from_authorization(authorization)
         claims = self.auth.claims_from_authorization(authorization)
         if not user:
@@ -90,8 +90,9 @@ class AuthController:
         # until their normal expiry. Do not turn a harmless device-list visit
         # into a forced logout during a rolling deployment.
         if not claims or not claims.get("sid"):
-            return ok({"ok": True, "sessions": [], "legacy_session": True})
-        return ok({"ok": True, "sessions": self.store.list_sessions(user["id"], str(claims["sid"]))})
+            return ok({"ok": True, "sessions": [], "legacy_session": True, "pagination": {"page": 1, "page_size": 5, "total": 0, "pages": 1}})
+        result = self.store.list_sessions(user["id"], str(claims["sid"]), int(page), int(page_size))
+        return ok({"ok": True, **result})
 
     @DeleteMapping("/sessions/{session_id}")
     def revoke_session(self, session_id: str = PathVariable(name="session_id"), authorization: str = RequestHeader(name="Authorization", required=False)):

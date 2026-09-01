@@ -281,13 +281,21 @@ class StoreService:
     def find_session(self, user_id: int, session_id: str) -> dict[str, Any] | None:
         return self._row(self.mapper.find_user_session(int(user_id), str(session_id)))
 
-    def list_sessions(self, user_id: int, current_session_id: str = "") -> list[dict[str, Any]]:
+    def list_sessions(self, user_id: int, current_session_id: str = "", page: int = 1, page_size: int = 5) -> dict[str, Any]:
+        page = max(1, int(page))
+        page_size = max(1, min(int(page_size), 20))
+        total = int(self.mapper.count_active_user_sessions(int(user_id)) or 0)
+        pages = max(1, (total + page_size - 1) // page_size)
+        page = min(page, pages)
         rows = []
-        for value in self.mapper.list_user_sessions(int(user_id)) or []:
+        for value in self.mapper.list_user_sessions(int(user_id), str(current_session_id), page_size, (page - 1) * page_size) or []:
             row = dict(value)
             row["current"] = bool(current_session_id and row.get("id") == current_session_id)
             rows.append(row)
-        return rows
+        return {
+            "sessions": rows,
+            "pagination": {"page": page, "page_size": page_size, "total": total, "pages": pages},
+        }
 
     def touch_session(self, user_id: int, session_id: str) -> None:
         self.mapper.touch_user_session(int(user_id), str(session_id), utc_now())

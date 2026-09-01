@@ -104,6 +104,30 @@ def test_legacy_jwt_can_open_device_page_without_forced_logout():
 
     assert response.data["legacy_session"] is True
     assert response.data["sessions"] == []
+    assert response.data["pagination"] == {"page": 1, "page_size": 5, "total": 0, "pages": 1}
+
+
+class SessionPageMapper:
+    def __init__(self):
+        self.query = None
+
+    @staticmethod
+    def count_active_user_sessions(user_id):
+        return 7
+
+    def list_user_sessions(self, user_id, current_session_id, limit, offset):
+        self.query = (user_id, current_session_id, limit, offset)
+        return [{"id": current_session_id}, {"id": "another-session"}]
+
+
+def test_login_sessions_are_returned_as_a_server_side_page():
+    mapper = SessionPageMapper()
+    result = service_with(mapper).list_sessions(9, "current-session", page=2, page_size=5)
+
+    assert mapper.query == (9, "current-session", 5, 5)
+    assert result["pagination"] == {"page": 2, "page_size": 5, "total": 7, "pages": 2}
+    assert result["sessions"][0]["current"] is True
+    assert result["sessions"][1]["current"] is False
 
 
 class RevocationOnlyMapper:

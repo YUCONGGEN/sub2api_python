@@ -1,5 +1,51 @@
 <template>
-  <div class="login-page register-page"><div class="login-grid"></div><div class="login-left"><div class="brand"><span>{{ appName }}</span></div><div class="login-hero"><div class="eyebrow">START WITH {{ appName ? appName.toUpperCase() : '' }}</div><h1>从一个账户<br /><em>开始调用模型。</em></h1><p>创建账户后，在 API 密钥页面按需创建独立密钥，按实际 token 用量透明计费。</p><div class="login-stat"><span><b>∞</b><small>模型目录扩展</small></span><span><b>API</b><small>密钥自主创建</small></span><span><b>24/7</b><small>统一 API 入口</small></span></div></div><div class="login-foot">{{ appName }} / 2026</div></div><div class="login-card register-card"><div class="mobile-brand brand"><span>{{ appName }}</span></div><div class="card-kicker">CREATE ACCOUNT</div><h2>创建账户</h2><p class="card-sub">注册后请前往 API 密钥页面创建密钥。</p><form @submit.prevent="submit" novalidate><label>账户名<input v-model.trim="form.username" autocomplete="username" minlength="3" maxlength="32" placeholder="至少 3 位字符" /></label><label>邮箱 <span class="optional">可选</span><input v-model.trim="form.email" type="email" autocomplete="email" placeholder="仅用于账户资料，暂不发送通知" /></label><label>密码<input v-model="form.password" type="password" autocomplete="new-password" minlength="6" placeholder="至少 6 位字符" /></label><div class="password-meter"><span :class="strengthClass"></span></div><small class="password-hint">{{ strengthText }}</small><label>确认密码<input v-model="form.confirm" type="password" autocomplete="new-password" placeholder="再次输入密码" /></label><label class="check-line"><input v-model="form.agree" type="checkbox" /> <span>我同意遵守服务条款并合理使用 API</span></label><button class="primary-btn full" :disabled="loading || !canSubmit">{{ loading ? '正在创建…' : '创建账户 →' }}</button><p v-if="error" class="form-error">{{ error }}</p></form><div class="register-line">已经有账户？<router-link to="/login">返回登录</router-link></div></div></div>
+  <div class="login-page register-page codex-auth">
+    <div class="codex-auth-orb orb-one" aria-hidden="true"></div>
+    <div class="codex-auth-orb orb-two" aria-hidden="true"></div>
+    <div class="codex-auth-snow" aria-hidden="true"><span></span><span></span><span></span></div>
+
+    <header class="codex-auth-header">
+      <div class="codex-auth-brand">
+        <span class="codex-auth-mark" aria-hidden="true">↗</span>
+        <span>{{ appName }}</span>
+      </div>
+      <router-link class="codex-auth-header-action" to="/login">返回登录</router-link>
+    </header>
+
+    <main class="codex-auth-main">
+      <section class="codex-auth-hero">
+        <div class="codex-auth-kicker"><i></i> START BUILDING</div>
+        <p>注册后自主创建 API 密钥，按实际 Token 用量透明计费，并在一个控制台里查看全部调用状态。</p>
+        <div class="codex-auth-features" aria-label="平台特性">
+          <span>按需创建密钥</span>
+          <span>透明额度管理</span>
+          <span>统一 API 接入</span>
+        </div>
+      </section>
+
+      <section class="codex-auth-panel register-card" aria-labelledby="register-title">
+        <div class="codex-auth-panel-head">
+          <span>CREATE ACCOUNT</span>
+          <h2 id="register-title">创建账户</h2>
+          <p>注册后请前往 API 密钥页面创建密钥。</p>
+        </div>
+        <form @submit.prevent="submit" novalidate>
+          <label>账户名<input v-model.trim="form.username" autocomplete="username" minlength="3" maxlength="32" placeholder="至少 3 位字符" /></label>
+          <label>邮箱 <span class="optional">可选</span><input v-model.trim="form.email" type="email" autocomplete="email" placeholder="仅用于账户资料，暂不发送通知" /></label>
+          <label>密码<input v-model="form.password" type="password" autocomplete="new-password" minlength="6" placeholder="至少 6 位字符" /></label>
+          <div class="password-meter"><span :class="strengthClass"></span></div>
+          <small class="password-hint">{{ strengthText }}</small>
+          <label>确认密码<input v-model="form.confirm" type="password" autocomplete="new-password" placeholder="再次输入密码" /></label>
+          <label class="check-line"><input v-model="form.agree" type="checkbox" /> <span>我同意遵守服务条款并合理使用 API</span></label>
+          <button class="codex-auth-submit" :disabled="loading || !canSubmit">{{ loading ? '正在创建…' : '创建账户' }}<b aria-hidden="true">→</b></button>
+          <p v-if="error" class="form-error" role="alert">{{ error }}</p>
+        </form>
+        <div class="register-line">已经有账户？<router-link to="/login">返回登录</router-link></div>
+      </section>
+    </main>
+
+    <footer class="codex-auth-footer"><span>{{ appName }}</span><span>AI GATEWAY · 2026</span></footer>
+  </div>
 </template>
 <script>
 import { api } from '../api'

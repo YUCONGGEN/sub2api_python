@@ -213,7 +213,10 @@ class StoreMapper:
     def find_user_session(self, user_id: int, session_id: str) -> Mapping[str, Any] | None:
         pass
 
-    def list_user_sessions(self, user_id: int) -> list[dict]:
+    def list_user_sessions(self, user_id: int, current_session_id: str, limit: int, offset: int) -> list[dict]:
+        pass
+
+    def count_active_user_sessions(self, user_id: int) -> int:
         pass
 
     def touch_user_session(self, user_id: int, session_id: str, last_seen_at: str) -> int:

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <mapper namespace="backend.mappers.store_mapper.StoreMapper">
-    <sql id="UserColumns">id, username, password_hash, email, role, balance, enabled, api_key, created_at, last_login, session_version, deleted_at</sql>
+    <sql id="UserColumns">id, username, password_hash, email, role, balance, enabled, api_key, created_at, last_login, session_version, deleted_at, group_id</sql>
     <sql id="KeyColumns">id, user_id, name, enabled, created_at, last_used, expires_at, key_prefix, key_last4</sql>
     <sql id="OrderColumns">id, user_id, provider, trade_no, amount, credits, status, qr_code, created_at, paid_at, payment_amount, qr_asset</sql>
     <sql id="UsageColumns">id, user_id, model, prompt_tokens, completion_tokens, total_tokens, cost, status, created_at, billing_source, free_cost, free_tokens, subscription_cost, subscription_tokens, wallet_cost, wallet_tokens, quota_id, subscription_id</sql>
@@ -13,16 +13,27 @@
     <select id="find_user">SELECT <include refid="UserColumns"/> FROM users WHERE id = #{user_id} AND deleted_at IS NULL</select>
     <select id="find_user_by_username">SELECT <include refid="UserColumns"/> FROM users WHERE LOWER(username) = LOWER(#{username}) AND deleted_at IS NULL LIMIT 1</select>
     <select id="find_user_by_api_key">
-        SELECT u.id,u.username,u.password_hash,u.email,u.role,u.balance,u.enabled,u.api_key,u.created_at,u.last_login,u.session_version,u.deleted_at
+        SELECT u.id,u.username,u.password_hash,u.email,u.role,u.balance,u.enabled,u.api_key,u.created_at,u.last_login,u.session_version,u.deleted_at,u.group_id
         FROM api_keys k JOIN users u ON u.id = k.user_id
         WHERE k.api_key_hash = #{api_key_hash} AND k.enabled = 1
-          AND (k.expires_at IS NULL OR k.expires_at &gt; CURRENT_TIMESTAMP)
+          AND (k.expires_at IS NULL OR datetime(k.expires_at) &gt; datetime('now'))
           AND u.enabled = 1 AND u.deleted_at IS NULL LIMIT 1
     </select>
-    <update id="touch_api_key">UPDATE api_keys SET last_used = #{last_used} WHERE api_key_hash = #{api_key_hash}</update>
+    <select id="find_user_by_api_key" databaseId="mysql">
+        SELECT u.id,u.username,u.password_hash,u.email,u.role,u.balance,u.enabled,u.api_key,u.created_at,u.last_login,u.session_version,u.deleted_at,u.group_id
+        FROM api_keys k JOIN users u ON u.id = k.user_id
+        WHERE k.api_key_hash = #{api_key_hash} AND k.enabled = 1
+          AND (k.expires_at IS NULL OR STR_TO_DATE(REPLACE(LEFT(k.expires_at, 19), 'T', ' '), '%Y-%m-%d %H:%i:%s') &gt; UTC_TIMESTAMP())
+          AND u.enabled = 1 AND u.deleted_at IS NULL LIMIT 1
+    </select>
+    <update id="touch_api_key">
+        UPDATE api_keys SET last_used = #{last_used}
+        WHERE api_key_hash = #{api_key_hash}
+          AND (last_used IS NULL OR last_used &lt; #{touch_before})
+    </update>
     <insert id="insert_user" useGeneratedKeys="true" keyProperty="user.id">
-        INSERT INTO users(username,password_hash,email,role,balance,enabled,api_key,created_at)
-        VALUES(#{user.username},#{user.password_hash},#{user.email},#{user.role},#{user.balance},#{user.enabled},#{user.api_key},#{user.created_at})
+        INSERT INTO users(username,password_hash,email,role,balance,enabled,api_key,created_at,group_id)
+        VALUES(#{user.username},#{user.password_hash},#{user.email},#{user.role},#{user.balance},#{user.enabled},#{user.api_key},#{user.created_at},#{user.group_id})
     </insert>
     <update id="update_login">UPDATE users SET last_login = #{last_login} WHERE id = #{user_id}</update>
     <update id="update_password">UPDATE users SET password_hash = #{password_hash}, session_version = session_version + 1 WHERE id = #{user_id} AND deleted_at IS NULL</update>
@@ -36,6 +47,7 @@
             <if test="changes.api_key != null">api_key = #{changes.api_key},</if>
             <if test="changes.password_hash != null">password_hash = #{changes.password_hash},</if>
             <if test="changes.password_hash != null">session_version = session_version + 1,</if>
+            <if test="changes.group_id != null">group_id = #{changes.group_id},</if>
         </set>
         WHERE id = #{user_id} AND deleted_at IS NULL
     </update>
@@ -68,6 +80,61 @@
         SELECT <include refid="UserColumns"/> FROM users
         WHERE deleted_at IS NULL AND (#{keyword} IS NULL OR #{keyword} = '' OR username LIKE CONCAT('%', #{keyword}, '%') OR email LIKE CONCAT('%', #{keyword}, '%'))
         ORDER BY id DESC LIMIT #{limit} OFFSET #{offset}
+    </select>
+    <select id="find_user_group">
+        SELECT id,name,description,weight,concurrency_limit,allowed_models_json,is_default,created_at,updated_at
+        FROM user_groups WHERE id=#{group_id} LIMIT 1
+    </select>
+    <select id="find_default_user_group">
+        SELECT id,name,description,weight,concurrency_limit,allowed_models_json,is_default,created_at,updated_at
+        FROM user_groups WHERE is_default=1 ORDER BY id LIMIT 1
+    </select>
+    <select id="find_named_user_group">
+        SELECT id,name,description,weight,concurrency_limit,allowed_models_json,is_default,created_at,updated_at
+        FROM user_groups WHERE name=#{name} LIMIT 1
+    </select>
+    <select id="find_user_group_by_weight">
+        SELECT id,name,description,weight,concurrency_limit,allowed_models_json,is_default,created_at,updated_at
+        FROM user_groups WHERE weight=#{weight} AND (#{exclude_group_id} IS NULL OR id&lt;&gt;#{exclude_group_id}) LIMIT 1
+    </select>
+    <select id="count_user_groups" resultType="int">SELECT COUNT(*) FROM user_groups</select>
+    <select id="list_user_groups">
+        SELECT g.id,g.name,g.description,g.weight,g.concurrency_limit,g.allowed_models_json,g.is_default,g.created_at,g.updated_at,
+               (SELECT COUNT(*) FROM users u WHERE u.group_id=g.id AND u.deleted_at IS NULL) member_count,
+               (SELECT COUNT(*) FROM subscription_plans p WHERE p.group_id=g.id) plan_count
+        FROM user_groups g
+        ORDER BY g.weight DESC,g.is_default DESC,g.id ASC LIMIT #{limit} OFFSET #{offset}
+    </select>
+    <insert id="insert_user_group" useGeneratedKeys="true" keyProperty="group.id">
+        INSERT INTO user_groups(name,description,weight,concurrency_limit,allowed_models_json,is_default,created_at,updated_at)
+        VALUES(#{group.name},#{group.description},#{group.weight},#{group.concurrency_limit},#{group.allowed_models_json},#{group.is_default},#{group.created_at},#{group.updated_at})
+    </insert>
+    <update id="update_user_group">
+        UPDATE user_groups
+        <set>
+            <if test="changes.name != null">name=#{changes.name},</if>
+            <if test="changes.description != null">description=#{changes.description},</if>
+            <if test="changes.weight != null">weight=#{changes.weight},</if>
+            <if test="changes.concurrency_limit != null">concurrency_limit=#{changes.concurrency_limit},</if>
+            <if test="changes.allowed_models_json != null">allowed_models_json=#{changes.allowed_models_json},</if>
+            <if test="changes.is_default != null">is_default=#{changes.is_default},</if>
+            updated_at=#{changes.updated_at}
+        </set>
+        WHERE id=#{group_id}
+    </update>
+    <update id="clear_default_user_groups">UPDATE user_groups SET is_default=0,updated_at=#{updated_at} WHERE id&lt;&gt;#{group_id} AND is_default=1</update>
+    <update id="assign_users_to_group">UPDATE users SET group_id=#{target_group_id} WHERE group_id=#{source_group_id} AND deleted_at IS NULL</update>
+    <update id="clear_subscription_plan_group">UPDATE subscription_plans SET group_id=NULL,updated_at=#{updated_at} WHERE group_id=#{group_id}</update>
+    <delete id="delete_user_group">DELETE FROM user_groups WHERE id=#{group_id} AND is_default=0</delete>
+    <select id="list_active_subscription_group_candidates">
+        SELECT g.id,g.name,g.description,g.weight,g.concurrency_limit,g.allowed_models_json,g.is_default,g.created_at,g.updated_at,
+               p.id plan_id,p.name plan_name,s.id subscription_id,s.ends_at subscription_ends_at
+        FROM user_subscriptions s
+        JOIN subscription_plans p ON p.id=s.plan_id
+        JOIN user_groups g ON g.id=p.group_id
+        WHERE s.user_id=#{user_id} AND s.status='ACTIVE' AND p.enabled=1
+          AND s.starts_at &lt;= #{now} AND s.ends_at &gt; #{now}
+        ORDER BY g.weight DESC,s.ends_at DESC,s.id DESC
     </select>
     <update id="soft_delete_user">
         UPDATE users SET enabled=0,username=#{anonymized_username},email='',password_hash=#{password_hash},api_key=#{revoked_key},
@@ -106,18 +173,20 @@
         SELECT COUNT(*) FROM subscription_plans WHERE (#{enabled_only} = 0 OR enabled = 1)
     </select>
     <select id="list_subscription_plans">
-        SELECT id, name, description, price, duration_days, daily_amount, daily_tokens, enabled, created_at, updated_at
-        FROM subscription_plans
-        WHERE (#{enabled_only} = 0 OR enabled = 1)
-        ORDER BY enabled DESC, id DESC LIMIT #{limit} OFFSET #{offset}
+        SELECT p.id,p.name,p.description,p.price,p.duration_days,p.daily_amount,p.daily_tokens,p.group_id,p.enabled,p.created_at,p.updated_at,
+               g.name group_name,g.weight group_weight
+        FROM subscription_plans p LEFT JOIN user_groups g ON g.id=p.group_id
+        WHERE (#{enabled_only} = 0 OR p.enabled = 1)
+        ORDER BY p.enabled DESC,p.id DESC LIMIT #{limit} OFFSET #{offset}
     </select>
     <select id="find_subscription_plan">
-        SELECT id, name, description, price, duration_days, daily_amount, daily_tokens, enabled, created_at, updated_at
-        FROM subscription_plans WHERE id = #{plan_id}
+        SELECT p.id,p.name,p.description,p.price,p.duration_days,p.daily_amount,p.daily_tokens,p.group_id,p.enabled,p.created_at,p.updated_at,
+               g.name group_name,g.weight group_weight
+        FROM subscription_plans p LEFT JOIN user_groups g ON g.id=p.group_id WHERE p.id = #{plan_id}
     </select>
     <insert id="insert_subscription_plan" useGeneratedKeys="true" keyProperty="plan.id">
-        INSERT INTO subscription_plans(name, description, price, duration_days, daily_amount, daily_tokens, enabled, created_at, updated_at)
-        VALUES(#{plan.name}, #{plan.description}, #{plan.price}, #{plan.duration_days}, #{plan.daily_amount}, #{plan.daily_tokens}, #{plan.enabled}, #{plan.created_at}, #{plan.updated_at})
+        INSERT INTO subscription_plans(name, description, price, duration_days, daily_amount, daily_tokens, group_id, enabled, created_at, updated_at)
+        VALUES(#{plan.name}, #{plan.description}, #{plan.price}, #{plan.duration_days}, #{plan.daily_amount}, #{plan.daily_tokens}, #{plan.group_id}, #{plan.enabled}, #{plan.created_at}, #{plan.updated_at})
     </insert>
     <update id="update_subscription_plan">
         UPDATE subscription_plans
@@ -128,6 +197,8 @@
             <if test="changes.duration_days != null">duration_days = #{changes.duration_days},</if>
             <if test="changes.daily_amount != null">daily_amount = #{changes.daily_amount},</if>
             <if test="changes.daily_tokens != null">daily_tokens = #{changes.daily_tokens},</if>
+            <if test="changes.group_id != null">group_id = #{changes.group_id},</if>
+            <if test="changes.clear_group_id != null">group_id = NULL,</if>
             <if test="changes.enabled != null">enabled = #{changes.enabled},</if>
             updated_at = #{changes.updated_at}
         </set>
@@ -138,30 +209,32 @@
     <select id="list_user_subscriptions">
         SELECT s.id, s.user_id, s.plan_id, s.starts_at, s.ends_at, s.status, s.auto_renew, s.created_at,
                p.name plan_name, p.description plan_description, p.price, p.duration_days, p.daily_amount, p.daily_tokens,
-               p.enabled plan_enabled
+               p.group_id, g.name group_name, g.weight group_weight, p.enabled plan_enabled
         FROM user_subscriptions s JOIN subscription_plans p ON p.id = s.plan_id
+        LEFT JOIN user_groups g ON g.id=p.group_id
         WHERE s.user_id = #{user_id} ORDER BY s.id DESC LIMIT #{limit} OFFSET #{offset}
     </select>
     <select id="list_user_entitlements">
         SELECT * FROM (
             SELECT 'SUBSCRIPTION' entitlement_type, s.id, s.user_id, s.plan_id,
                    p.name, p.name plan_name, p.description plan_description, p.price, p.duration_days,
-                   p.daily_amount, p.daily_tokens, 0 hourly_tokens, 1 hourly_window_hours,
-                   s.starts_at, s.ends_at, s.status, s.auto_renew, NULL enabled,
-                   p.enabled plan_enabled, s.created_at,
+                    p.daily_amount, p.daily_tokens, 0 hourly_tokens, 1 hourly_window_hours,
+                    s.starts_at, s.ends_at, s.status, s.auto_renew, NULL enabled,
+                    p.enabled plan_enabled, p.group_id, g.name group_name, g.weight group_weight, s.created_at,
                    CASE
                        WHEN s.status = 'ACTIVE' AND p.enabled = 1 AND s.starts_at &lt;= #{now} AND s.ends_at &gt; #{now} THEN 0
                        WHEN s.ends_at &lt;= #{now} OR s.status IN ('EXPIRED', 'CANCELLED') THEN 2
                        ELSE 1
                    END sort_group
             FROM user_subscriptions s JOIN subscription_plans p ON p.id = s.plan_id
+            LEFT JOIN user_groups g ON g.id=p.group_id
             WHERE s.user_id = #{user_id}
             UNION ALL
             SELECT 'FREE' entitlement_type, q.id, q.user_id, NULL plan_id,
                    q.name, NULL plan_name, NULL plan_description, 0 price, 0 duration_days,
                    q.daily_amount, q.daily_tokens, q.hourly_tokens, q.hourly_window_hours,
                    q.starts_at, q.ends_at, NULL status, 0 auto_renew, q.enabled,
-                   1 plan_enabled, q.created_at,
+                    1 plan_enabled, NULL group_id, NULL group_name, NULL group_weight, q.created_at,
                    CASE
                        WHEN q.enabled = 1 AND q.starts_at &lt;= #{now} AND (q.ends_at IS NULL OR q.ends_at &gt; #{now}) THEN 0
                        WHEN q.ends_at IS NOT NULL AND q.ends_at &lt;= #{now} THEN 2
@@ -177,8 +250,10 @@
     </select>
     <select id="find_user_subscription">
         SELECT s.id, s.user_id, s.plan_id, s.starts_at, s.ends_at, s.status, s.auto_renew, s.created_at,
-               p.name plan_name, p.description plan_description, p.price, p.duration_days, p.daily_amount, p.daily_tokens, p.enabled plan_enabled
+               p.name plan_name, p.description plan_description, p.price, p.duration_days, p.daily_amount, p.daily_tokens,
+               p.group_id, g.name group_name, g.weight group_weight, p.enabled plan_enabled
         FROM user_subscriptions s JOIN subscription_plans p ON p.id = s.plan_id
+        LEFT JOIN user_groups g ON g.id=p.group_id
         WHERE s.id = #{subscription_id}
           AND (#{user_id} IS NULL OR s.user_id = #{user_id})
         LIMIT 1

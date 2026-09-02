@@ -7,6 +7,7 @@ from springbootai import SpringBootApplication, create_app, get_config
 from springbootai.orm import MapperScan
 
 from backend.controller import register_payment_routes, register_proxy_route
+from backend.middleware import UserGroupConcurrencyMiddleware
 
 
 @SpringBootApplication(scan_base_packages=["backend"])
@@ -16,6 +17,7 @@ class RoseApplication:
 
 
 app = create_app(RoseApplication)
+app.add_middleware(UserGroupConcurrencyMiddleware)
 
 
 async def _install_windows_disconnect_handler():

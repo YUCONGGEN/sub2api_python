@@ -1,5 +1,17 @@
 -- Schema is kept as a resource so persistence SQL is not embedded in Python.
 -- Existing installations are upgraded by the mapper-backed repository.
+CREATE TABLE IF NOT EXISTS user_groups (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  description TEXT NOT NULL DEFAULT '',
+  weight INTEGER NOT NULL DEFAULT 0,
+  concurrency_limit INTEGER NOT NULL DEFAULT 1,
+  allowed_models_json TEXT NOT NULL DEFAULT '["*"]',
+  is_default INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   username TEXT NOT NULL UNIQUE,
@@ -12,7 +24,8 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TEXT NOT NULL,
   last_login TEXT,
   session_version INTEGER NOT NULL DEFAULT 0,
-  deleted_at TEXT
+  deleted_at TEXT,
+  group_id INTEGER
 );
 
 -- Fresh installs include the initial administrator.  The stored value is a
@@ -151,6 +164,7 @@ CREATE TABLE IF NOT EXISTS subscription_plans (
   duration_days INTEGER NOT NULL DEFAULT 30,
   daily_amount REAL NOT NULL DEFAULT 0,
   daily_tokens INTEGER NOT NULL DEFAULT 0,
+  group_id INTEGER,
   enabled INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL

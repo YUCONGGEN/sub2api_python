@@ -1,10 +1,10 @@
 <template>
   <section class="page">
-    <div class="page-head"><div><div class="eyebrow">DOCS / QUICK START</div><h1>配置教程</h1><p>使用主动创建的 API 密钥接入 OpenAI 兼容接口、TraeCN 或 Codex。</p></div></div>
-    <div class="docs-layout"><aside class="docs-nav"><div class="docs-nav-title">快速开始</div><a class="active" href="#unified-api">统一 API</a><a href="#traecn">TraeCN</a><a href="#codex">Codex 调用 GPT</a></aside>
-      <div class="docs-content"><section id="unified-api"><span class="eyebrow">01 / ENDPOINT</span><h2>OpenAI 兼容地址</h2><p>TraeCN 请选择 OpenAI Chat Completions 格式，并填写本系统的 API 地址。地址只填写到 <code>/v1</code>，不要再追加 <code>/chat/completions</code>。</p><div class="code-block"><div class="code-head"><span>BASE URL</span><button @click="copy(`${baseUrl}/v1`)">复制</button></div><code>{{ baseUrl }}/v1</code></div></section>
+    <div class="page-head"><div><div class="eyebrow">DOCS / QUICK START</div><h1>配置教程</h1><p>使用注册时自动生成或后续新建的 API 密钥接入 OpenAI 兼容接口或 Codex。</p></div></div>
+    <div class="docs-layout"><aside class="docs-nav"><div class="docs-nav-title">快速开始</div><a class="active" href="#unified-api">统一 API</a><a v-if="showTraeTutorial" href="#traecn">TraeCN</a><a href="#codex">Codex 调用 GPT</a></aside>
+      <div class="docs-content"><section id="unified-api"><span class="eyebrow">01 / ENDPOINT</span><h2>OpenAI 兼容地址</h2><p>使用 OpenAI Chat Completions 格式时，API 地址只填写到 <code>/v1</code>，不要再追加 <code>/chat/completions</code>。</p><div class="code-block"><div class="code-head"><span>BASE URL</span><button @click="copy(`${baseUrl}/v1`)">复制</button></div><code>{{ baseUrl }}/v1</code></div></section>
         <section><span class="eyebrow">02 / REQUEST</span><h2>通用 OpenAI 配置</h2><div class="code-block large"><div class="code-head"><span>model_id / url / key</span><button @click="copy(openaiConfig)">复制</button></div><pre>{{ openaiConfig }}</pre></div></section>
-        <section id="traecn" class="trae-tutorial"><span class="eyebrow">03 / TRAECN</span><h2>TraeCN 软件接入</h2><p>下面按 TraeCN 当前界面说明配置流程。先在本系统的“API 密钥”页面创建密钥，再把密钥粘贴到 TraeCN；密钥删除后会立即失效。</p>
+        <section v-if="showTraeTutorial" id="traecn" class="trae-tutorial"><span class="eyebrow">03 / TRAECN</span><h2>TraeCN 软件接入</h2><p>下面按 TraeCN 当前界面说明配置流程。先在本系统的“API 密钥”页面创建密钥，再把密钥粘贴到 TraeCN；密钥删除后会立即失效。</p>
           <div class="trae-steps">
             <article class="trae-step"><div class="trae-step-index">01</div><div class="trae-step-copy"><h3>关闭自动模式</h3><p>打开 TraeCN 的 Agent 对话框，点击底部的 <strong>Auto</strong>，关闭 Auto Mode，改为手动选择模型。</p></div><figure><img src="/traecn-tutorial/1.png" alt="TraeCN Agent 中打开 Auto 模式菜单" loading="lazy" /></figure></article>
             <article class="trae-step"><div class="trae-step-index">02</div><div class="trae-step-copy"><h3>确认使用手动模型</h3><p>在 Auto Mode 菜单中将开关关闭。关闭后，底部会显示当前手动模型选择入口。</p></div><figure><img src="/traecn-tutorial/2.png" alt="TraeCN 关闭 Auto Mode" loading="lazy" /></figure></article>
@@ -17,7 +17,7 @@
           <div class="docs-callout trae-callout"><b>提示</b><span>模型 ID、计费和图片能力以模型广场展示为准。接入后可先发送一条短消息测试；遇到 401 请检查 API 密钥，遇到 404 请确认地址包含 <code>/v1</code> 且没有重复追加路径。</span></div>
         </section>
         <section id="codex" class="codex-tutorial">
-          <span class="eyebrow">04 / CODEX</span>
+          <span class="eyebrow">{{ showTraeTutorial ? '04' : '03' }} / CODEX</span>
           <h2>在 Codex 中调用 GPT 模型</h2>
           <p>Codex 通过 Responses API 调用本站模型。下面以 Windows 为例，将本站创建的 API Key 直接写入用户级 <code>config.toml</code>，无需额外设置环境变量。</p>
 
@@ -30,14 +30,14 @@
           <div class="codex-steps">
             <article class="codex-step">
               <div class="codex-step-index">01</div>
-              <div class="codex-step-body"><h3>创建本站 API Key</h3><p>进入“API 密钥”页面创建一枚密钥。这里只使用本站生成的 <code>sk-api-...</code>，不要填写 OpenAI 订阅 Token、Codex <code>auth.json</code> 或浏览器 Cookie。</p><router-link class="secondary-btn codex-link" to="/keys">前往 API 密钥页面 ↗</router-link></div>
+              <div class="codex-step-body"><h3>确认本站 API Key</h3><p>新注册账户已经自动生成首枚密钥，并会在本标签页中自动填入下方配置。如果需要更换或首枚密钥已离开当前页面，请到“API 密钥”新建一枚。这里只使用本站生成的 <code>sk-api-...</code>，不要填写 OpenAI 订阅 Token、Codex <code>auth.json</code> 或浏览器 Cookie。</p><router-link class="secondary-btn codex-link" to="/keys">管理 API 密钥 ↗</router-link></div>
             </article>
 
             <article class="codex-step">
               <div class="codex-step-index">02</div>
               <div class="codex-step-body">
                 <h3>安装 Codex（Windows）</h3>
-                <p>推荐安装 Windows 桌面版；如果主要在终端工作，也可以只安装 Codex CLI。两种方式都使用用户目录下的 <code>%USERPROFILE%\.codex</code> 配置。</p>
+                <p>推荐安装 Windows 桌面版；如果主要在终端工作，也可以只安装 Codex CLI。桌面版与 CLI 共用用户目录下的配置文件。</p>
                 <div class="codex-install-options">
                   <div class="codex-install-option featured">
                     <div class="codex-install-option-head"><span>推荐</span><b>Windows 桌面版</b></div>
@@ -56,7 +56,7 @@
 
             <article class="codex-step">
               <div class="codex-step-index">03</div>
-              <div class="codex-step-body"><h3>完整替换用户级 config.toml</h3><p>桌面版和 Windows 原生 CLI 共用 <code>%USERPROFILE%\.codex</code>。创建并打开其中的 <code>config.toml</code>，<strong>先删除文件内原有的全部内容，再用下面的配置完整替换，不能追加或只修改其中一部分</strong>。随后把 <code>&lt;粘贴本站 API Key&gt;</code> 替换为刚创建的完整密钥。必须使用当前本站生成的 <code>sk-api-...</code>，不能沿用其他站点或上游账号的 Key。供应商配置必须放在用户级文件中，不能放在项目目录的 <code>.codex/config.toml</code>。</p><div class="code-block large"><div class="code-head"><span>config.toml 完整文件内容（全部替换）</span><button @click="copy(codexConfigText)">复制完整配置</button></div><pre>{{ codexConfigText }}</pre></div><div class="codex-file-command"><code>notepad "$env:USERPROFILE\.codex\config.toml"</code><button @click="copy(codexOpenConfigCommand)">复制打开命令</button></div></div>
+              <div class="codex-step-body"><h3>完整替换用户级 config.toml</h3><p>在对应系统的用户目录中创建并打开 <code>config.toml</code>，<strong>先删除文件内原有的全部内容，再用下面的配置完整替换，不能追加或只修改其中一部分</strong>。</p><ul class="codex-config-paths"><li><span>Windows 路径：</span><code>C:\Users\用户名\.codex\config.toml</code></li><li><span>Mac/Linux 路径：</span><code>~/.codex/config.toml</code></li></ul><p>注册时自动生成的首枚密钥会在当前浏览器标签页内自动填入；如果已经离开注册页面，可粘贴一枚新建密钥。密钥只保存在当前页面内存和下载文件中，不会以明文写回服务器。</p><div class="codex-key-field"><label for="codex-api-key">本站 API Key</label><input id="codex-api-key" v-model.trim="apiKey" autocomplete="off" spellcheck="false" placeholder="粘贴 sk-api-...；刚注册时会自动填入" /><small>{{ apiKey ? '已填入配置，下载前请确认当前设备可信。' : '尚未填入，下载内容会保留占位符。' }}</small></div><div class="code-block large"><div class="code-head"><span>config.toml 完整文件内容（全部替换）</span><div class="code-head-actions"><button @click="copy(codexConfigText)">复制完整配置</button><button class="download-config-btn" @click="downloadConfig">下载 config.toml</button></div></div><pre>{{ codexConfigText }}</pre></div><div class="codex-file-command"><code>notepad "$env:USERPROFILE\.codex\config.toml"</code><button @click="copy(codexOpenConfigCommand)">复制打开命令</button></div></div>
             </article>
 
             <article class="codex-step">
@@ -84,18 +84,23 @@
 </template>
 <script>
 import { copyToClipboard, notify } from '../ui'
+import { buildCodexConfig, downloadTextFile } from '../config/codex'
 
 export default {
   props: { appName: String, apiBaseUrl: String, codexConfig: Object, modelOptions: { type: Array, default: () => [] } },
   data () {
     return {
       baseUrl: this.apiBaseUrl || '',
+      // Keep the tutorial source available for a future re-enable while it is
+      // intentionally hidden from the current navigation and page.
+      showTraeTutorial: false,
       openaiConfig: '',
       selectedCodexModel: '',
       codexModelIds: [],
       codexWindowsInstallText: '',
       codexInstallText: '',
       codexConfigText: '',
+      apiKey: typeof window !== 'undefined' ? (window.sessionStorage.getItem('rose_fresh_api_key') || '') : '',
       codexOpenConfigCommand: '',
       codexRunText: '',
       codexModelCommand: '',
@@ -103,7 +108,7 @@ export default {
     }
   },
   created () { this.buildConfigs() },
-  watch: { appName () { this.buildConfigs() }, apiBaseUrl (value) { if (value) { this.baseUrl = value.replace(/\/$/, ''); this.buildConfigs() } }, codexConfig: { deep: true, handler () { this.buildConfigs() } }, modelOptions: { deep: true, handler () { this.buildConfigs() } } },
+  watch: { appName () { this.buildConfigs() }, apiBaseUrl (value) { if (value) { this.baseUrl = value.replace(/\/$/, ''); this.buildConfigs() } }, apiKey () { this.buildConfigs() }, codexConfig: { deep: true, handler () { this.buildConfigs() } }, modelOptions: { deep: true, handler () { this.buildConfigs() } } },
   methods: {
     buildConfigs () {
       const codex = this.codexConfig || {}
@@ -123,13 +128,9 @@ export default {
       this.openaiConfig = `model_id: ${selectedModel}\nurl: ${this.baseUrl}/v1\nkey: <在 API 密钥页面创建后填入>\n\n可用 gpt-5.6-sol 档位：\n${modelLines}\n\nPOST ${this.baseUrl}/v1/chat/completions\nAuthorization: Bearer <key>`
       // Keep Codex as the final tutorial section. The gateway URL and provider
       // name come from public server configuration; no upstream key is exposed.
-      const providerKey = String(codex.model_provider || 'rose').replace(/[^a-zA-Z0-9_-]/g, '') || 'rose'
-      const providerName = codex.provider_name || this.appName || '大模型接口管理'
-      const providerBaseUrl = String(codex.provider_base_url || this.baseUrl || '').replace(/\/$/, '')
-      const codexBaseUrl = /\/v1$/i.test(providerBaseUrl) ? providerBaseUrl : `${providerBaseUrl}/v1`
       this.codexWindowsInstallText = `winget install --id 9PLM9XGG6VKS -s msstore`
       this.codexInstallText = `node --version\nnpm install -g @openai/codex\ncodex --version`
-      this.codexConfigText = `model = "${selectedModel}"\nmodel_provider = "${providerKey}"\nmodel_reasoning_effort = "${codex.model_reasoning_effort || 'high'}"\napproval_policy = "${codex.approval_policy || 'on-request'}"\nsandbox_mode = "${codex.sandbox_mode || 'workspace-write'}"\n\n[model_providers.${providerKey}]\nname = "${providerName}"\nbase_url = "${codexBaseUrl}"\nexperimental_bearer_token = "<粘贴本站 API Key>"\nwire_api = "${codex.wire_api || 'responses'}"\nrequires_openai_auth = false\nsupports_websockets = ${codex.supports_websockets === true}`
+      this.codexConfigText = buildCodexConfig({ appName: this.appName, apiBaseUrl: this.baseUrl, codexConfig: codex, apiKey: this.apiKey })
       this.codexOpenConfigCommand = `New-Item -ItemType Directory -Force "$env:USERPROFILE\\.codex" | Out-Null\nnotepad "$env:USERPROFILE\\.codex\\config.toml"`
       this.codexRunText = `cd "C:\\你的项目目录"\n\n# 打开交互界面\ncodex --strict-config -m "${selectedModel}"\n\n# 执行一次任务后退出\ncodex exec -m "${selectedModel}" "请只回复：Codex 接入成功"`
       this.codexModelCommand = `codex --strict-config -m "${selectedModel}" "请分析当前项目并给出三个改进建议"`
@@ -145,6 +146,10 @@ export default {
       const copied = await copyToClipboard(text)
       notify(copied ? '已完整复制配置' : '复制失败，请检查浏览器权限', copied ? 'success' : 'error')
       this.copying = false
+    },
+    downloadConfig () {
+      downloadTextFile('config.toml', this.codexConfigText)
+      notify(this.apiKey ? 'config.toml 已下载，密钥已填入' : 'config.toml 已下载，请先替换密钥占位符', this.apiKey ? 'success' : 'error')
     }
   }
 }
@@ -427,6 +432,76 @@ export default {
   border: 1px dashed var(--line);
 }
 
+.codex-config-paths {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.codex-config-paths li {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.codex-config-paths span {
+  flex: 0 0 auto;
+  font-weight: 600;
+}
+
+.codex-config-paths code {
+  padding: 0;
+  background: transparent;
+  color: var(--ink);
+  font: 11px var(--mono);
+}
+
+.codex-key-field {
+  display: grid;
+  gap: 7px;
+  margin-top: 15px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--blue) 42%, var(--paper));
+}
+
+.codex-key-field label {
+  color: var(--muted);
+  font: 10px var(--mono);
+  letter-spacing: .05em;
+}
+
+.codex-key-field input {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--ink);
+  font: 11px var(--mono);
+}
+
+.codex-key-field small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.code-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.download-config-btn {
+  color: color-mix(in srgb, var(--acid) 75%, var(--ink)) !important;
+  font-weight: 600 !important;
+}
+
 .codex-file-command code {
   min-width: 0;
   overflow: hidden;
@@ -540,6 +615,21 @@ export default {
   border-color: #30485b;
 }
 
+:global(html[data-theme="dark"]) .codex-key-field {
+  background: #132532;
+  border-color: #30485b;
+}
+
+:global(html[data-theme="dark"]) .codex-config-paths code {
+  background: transparent;
+  color: #d8e5ed;
+}
+
+:global(html[data-theme="dark"]) .codex-key-field input {
+  background: #0f1d28;
+  border-color: #365064;
+}
+
 :global(html[data-theme="dark"]) .codex-install-option.featured {
   border-color: color-mix(in srgb, var(--acid) 65%, #30485b);
 }
@@ -633,6 +723,23 @@ export default {
 
   .codex-file-command button {
     margin-left: 0;
+  }
+
+  .codex-config-paths li {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .codex-config-paths code {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  .code-head-actions {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 5px;
   }
 }
 </style>

@@ -167,6 +167,8 @@ class ObservabilityService:
         page = max(1, int(page))
         page_size = max(1, min(int(page_size), 5))
         total = int(self.mapper.count_admin_events(level) or 0)
+        pages = max(1, (total + page_size - 1) // page_size)
+        page = min(page, pages)
         rows = self.mapper.list_admin_events(level, (page - 1) * page_size, page_size)
         return _page_result([dict(row) for row in rows], total, page, page_size)
 

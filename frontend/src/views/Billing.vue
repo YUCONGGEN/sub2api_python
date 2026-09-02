@@ -11,7 +11,7 @@
       <div class="entitlement-explainer"><b>免费额度是赠送权益</b><span>管理员设置的免费额度会最先使用：正数表示该项有上限，<code>0</code> 表示仅该项不限制，金额、每日 Token、滚动窗口 Token 三项全为 <code>0</code> 才是有效期内不限量免费。免费额度用完后依次使用套餐和钱包；都不可用时请求会被拒绝。</span></div>
       <div v-if="subscriptionPlans.length" class="subscription-grid">
         <article v-for="plan in subscriptionPlans" :key="plan.id" class="subscription-card">
-          <div class="subscription-card-head"><div><span class="subscription-badge">DAILY ACCESS</span><h3>{{ plan.name }}</h3><p>{{ plan.description || '按日提供模型调用额度' }}</p></div><div class="subscription-price"><small>套餐价</small><strong>¥{{ Number(plan.price || 0).toFixed(2) }}</strong></div></div>
+          <div class="subscription-card-head"><div><span class="subscription-badge">DAILY ACCESS</span><h3>{{ plan.name }}</h3><p>{{ plan.description || '按日提供模型调用额度' }}</p><span v-if="plan.group_name" class="subscription-group-upgrade">升级至 {{ plan.group_name }} · 权重 {{ plan.group_weight }}</span></div><div class="subscription-price"><small>套餐价</small><strong>¥{{ Number(plan.price || 0).toFixed(2) }}</strong></div></div>
           <div class="subscription-stats"><span><small>有效期</small><b>{{ plan.duration_days }} 天</b></span><span><small>每日金额</small><b>{{ plan.daily_amount > 0 ? `¥${Number(plan.daily_amount).toFixed(2)}` : '不限' }}</b></span><span><small>每日 Token</small><b>{{ plan.daily_tokens > 0 ? Number(plan.daily_tokens).toLocaleString('zh-CN') : '不限' }}</b></span></div>
           <button class="primary-btn full subscription-action" :disabled="subscribing === plan.id" @click="subscribePlan(plan)">{{ subscribing === plan.id ? '订阅中…' : '订阅套餐' }}<span>→</span></button>
         </article>
@@ -34,7 +34,7 @@
               <span :class="['status', item.usage?.active ? 'success' : 'pending']">{{ item.usage?.active ? '可用' : '不可用' }}</span>
             </template>
             <template v-else>
-              <div class="entitlement-main"><span><b>{{ item.plan_name }}</b><i class="entitlement-kind plan">付费套餐</i></span><small>有效至 {{ format(item.ends_at) }} · {{ item.auto_renew ? '自动续订已开启' : '默认不自动续订' }}</small><em>套餐价 ¥{{ Number(item.price || 0).toFixed(2) }}</em></div>
+              <div class="entitlement-main"><span><b>{{ item.plan_name }}</b><i class="entitlement-kind plan">付费套餐</i></span><small>有效至 {{ format(item.ends_at) }} · {{ item.auto_renew ? '自动续订已开启' : '默认不自动续订' }}</small><em>套餐价 ¥{{ Number(item.price || 0).toFixed(2) }}{{ item.group_name ? ` · 生效分组 ${item.group_name} · 权重 ${Number(item.group_weight || 0)}` : '' }}</em></div>
               <div class="entitlement-usage-grid">
                 <div class="entitlement-usage"><small>今日套餐金额</small><b>已用 {{ usageValue(item, 'daily_amount', true) }}</b><span>剩余 {{ remainingValue(item, 'daily_amount', true) }}</span><i><u :style="{ width: usagePercent(item, 'daily_amount') + '%' }"></u></i></div>
                 <div class="entitlement-usage"><small>今日套餐 Token</small><b>已用 {{ usageValue(item, 'daily_tokens') }}</b><span>剩余 {{ remainingValue(item, 'daily_tokens') }}</span><i><u :style="{ width: usagePercent(item, 'daily_tokens') + '%' }"></u></i></div>

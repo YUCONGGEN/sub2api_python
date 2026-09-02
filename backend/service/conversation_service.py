@@ -157,9 +157,10 @@ class ConversationService:
     def list_page(self, user_id: int | None, page: int = 1, page_size: int = 5) -> dict[str, Any]:
         page = max(1, int(page)); page_size = max(1, min(int(page_size), 5))
         total = int(self.mapper.count_conversations(user_id) or 0)
-        rows = self.mapper.list_conversations(user_id, (page - 1) * page_size, page_size)
         pages = max(1, (total + page_size - 1) // page_size)
-        return {"items": [dict(x) for x in rows], "total": total, "page": min(page, pages), "page_size": page_size, "pages": pages}
+        page = min(page, pages)
+        rows = self.mapper.list_conversations(user_id, (page - 1) * page_size, page_size)
+        return {"items": [dict(x) for x in rows], "total": total, "page": page, "page_size": page_size, "pages": pages}
 
     def totals(self) -> dict[str, Any]:
         return dict(self.mapper.conversation_totals() or {})

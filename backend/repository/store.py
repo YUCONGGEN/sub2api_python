@@ -46,6 +46,9 @@ class StoreRepository:
                 schema_path = Path(__file__).resolve().parents[1] / "resources" / "schema.sql"
                 conn.executescript(schema_path.read_text(encoding="utf-8"))
                 self._ensure_sqlite_compatibility(conn)
+                self._ensure_sqlite_user_groups(conn)
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_users_group ON users(group_id, deleted_at)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_subscription_plans_group ON subscription_plans(group_id)")
                 self._migrate_sqlite_api_keys(conn)
                 conn.execute(
                     "CREATE UNIQUE INDEX IF NOT EXISTS idx_api_key_hash "
@@ -102,6 +105,7 @@ class StoreRepository:
                     if statement:
                         cursor.execute(statement)
                 self._ensure_mysql_compatibility(cursor)
+                self._ensure_mysql_user_groups(cursor)
                 self._migrate_mysql_api_keys(cursor)
                 self._validate_mysql_schema(cursor)
 
@@ -126,6 +130,7 @@ class StoreRepository:
             "api_key",
             "created_at",
             "last_login",
+            "group_id",
         }
         cursor.execute("SHOW COLUMNS FROM users")
         existing_columns = {str(row[0]) for row in cursor.fetchall()}
@@ -142,6 +147,9 @@ class StoreRepository:
         """Apply additive upgrades used by existing SQLite installations."""
         self._ensure_column(conn, "users", "session_version", "INTEGER NOT NULL DEFAULT 0")
         self._ensure_column(conn, "users", "deleted_at", "TEXT")
+        self._ensure_column(conn, "users", "group_id", "INTEGER")
+        self._ensure_column(conn, "user_groups", "weight", "INTEGER NOT NULL DEFAULT 0")
+        self._ensure_column(conn, "subscription_plans", "group_id", "INTEGER")
         self._ensure_column(conn, "payment_orders", "payment_amount", "REAL")
         self._ensure_column(conn, "payment_orders", "qr_asset", "TEXT")
         self._ensure_column(conn, "recharge_codes", "code", "TEXT")
@@ -199,6 +207,13 @@ class StoreRepository:
             "users": {
                 "session_version": "BIGINT NOT NULL DEFAULT 0",
                 "deleted_at": "VARCHAR(40)",
+                "group_id": "BIGINT",
+            },
+            "user_groups": {
+                "weight": "INT NOT NULL DEFAULT 0",
+            },
+            "subscription_plans": {
+                "group_id": "BIGINT",
             },
             "api_keys": {
                 "api_key_hash": "CHAR(64)",
@@ -215,6 +230,68 @@ class StoreRepository:
         cursor.execute("SHOW INDEX FROM api_keys WHERE Key_name='idx_api_key_hash'")
         if not cursor.fetchone():
             cursor.execute("CREATE UNIQUE INDEX idx_api_key_hash ON api_keys(api_key_hash)")
+        cursor.execute("SHOW INDEX FROM users WHERE Key_name='idx_users_group'")
+        if not cursor.fetchone():
+            cursor.execute("CREATE INDEX idx_users_group ON users(group_id, deleted_at)")
+        cursor.execute("SHOW INDEX FROM subscription_plans WHERE Key_name='idx_subscription_plans_group'")
+        if not cursor.fetchone():
+            cursor.execute("CREATE INDEX idx_subscription_plans_group ON subscription_plans(group_id)")
+
+    @staticmethod
+    def _ensure_sqlite_user_groups(conn: sqlite3.Connection) -> None:
+        """Seed default policies and attach legacy users without overwriting assignments."""
+        now = utc_now()
+        conn.execute(
+            "INSERT OR IGNORE INTO user_groups(name,description,weight,concurrency_limit,allowed_models_json,is_default,created_at,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            ("默认用户组", "新注册用户自动加入；每位用户只允许 1 个并发请求。", 0, 1, '["*"]', 1, now, now),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO user_groups(name,description,weight,concurrency_limit,allowed_models_json,is_default,created_at,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            ("管理员组", "管理员默认组。", 1000, 20, '["*"]', 0, now, now),
+        )
+        conn.execute("UPDATE user_groups SET weight=0 WHERE name='默认用户组'")
+        conn.execute("UPDATE user_groups SET weight=1000 WHERE name='管理员组' AND weight=0")
+        default_row = conn.execute("SELECT id FROM user_groups WHERE is_default=1 ORDER BY id LIMIT 1").fetchone()
+        if not default_row:
+            conn.execute("UPDATE user_groups SET is_default=1 WHERE name='默认用户组'")
+            default_row = conn.execute("SELECT id FROM user_groups WHERE name='默认用户组' LIMIT 1").fetchone()
+        admin_row = conn.execute("SELECT id FROM user_groups WHERE name='管理员组' LIMIT 1").fetchone()
+        conn.execute(
+            "UPDATE users SET group_id=? WHERE group_id IS NULL AND role='ADMIN'",
+            (int(admin_row[0]),),
+        )
+        conn.execute(
+            "UPDATE users SET group_id=? WHERE group_id IS NULL",
+            (int(default_row[0]),),
+        )
+
+    @staticmethod
+    def _ensure_mysql_user_groups(cursor) -> None:
+        now = utc_now()
+        cursor.execute(
+            "INSERT IGNORE INTO user_groups(name,description,weight,concurrency_limit,allowed_models_json,is_default,created_at,updated_at) "
+            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
+            ("默认用户组", "新注册用户自动加入；每位用户只允许 1 个并发请求。", 0, 1, '["*"]', 1, now, now),
+        )
+        cursor.execute(
+            "INSERT IGNORE INTO user_groups(name,description,weight,concurrency_limit,allowed_models_json,is_default,created_at,updated_at) "
+            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
+            ("管理员组", "管理员默认组。", 1000, 20, '["*"]', 0, now, now),
+        )
+        cursor.execute("UPDATE user_groups SET weight=0 WHERE name='默认用户组'")
+        cursor.execute("UPDATE user_groups SET weight=1000 WHERE name='管理员组' AND weight=0")
+        cursor.execute("SELECT id FROM user_groups WHERE is_default=1 ORDER BY id LIMIT 1")
+        default_row = cursor.fetchone()
+        if not default_row:
+            cursor.execute("UPDATE user_groups SET is_default=1 WHERE name='默认用户组'")
+            cursor.execute("SELECT id FROM user_groups WHERE name='默认用户组' LIMIT 1")
+            default_row = cursor.fetchone()
+        cursor.execute("SELECT id FROM user_groups WHERE name='管理员组' LIMIT 1")
+        admin_row = cursor.fetchone()
+        cursor.execute("UPDATE users SET group_id=%s WHERE group_id IS NULL AND role='ADMIN'", (int(admin_row[0]),))
+        cursor.execute("UPDATE users SET group_id=%s WHERE group_id IS NULL", (int(default_row[0]),))
 
     @staticmethod
     def _migrate_mysql_api_keys(cursor) -> None:

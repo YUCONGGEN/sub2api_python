@@ -2,6 +2,7 @@
 
 
 import hashlib
+import json
 import math
 import re
 import secrets
@@ -85,6 +86,15 @@ class StoreService:
         }
 
     @staticmethod
+    def page_window(total: int, page: int = 1, page_size: int = 5) -> tuple[int, int, int, int]:
+        """Clamp a page before querying so response metadata matches its rows."""
+        total = max(0, int(total))
+        page_size = max(1, min(int(page_size), 5))
+        pages = max(1, (total + page_size - 1) // page_size)
+        page = min(max(1, int(page)), pages)
+        return page, page_size, pages, (page - 1) * page_size
+
+    @staticmethod
     def public_user(row: Mapping[str, Any] | None) -> dict[str, Any] | None:
         if not row:
             return None
@@ -95,18 +105,104 @@ class StoreService:
         data.pop("deleted_at", None)
         return data
 
+    @staticmethod
+    def _normalize_allowed_models(value: Any) -> list[str]:
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except (TypeError, ValueError):
+                value = [value]
+        if not isinstance(value, (list, tuple, set)):
+            value = []
+        models: list[str] = []
+        for item in value:
+            model = str(item or "").strip()
+            if model and model not in models:
+                models.append(model[:160])
+        return models
+
+    def _public_group(self, row: Mapping[str, Any] | None) -> dict[str, Any] | None:
+        if not row:
+            return None
+        data = dict(row)
+        data["allowed_models"] = self._normalize_allowed_models(data.pop("allowed_models_json", "[]"))
+        data["weight"] = max(0, min(10000, int(data.get("weight") or 0)))
+        data["concurrency_limit"] = max(1, int(data.get("concurrency_limit") or 1))
+        data["is_default"] = bool(data.get("is_default"))
+        if "member_count" in data:
+            data["member_count"] = int(data.get("member_count") or 0)
+        if "plan_count" in data:
+            data["plan_count"] = int(data.get("plan_count") or 0)
+        return data
+
+    def _with_group(self, row: Mapping[str, Any] | None) -> dict[str, Any] | None:
+        if not row:
+            return None
+        data = dict(row)
+        assigned_group = self._public_group(self.mapper.find_user_group(int(data.get("group_id") or 0)))
+        if not assigned_group:
+            assigned_group = self._public_group(self.mapper.find_default_user_group())
+        effective_group = assigned_group
+        source = "ASSIGNED"
+        source_plan: dict[str, Any] | None = None
+        candidate_loader = getattr(self.mapper, "list_active_subscription_group_candidates", None)
+        candidate_rows = candidate_loader(int(data["id"]), utc_now()) if candidate_loader else []
+        candidates = [
+            self._public_group(value)
+            for value in (candidate_rows or [])
+        ]
+        candidates = [value for value in candidates if value]
+        if candidates and (not effective_group or int(candidates[0].get("weight") or 0) > int(effective_group.get("weight") or 0)):
+            effective_group = candidates[0]
+            source = "SUBSCRIPTION"
+            source_plan = candidates[0]
+        if effective_group:
+            data.update({
+                "assigned_group_id": assigned_group["id"] if assigned_group else None,
+                "assigned_group_name": assigned_group["name"] if assigned_group else "未分组",
+                "assigned_group_weight": assigned_group["weight"] if assigned_group else 0,
+                "effective_group_id": effective_group["id"],
+                "group_name": effective_group["name"],
+                "group_weight": effective_group["weight"],
+                "group_concurrency_limit": effective_group["concurrency_limit"],
+                "group_allowed_models": effective_group["allowed_models"],
+                "group_source": source,
+                "group_source_plan_id": source_plan.get("plan_id") if source_plan else None,
+                "group_source_plan_name": source_plan.get("plan_name") if source_plan else None,
+                "group_source_subscription_id": source_plan.get("subscription_id") if source_plan else None,
+                "group_source_ends_at": source_plan.get("subscription_ends_at") if source_plan else None,
+                "group_upgrade_candidates": [
+                    {
+                        "group_id": item.get("id"), "group_name": item.get("name"), "weight": item.get("weight"),
+                        "plan_id": item.get("plan_id"), "plan_name": item.get("plan_name"),
+                        "subscription_id": item.get("subscription_id"), "ends_at": item.get("subscription_ends_at"),
+                    }
+                    for item in candidates
+                ],
+            })
+        else:
+            data.update({"assigned_group_id": None, "assigned_group_name": "未分组", "effective_group_id": None, "group_name": "未分组", "group_weight": 0, "group_concurrency_limit": 1, "group_allowed_models": [], "group_source": "ASSIGNED", "group_upgrade_candidates": []})
+        return data
+
     # ------------------------------------------------------------------ users
     def find_user(self, user_id: int) -> dict[str, Any] | None:
-        return self._row(self.mapper.find_user(int(user_id)))
+        return self._with_group(self.mapper.find_user(int(user_id)))
 
     def find_by_username(self, username: str) -> dict[str, Any] | None:
-        return self._row(self.mapper.find_user_by_username(str(username)))
+        return self._with_group(self.mapper.find_user_by_username(str(username)))
 
     def find_by_api_key(self, api_key: str) -> dict[str, Any] | None:
         digest = hashlib.sha256(str(api_key).encode("utf-8")).hexdigest()
-        row = self._row(self.mapper.find_user_by_api_key(digest))
+        row = self._with_group(self.mapper.find_user_by_api_key(digest))
         if row:
-            self.mapper.touch_api_key(digest, utc_now())
+            now = datetime.now(timezone.utc)
+            # last_used is informational. Coalesce it to one write per minute
+            # instead of writing twice for every proxied request.
+            self.mapper.touch_api_key(
+                digest,
+                now.isoformat(),
+                (now - timedelta(minutes=1)).isoformat(),
+            )
         return row
 
     def create_user(
@@ -117,7 +213,14 @@ class StoreService:
         role: str = "USER",
         balance: float = 0,
         enabled: bool = True,
+        group_id: int | None = None,
     ) -> dict[str, Any]:
+        if group_id is None:
+            group = self.mapper.find_named_user_group("管理员组") if str(role).upper() == "ADMIN" else self.mapper.find_default_user_group()
+        else:
+            group = self.mapper.find_user_group(int(group_id))
+        if not group:
+            raise ValueError("用户组不存在")
         user = {
             "username": str(username),
             "password_hash": self.hash_password(password),
@@ -127,9 +230,17 @@ class StoreService:
             "enabled": 1 if enabled else 0,
             "api_key": self.revoked_api_key(),
             "created_at": utc_now(),
+            "group_id": int(group["id"]),
         }
         self.mapper.insert_user(user)
         return self.find_by_username(str(username)) or user
+
+    @Transactional()
+    def create_user_with_default_key(self, *args, **kwargs) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Create an account and reveal its first key exactly once to the caller."""
+        user = self.create_user(*args, **kwargs)
+        key = self.create_api_key(int(user["id"]), "默认密钥")
+        return user, key
 
     def update_login(self, user_id: int) -> None:
         self.mapper.update_login(int(user_id), utc_now())
@@ -141,13 +252,99 @@ class StoreService:
         return [dict(row) for row in self.mapper.user_usage_by_model(int(user_id), str(start_at))]
 
     def list_users(self, keyword: str = "", page: int = 1, page_size: int = 5) -> dict[str, Any]:
-        page = max(1, int(page))
-        page_size = max(1, min(int(page_size), 5))
-        offset = (page - 1) * page_size
         keyword = str(keyword or "")
         total = self.mapper.count_users(keyword)
-        rows = self.mapper.list_users(keyword, offset, page_size)
+        page, page_size, _, offset = self.page_window(total, page, page_size)
+        rows = [self._with_group(row) for row in self.mapper.list_users(keyword, offset, page_size)]
         return self.page_result(rows, total, page, page_size)
+
+    # ----------------------------------------------------------- user groups
+    def find_user_group(self, group_id: int) -> dict[str, Any] | None:
+        return self._public_group(self.mapper.find_user_group(int(group_id)))
+
+    def list_user_groups(self, page: int = 1, page_size: int = 5) -> dict[str, Any]:
+        total = int(self.mapper.count_user_groups() or 0)
+        page, page_size, _, offset = self.page_window(total, page, page_size)
+        rows = [self._public_group(row) for row in self.mapper.list_user_groups(offset, page_size)]
+        return self.page_result(rows, total, page, page_size)
+
+    @staticmethod
+    def _group_values(values: Mapping[str, Any], *, partial: bool = False) -> dict[str, Any]:
+        changes: dict[str, Any] = {}
+        if not partial or "name" in values:
+            name = str(values.get("name") or "").strip()
+            if not 2 <= len(name) <= 120:
+                raise ValueError("用户组名称需为 2-120 个字符")
+            changes["name"] = name
+        if not partial or "description" in values:
+            changes["description"] = str(values.get("description") or "").strip()[:500]
+        if not partial or "weight" in values:
+            try:
+                weight = int(values.get("weight", 0))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("分组权重必须是整数") from exc
+            if weight < 0 or weight > 10000:
+                raise ValueError("分组权重必须在 0-10000 之间")
+            changes["weight"] = weight
+        if not partial or "concurrency_limit" in values:
+            try:
+                limit = int(values.get("concurrency_limit", 1))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("并发数必须是整数") from exc
+            if limit < 1 or limit > 100:
+                raise ValueError("并发数必须在 1-100 之间")
+            changes["concurrency_limit"] = limit
+        if not partial or "allowed_models" in values:
+            models = StoreService._normalize_allowed_models(values.get("allowed_models", ["*"]))
+            changes["allowed_models_json"] = json.dumps(models, ensure_ascii=False, separators=(",", ":"))
+        if not partial or "is_default" in values:
+            changes["is_default"] = 1 if bool(values.get("is_default")) else 0
+        return changes
+
+    @Transactional()
+    def create_user_group(self, values: Mapping[str, Any]) -> dict[str, Any]:
+        group = self._group_values(values)
+        if self.mapper.find_user_group_by_weight(int(group["weight"]), None):
+            raise ValueError("分组权重已被使用，请设置不同的权重")
+        now = utc_now()
+        group.update({"created_at": now, "updated_at": now})
+        self.mapper.insert_user_group(group)
+        group_id = int(group.get("id") or 0)
+        if group.get("is_default"):
+            self.mapper.clear_default_user_groups(group_id, now)
+        return self.find_user_group(group_id) or self._public_group(group)
+
+    @Transactional()
+    def update_user_group(self, group_id: int, values: Mapping[str, Any]) -> dict[str, Any] | None:
+        existing = self.mapper.find_user_group(int(group_id))
+        if not existing:
+            return None
+        changes = self._group_values(values, partial=True)
+        if not changes:
+            return self._public_group(existing)
+        if existing.get("is_default") and changes.get("is_default") == 0:
+            raise ValueError("默认用户组不能直接取消默认，请将其他组设为默认")
+        if "weight" in changes and self.mapper.find_user_group_by_weight(int(changes["weight"]), int(group_id)):
+            raise ValueError("分组权重已被使用，请设置不同的权重")
+        changes["updated_at"] = utc_now()
+        if changes.get("is_default"):
+            self.mapper.clear_default_user_groups(int(group_id), changes["updated_at"])
+        self.mapper.update_user_group(int(group_id), changes)
+        return self.find_user_group(int(group_id))
+
+    @Transactional()
+    def delete_user_group(self, group_id: int) -> bool:
+        group = self.mapper.find_user_group(int(group_id))
+        if not group:
+            return False
+        if group.get("is_default"):
+            raise ValueError("默认用户组不能删除")
+        default_group = self.mapper.find_default_user_group()
+        if not default_group:
+            raise ValueError("系统缺少默认用户组")
+        self.mapper.assign_users_to_group(int(group_id), int(default_group["id"]))
+        self.mapper.clear_subscription_plan_group(int(group_id), utc_now())
+        return bool(self.mapper.delete_user_group(int(group_id)))
 
     def admin_user_detail(self, user_id: int, order_page: int = 1, page_size: int = 5) -> dict[str, Any] | None:
         user = self.find_user(user_id)
@@ -211,7 +408,7 @@ class StoreService:
         ))
 
     def update_user(self, user_id: int, **changes: Any) -> dict[str, Any] | None:
-        allowed = {"email", "role", "balance", "enabled", "password"}
+        allowed = {"email", "role", "balance", "enabled", "password", "group_id"}
         values = {key: value for key, value in changes.items() if key in allowed and value is not None}
         if "balance" in values:
             try:
@@ -223,6 +420,14 @@ class StoreService:
             values["balance"] = balance
         if "password" in values:
             values["password_hash"] = self.hash_password(str(values.pop("password")))
+        if "group_id" in values:
+            try:
+                group_id = int(values["group_id"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError("用户组不正确") from exc
+            if not self.mapper.find_user_group(group_id):
+                raise ValueError("用户组不存在")
+            values["group_id"] = group_id
         if values:
             self.mapper.update_user(int(user_id), values)
         return self.public_user(self.find_user(int(user_id)))
@@ -233,17 +438,28 @@ class StoreService:
 
     # -------------------------------------------------------------- api keys
     def list_api_keys(self, user_id: int, page: int = 1, page_size: int = 5) -> dict[str, Any]:
-        page = max(1, int(page))
-        page_size = max(1, min(int(page_size), 5))
         total = self.mapper.count_api_keys(int(user_id))
+        page, page_size, _, offset = self.page_window(total, page, page_size)
         rows = []
-        for value in self.mapper.list_api_keys(int(user_id), (page - 1) * page_size, page_size):
+        for value in self.mapper.list_api_keys(int(user_id), offset, page_size):
             row = dict(value)
             row["masked_key"] = f'{row.get("key_prefix") or "sk-"}{"•" * 12}{row.get("key_last4") or ""}'
             rows.append(row)
         return self.page_result(rows, total, page, page_size)
 
     def create_api_key(self, user_id: int, name: str, expires_at: str | None = None) -> dict[str, Any]:
+        normalized_expiry = None
+        if expires_at:
+            try:
+                parsed_expiry = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("过期时间格式不正确") from exc
+            if parsed_expiry.tzinfo is None:
+                parsed_expiry = parsed_expiry.replace(tzinfo=timezone.utc)
+            parsed_expiry = parsed_expiry.astimezone(timezone.utc)
+            if parsed_expiry <= datetime.now(timezone.utc):
+                raise ValueError("过期时间必须晚于当前时间")
+            normalized_expiry = parsed_expiry.isoformat()
         plaintext = self.new_api_key()
         digest = hashlib.sha256(plaintext.encode("utf-8")).hexdigest()
         key = {
@@ -256,7 +472,7 @@ class StoreService:
             "enabled": 1,
             "created_at": utc_now(),
             "last_used": None,
-            "expires_at": expires_at,
+            "expires_at": normalized_expiry,
         }
         self.mapper.insert_api_key(key)
         public = self._row(self.mapper.find_api_key(int(user_id), int(key.get("id") or 0))) or key
@@ -342,13 +558,28 @@ class StoreService:
         self.mapper.insert_order(order)
         return self._row(self.mapper.find_order_by_id(int(order.get("id") or 0))) or order
 
-    def create_recharge_code(self, amount: float, created_by: int, code: str) -> dict[str, Any]:
+    def create_recharge_code(
+        self,
+        amount: float,
+        created_by: int,
+        code: str,
+        expire_hours: float | int | None = None,
+    ) -> dict[str, Any]:
         billing = get_config().get("rose", {}).get("billing", {})
+        configured_expiry = expire_hours is None
+        raw_expire_hours = billing.get("recharge-code-expire-hours", 48) if configured_expiry else expire_hours
         try:
-            expire_hours = float(billing.get("recharge-code-expire-hours", 48))
-        except (TypeError, ValueError):
+            expire_hours = float(raw_expire_hours)
+        except (TypeError, ValueError) as exc:
+            if not configured_expiry:
+                raise ValueError("兑换码有效期必须是数字") from exc
             expire_hours = 48
-        expire_hours = max(1, min(expire_hours, 24 * 30))
+        if not math.isfinite(expire_hours):
+            if not configured_expiry:
+                raise ValueError("兑换码有效期必须是有限数字")
+            expire_hours = 48
+        if expire_hours < 1 or expire_hours > 24 * 365:
+            raise ValueError("兑换码有效期必须在 1 小时到 365 天之间")
         created_at = datetime.now(timezone.utc)
         row = {
             "code_hash": self.hash_recharge_code(code),
@@ -370,10 +601,9 @@ class StoreService:
 
     def list_recharge_codes(self, page: int = 1, page_size: int = 5) -> dict[str, Any]:
         self.mapper.expire_recharge_codes(utc_now())
-        page = max(1, int(page))
-        page_size = max(1, min(int(page_size), 5))
         total = self.mapper.count_recharge_codes()
-        rows = self.mapper.list_recharge_codes((page - 1) * page_size, page_size)
+        page, page_size, _, offset = self.page_window(total, page, page_size)
+        rows = self.mapper.list_recharge_codes(offset, page_size)
         return self.page_result(rows, total, page, page_size)
 
     @Transactional()
@@ -469,10 +699,9 @@ class StoreService:
         return bool(self.mapper.revoke_recharge_code(int(code_id)))
 
     def list_orders(self, user_id: int, page: int = 1, page_size: int = 5) -> dict[str, Any]:
-        page = max(1, int(page))
-        page_size = max(1, min(int(page_size), 5))
         total = self.mapper.count_orders(int(user_id))
-        rows = self.mapper.list_orders(int(user_id), (page - 1) * page_size, page_size)
+        page, page_size, _, offset = self.page_window(total, page, page_size)
+        rows = self.mapper.list_orders(int(user_id), offset, page_size)
         return self.page_result(rows, total, page, page_size)
 
     # --------------------------------------------------------- subscriptions
@@ -490,11 +719,10 @@ class StoreService:
         return int(value)
 
     def list_subscription_plans(self, page: int = 1, page_size: int = 5, enabled_only: bool = False) -> dict[str, Any]:
-        page = max(1, int(page))
-        page_size = max(1, min(int(page_size), 5))
         visible = 1 if enabled_only else 0
         total = self.mapper.count_subscription_plans(visible)
-        rows = self.mapper.list_subscription_plans(visible, (page - 1) * page_size, page_size)
+        page, page_size, _, offset = self.page_window(total, page, page_size)
+        rows = self.mapper.list_subscription_plans(visible, offset, page_size)
         return self.page_result(rows, total, page, page_size)
 
     def create_subscription_plan(self, values: Mapping[str, Any]) -> dict[str, Any]:
@@ -510,12 +738,19 @@ class StoreService:
             "duration_days": max(1, self._optional_int(values.get("duration_days"), 30)),
             "daily_amount": round(daily_amount, 4),
             "daily_tokens": max(0, self._optional_int(values.get("daily_tokens"), 0)),
+            "group_id": None,
             "enabled": 1 if bool(values.get("enabled", True)) else 0,
             "created_at": now,
             "updated_at": now,
         }
         if not plan["name"]:
             raise ValueError("套餐名称不能为空")
+        raw_group_id = values.get("group_id")
+        if raw_group_id not in (None, ""):
+            group = self.mapper.find_user_group(int(raw_group_id))
+            if not group:
+                raise ValueError("套餐指定的用户组不存在")
+            plan["group_id"] = int(group["id"])
         self.mapper.insert_subscription_plan(plan)
         return self._row(self.mapper.find_subscription_plan(int(plan.get("id") or 0))) or plan
 
@@ -523,6 +758,15 @@ class StoreService:
         if not self.mapper.find_subscription_plan(int(plan_id)):
             return None
         values = {key: value for key, value in changes.items() if key in {"name", "description", "price", "duration_days", "daily_amount", "daily_tokens", "enabled"}}
+        if "group_id" in changes:
+            raw_group_id = changes.get("group_id")
+            if raw_group_id in (None, ""):
+                values["clear_group_id"] = 1
+            else:
+                group = self.mapper.find_user_group(int(raw_group_id))
+                if not group:
+                    raise ValueError("套餐指定的用户组不存在")
+                values["group_id"] = int(group["id"])
         if "name" in values:
             values["name"] = str(values["name"]).strip()[:80]
         for key in ("price", "daily_amount"):
@@ -638,21 +882,21 @@ class StoreService:
         return row
 
     def list_user_subscriptions(self, user_id: int, page: int = 1, page_size: int = 5) -> dict[str, Any]:
-        page = max(1, int(page)); page_size = max(1, min(int(page_size), 5))
         total = self.mapper.count_user_subscriptions(int(user_id))
-        rows = self.mapper.list_user_subscriptions(int(user_id), (page - 1) * page_size, page_size)
+        page, page_size, _, offset = self.page_window(total, page, page_size)
+        rows = self.mapper.list_user_subscriptions(int(user_id), offset, page_size)
         now = datetime.now(timezone.utc)
         enriched = [self._subscription_with_usage(row, now) for row in rows]
         return self.page_result(enriched, total, page, page_size)
 
     def list_user_entitlements(self, user_id: int, page: int = 1, page_size: int = 5) -> dict[str, Any]:
         """Return paid plans and free grants in one active-first page."""
-        page = max(1, int(page)); page_size = max(1, min(int(page_size), 5))
         user_id = int(user_id)
         total = self.mapper.count_user_subscriptions(user_id) + self.mapper.count_user_quota_policies(user_id)
+        page, page_size, _, offset = self.page_window(total, page, page_size)
         now = datetime.now(timezone.utc)
         rows = self.mapper.list_user_entitlements(
-            user_id, now.isoformat(), (page - 1) * page_size, page_size
+            user_id, now.isoformat(), offset, page_size
         )
         enriched = []
         for value in rows:
@@ -684,12 +928,21 @@ class StoreService:
         if price and self.mapper.update_balance_after_charge(int(user_id), price, minimum_balance, 0.001) != 1:
             raise ValueError("余额不足，无法续订该套餐")
 
+    def _lock_user_billing(self, user_id: int, now: datetime | None = None) -> None:
+        """Serialize subscription and usage balance decisions for one user."""
+        if not hasattr(self.mapper, "ensure_billing_lock"):
+            return
+        timestamp = (now or datetime.now(timezone.utc)).isoformat()
+        self.mapper.ensure_billing_lock(int(user_id), timestamp)
+        self.mapper.acquire_billing_lock(int(user_id), timestamp)
+
     @Transactional()
     def subscribe_plan(self, user_id: int, plan_id: int) -> dict[str, Any] | None:
         plan = self._row(self.mapper.find_subscription_plan(int(plan_id)))
         if not plan or not plan.get("enabled"):
             return None
         starts = datetime.now(timezone.utc)
+        self._lock_user_billing(int(user_id), starts)
         current = self._row(self.mapper.find_active_subscription_for_plan(
             int(user_id), int(plan_id), starts.isoformat()
         ))
@@ -710,6 +963,7 @@ class StoreService:
     @Transactional()
     def renew_subscription(self, user_id: int, subscription_id: int) -> dict[str, Any] | None:
         now = datetime.now(timezone.utc)
+        self._lock_user_billing(int(user_id), now)
         current = self._row(self.mapper.find_user_subscription(int(subscription_id), int(user_id)))
         if not current or current.get("status") != "ACTIVE":
             raise ValueError("套餐不存在或已停用")
@@ -765,32 +1019,51 @@ class StoreService:
     def delete_user_subscription(self, user_id: int, subscription_id: int) -> bool:
         return bool(self.mapper.delete_user_subscription(int(subscription_id), int(user_id)))
 
-    @Scheduled(fixed_rate=60000, initial_delay=15000)
     @Transactional()
+    def _renew_due_subscription(self, row: Mapping[str, Any], now: datetime) -> None:
+        """Charge and extend one row atomically; failures must roll back."""
+        user_id = int(row["user_id"])
+        self._lock_user_billing(user_id, now)
+        current = self._row(self.mapper.find_user_subscription(int(row["id"]), user_id))
+        if not current or current.get("status") != "ACTIVE" or not current.get("auto_renew"):
+            return
+        current_end = self._subscription_datetime(current.get("ends_at"), "套餐结束时间")
+        if current_end > now:
+            return
+        price = max(0.0, float(current.get("price") or row.get("price") or 0))
+        self._charge_subscription(user_id, price)
+        ends = max(current_end, now) + self._subscription_duration(current)
+        if self.mapper.extend_user_subscription(
+            int(current["id"]), user_id, int(current["plan_id"]), ends.isoformat()
+        ) != 1:
+            raise RuntimeError("套餐续期写入失败")
+
+    @Transactional()
+    def _expire_subscription(self, subscription_id: int) -> None:
+        self.mapper.expire_subscription(int(subscription_id))
+
+    @Scheduled(fixed_rate=60000, initial_delay=15000)
     def process_subscription_renewals(self) -> None:
-        """Expire non-renewing rows and charge enabled auto-renewals."""
+        """Renew each subscription in its own transaction."""
         now = datetime.now(timezone.utc)
         now_iso = now.isoformat()
         self.mapper.expire_subscriptions(now_iso)
         for row in self.mapper.list_due_auto_renew_subscriptions(now_iso) or []:
             try:
-                price = max(0.0, float(row.get("price") or 0))
-                self._charge_subscription(int(row["user_id"]), price)
-                current_end = self._subscription_datetime(row.get("ends_at"), "套餐结束时间")
-                ends = max(current_end, now) + self._subscription_duration(row)
-                if self.mapper.extend_user_subscription(
-                    int(row["id"]), int(row["user_id"]), int(row["plan_id"]), ends.isoformat()
-                ) != 1:
-                    self.mapper.expire_subscription(int(row["id"]))
-            except (TypeError, ValueError, RuntimeError):
-                # Insufficient balance or malformed legacy data ends the
-                # renewal cycle for this row without blocking other users.
-                self.mapper.expire_subscription(int(row["id"]))
+                self._renew_due_subscription(row, now)
+            except (TypeError, ValueError):
+                # Insufficient balance or malformed legacy data stops renewal;
+                # the debit was rolled back by _renew_due_subscription().
+                self._expire_subscription(int(row["id"]))
+            except RuntimeError:
+                # A transient write failure keeps the entitlement due so the
+                # next scheduler pass can retry without charging twice.
+                continue
 
     def list_user_quotas(self, user_id: int, page: int = 1, page_size: int = 5) -> dict[str, Any]:
-        page = max(1, int(page)); page_size = max(1, min(int(page_size), 5))
         total = self.mapper.count_user_quota_policies(int(user_id))
-        rows = self.mapper.list_user_quota_policies(int(user_id), (page - 1) * page_size, page_size)
+        page, page_size, _, offset = self.page_window(total, page, page_size)
+        rows = self.mapper.list_user_quota_policies(int(user_id), offset, page_size)
         now = datetime.now(timezone.utc)
         enriched = [self._quota_with_usage(int(user_id), row, now) for row in rows]
         return self.page_result(enriched, total, page, page_size)
@@ -1015,16 +1288,14 @@ class StoreService:
             minimum_usable = max(0.0, float(billing.get("min-usable-balance", 0.001)))
             minimum_balance = max(-0.1, float(billing.get("minimum-balance", -0.1)))
         except (TypeError, ValueError):
-            return False, user
+            return False, None
         if not math.isfinite(cost) or cost < 0:
             return False, None
         now = datetime.now(timezone.utc)
         # The UPDATE obtains a per-user database write lock for the lifetime
         # of this transaction. It prevents concurrent requests from reading
         # the same remaining entitlement balance.
-        if hasattr(self.mapper, "ensure_billing_lock"):
-            self.mapper.ensure_billing_lock(user_id, now.isoformat())
-            self.mapper.acquire_billing_lock(user_id, now.isoformat())
+        self._lock_user_billing(user_id, now)
         user = self._row(self.mapper.find_balance(user_id))
         if not user or not user.get("enabled"):
             return False, user
@@ -1127,16 +1398,29 @@ class StoreService:
             return False
         if float(row.get("balance") or 0) >= minimum:
             return True
-        # A valid free quota or package is sufficient even when the wallet is
-        # empty; charge() will still require wallet funds for any uncovered
-        # remainder of the request.
-        return bool(self.mapper.has_active_entitlement(int(user_id), utc_now()))
+        # Do not treat an exhausted but unexpired entitlement as usable. This
+        # lightweight one-token probe reuses the same limit calculations as
+        # charge(), without adding a write to the forwarding hot path.
+        now = datetime.now(timezone.utc)
+        probe_cost = max(minimum, 0.00000001)
+        for value in self.mapper.find_active_quota_policies(int(user_id), now.isoformat()) or []:
+            covered_cost, covered_tokens = self._allocate_entitlement(
+                int(user_id), 1, probe_cost, dict(value), "FREE", now
+            )
+            if covered_cost > 0 and covered_tokens > 0:
+                return True
+        for value in self.mapper.find_active_subscriptions(int(user_id), now.isoformat()) or []:
+            covered_cost, covered_tokens = self._allocate_entitlement(
+                int(user_id), 1, probe_cost, dict(value), "SUBSCRIPTION", now
+            )
+            if covered_cost > 0 and covered_tokens > 0:
+                return True
+        return False
 
     def list_usage_page(self, user_id: int, page: int = 1, page_size: int = 5) -> dict[str, Any]:
-        page = max(1, int(page))
-        page_size = max(1, min(int(page_size), 5))
         total = self.mapper.count_usage(int(user_id))
-        recent = self.mapper.list_usage(int(user_id), (page - 1) * page_size, page_size)
+        page, page_size, _, offset = self.page_window(total, page, page_size)
+        recent = self.mapper.list_usage(int(user_id), offset, page_size)
         return self.page_result(recent, total, page, page_size)
 
     def usage_summary(self, user_id: int, page: int = 1, page_size: int = 5) -> dict[str, Any]:

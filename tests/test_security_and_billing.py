@@ -1,5 +1,6 @@
 import sqlite3
 import json
+from datetime import datetime, timezone
 
 from backend.controller.auth_controller import AuthController
 from backend.controller.admin_controller import AdminController
@@ -241,3 +242,106 @@ def test_subscription_catalog_reports_pool_cooldown_instead_of_fake_healthy():
     assert model["status"] == "冷却中"
     assert model["enabled"] is False
     assert "0/1 个订阅账号可调度" in model["health"]["detail"]
+
+
+class RechargeCodeMapper:
+    def __init__(self):
+        self.row = None
+
+    def insert_recharge_code(self, row):
+        row["id"] = 1
+        self.row = dict(row)
+        return 1
+
+    def find_recharge_code(self, code_hash):
+        return self.row
+
+
+def test_recharge_code_accepts_an_admin_selected_expiry():
+    mapper = RechargeCodeMapper()
+    row = service_with(mapper).create_recharge_code(10, 1, "CODE-TEST-TEST-TEST", 72)
+
+    created_at = datetime.fromisoformat(row["created_at"]).astimezone(timezone.utc)
+    expires_at = datetime.fromisoformat(row["expires_at"]).astimezone(timezone.utc)
+    assert (expires_at - created_at).total_seconds() == 72 * 3600
+
+
+class DefaultKeyStore:
+    def __init__(self):
+        self.created = None
+
+    @staticmethod
+    def find_by_username(username):
+        return None
+
+    def create_user_with_default_key(self, *args, **kwargs):
+        self.created = (args, kwargs)
+        return ({"id": 41, "username": args[0], "role": kwargs.get("role", args[3] if len(args) > 3 else "USER")}, {"id": 9, "api_key": "sk-api-once-only"})
+
+    @staticmethod
+    def public_user(user):
+        return dict(user)
+
+
+class DefaultKeyAuth:
+    def __init__(self, admin=False):
+        self.store = DefaultKeyStore()
+        self.admin = admin
+
+    @staticmethod
+    def issue_token(user, user_agent, ip_address):
+        return "signed-token"
+
+    def user_from_authorization(self, authorization):
+        return {"id": 1, "role": "ADMIN"} if self.admin else None
+
+
+def test_registration_returns_the_first_api_key_once():
+    auth = DefaultKeyAuth()
+    response = AuthController(auth.store, auth).register({"username": "new_user", "password": "secret12", "email": ""}, "browser", "127.0.0.1")
+
+    assert response.data["api_key"] == "sk-api-once-only"
+    assert response.data["api_key_id"] == 9
+    assert response.data["token"] == "signed-token"
+    assert auth.store.created is not None
+
+
+def test_admin_user_creation_returns_the_first_api_key_once():
+    auth = DefaultKeyAuth(admin=True)
+    response = AdminController(auth, object(), object()).create_user({
+        "username": "managed_user", "password": "secret12", "role": "USER", "group_id": 3,
+    }, "Bearer admin")
+
+    assert response.data["api_key"] == "sk-api-once-only"
+    assert response.data["user"]["username"] == "managed_user"
+    assert auth.store.created[1]["group_id"] == 3
+
+
+def test_page_is_clamped_before_rows_are_queried():
+    mapper = UsagePageMapper()
+    result = service_with(mapper).list_usage_page(9, page=99, page_size=5)
+
+    assert mapper.query == (9, 5, 5)
+    assert result["page"] == 2
+
+
+class ExhaustedEntitlementMapper:
+    @staticmethod
+    def find_balance(user_id):
+        return {"id": user_id, "enabled": 1, "balance": 0}
+
+    @staticmethod
+    def find_active_quota_policies(user_id, now):
+        return [{"id": 17, "daily_amount": 0, "daily_tokens": 10, "hourly_tokens": 0}]
+
+    @staticmethod
+    def quota_usage_totals(user_id, quota_id, start_at, end_at):
+        return {"free_cost": 0, "free_tokens": 10}
+
+    @staticmethod
+    def find_active_subscriptions(user_id, now):
+        return []
+
+
+def test_exhausted_but_unexpired_entitlement_is_not_reported_as_usable():
+    assert service_with(ExhaustedEntitlementMapper()).has_usable_balance(3) is False

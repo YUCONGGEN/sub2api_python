@@ -31,6 +31,40 @@ def _responses_event(event_type: str, payload: dict) -> str:
     return f"event: {event_type}\ndata: {body}\n\n"
 
 
+def _group_service(request: Request):
+    context = request.app.state.spring_application.application_context
+    return context.get_bean("user_group_service")
+
+
+async def _authenticated_user(request: Request, auth: AuthService):
+    cached = request.scope.get("state", {}).get("rose_user")
+    if cached:
+        return cached
+    authorization = request.headers.get("Authorization")
+    if not authorization and request.headers.get("x-api-key"):
+        authorization = f"Bearer {request.headers['x-api-key']}"
+    return await asyncio.to_thread(auth.user_from_authorization, authorization)
+
+
+def _model_permission_error(request: Request, user: dict, model: str):
+    if _group_service(request).model_allowed(user, model):
+        return None
+    return _local_error(
+        403,
+        f"当前用户组不允许使用模型 {model or '<empty>'}",
+        "model_not_allowed",
+        "user_group_policy",
+    )
+
+
+def _estimate_payload_tokens(service: AiGatewayService, payload: dict, field: str) -> int:
+    try:
+        value = json.dumps(payload.get(field), ensure_ascii=False, separators=(",", ":"))
+        return max(1, int(service.estimate_tokens(value)))
+    except Exception:
+        return 1
+
+
 def _local_error(status: int, message: str, error_type: str, source: str) -> JSONResponse:
     """Mark gateway-owned failures so clients can distinguish them upstream."""
     return JSONResponse(
@@ -42,7 +76,7 @@ def _local_error(status: int, message: str, error_type: str, source: str) -> JSO
 
 async def openai_chat(request: Request):
     service, auth, conversations = _beans(request)
-    user = await asyncio.to_thread(auth.user_from_authorization, request.headers.get("Authorization"))
+    user = await _authenticated_user(request, auth)
     if not user:
         return _local_error(401, "Invalid API key", "authentication_error", "local_auth")
     if not user.get("enabled"):
@@ -55,6 +89,9 @@ async def openai_chat(request: Request):
         return JSONResponse({"error": {"message": "request body must be valid JSON", "type": "invalid_request_error"}}, status_code=400)
     if not isinstance(payload, dict) or not payload.get("messages"):
         return JSONResponse({"error": {"message": "messages is required", "type": "invalid_request_error"}}, status_code=400)
+    model_error = _model_permission_error(request, user, str(payload.get("model") or service.model_name))
+    if model_error is not None:
+        return model_error
     subscription_response = await maybe_proxy_openai_chat_subscription(request, payload, user)
     if subscription_response is not None:
         return subscription_response
@@ -109,6 +146,7 @@ async def openai_chat(request: Request):
                 prompt_tokens = 0
                 model = str(payload.get("model") or service.model_name)
                 metadata = {}
+                billing_started = False
                 try:
                     first = True
                     while True:
@@ -197,6 +235,7 @@ async def openai_chat(request: Request):
                         "completion_tokens": int((usage_meta or {}).get("completion_tokens", (usage_meta or {}).get("output_tokens", service.estimate_tokens(answer))) or service.estimate_tokens(answer)),
                     }
                     usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
+                    billing_started = True
                     ok, cost, record = await asyncio.to_thread(service.charge_and_record, user["id"], model, usage)
                     if not ok:
                         await complete_conversation(await resolve_conversation(), {"error": {"message": "Insufficient balance"}}, "", usage, 0, "BILLING_FAILED", "Insufficient balance")
@@ -223,6 +262,32 @@ async def openai_chat(request: Request):
                     final_body = {"id": request_id, "object": "chat.completion.chunk", "created": int(time.time()), "model": model, "choices": [], "usage": usage, "rose": {"cost_cny": cost}}
                     yield f"data: {json.dumps(final_body, ensure_ascii=False)}\n\n"
                     yield "data: [DONE]\n\n"
+                except (asyncio.CancelledError, GeneratorExit):
+                    # A client disconnect must not turn already generated text
+                    # into a free request. Settle the observed portion without
+                    # buffering or delaying normal stream chunks.
+                    answer = "".join(answer_parts)
+                    usage = {
+                        "prompt_tokens": prompt_tokens or _estimate_payload_tokens(service, payload, "messages"),
+                        "completion_tokens": max(0, int(service.estimate_tokens(answer))) if answer else 0,
+                    }
+                    usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
+                    if billing_started:
+                        # The settlement thread may still complete after the
+                        # response task is cancelled. Never submit it twice.
+                        ok, cost = True, 0
+                    else:
+                        billing_started = True
+                        ok, cost, _ = await asyncio.to_thread(service.charge_and_record, user["id"], model, usage)
+                    await complete_conversation(
+                        await resolve_conversation(), None, "", usage, cost if ok else 0,
+                        "CANCELLED" if ok else "BILLING_FAILED", None,
+                    )
+                    try:
+                        await iterator.aclose()
+                    except Exception:
+                        pass
+                    raise
                 except Exception as exc:
                     await fail_conversation(exc)
                     error_body = {"error": {"message": str(exc), "type": "upstream_error"}}
@@ -323,7 +388,7 @@ def _responses_input_to_messages(value):
 async def openai_responses(request: Request):
     """OpenAI Responses-compatible facade for Codex CLI/App/IDE clients."""
     service, auth, conversations = _beans(request)
-    user = await asyncio.to_thread(auth.user_from_authorization, request.headers.get("Authorization"))
+    user = await _authenticated_user(request, auth)
     if not user:
         return _local_error(401, "Invalid API key", "authentication_error", "local_auth")
     if not user.get("enabled"):
@@ -336,6 +401,9 @@ async def openai_responses(request: Request):
         return JSONResponse({"error": {"message": "request body must be valid JSON", "type": "invalid_request_error"}}, status_code=400)
     if not isinstance(payload, dict):
         return JSONResponse({"error": {"message": "request body must be a JSON object", "type": "invalid_request_error"}}, status_code=400)
+    model_error = _model_permission_error(request, user, str(payload.get("model") or service.model_name))
+    if model_error is not None:
+        return model_error
     subscription_response = await maybe_proxy_openai_subscription(request, payload, user)
     if subscription_response is not None:
         return subscription_response
@@ -384,6 +452,7 @@ async def openai_responses(request: Request):
                 item_id = "msg_" + uuid.uuid4().hex
                 sequence = 0
                 item_started = False
+                billing_started = False
 
                 def next_sequence() -> int:
                     nonlocal sequence
@@ -535,6 +604,7 @@ async def openai_responses(request: Request):
                         "completion_tokens": int((usage_meta or {}).get("completion_tokens", (usage_meta or {}).get("output_tokens", service.estimate_tokens(answer))) or service.estimate_tokens(answer)),
                     }
                     usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
+                    billing_started = True
                     ok, cost, record = await asyncio.to_thread(service.charge_and_record, user["id"], model, usage)
                     if not ok:
                         await complete_conversation(await resolve_conversation(), {"error": {"message": "Insufficient balance"}}, "", usage, 0, "BILLING_FAILED", "Insufficient balance")
@@ -550,6 +620,27 @@ async def openai_responses(request: Request):
                     await complete_conversation(await resolve_conversation(), {"proxy_response": response_body, "upstream": metadata}, answer, usage, cost)
                     yield _responses_event("response.completed", {"type": "response.completed", "sequence_number": next_sequence(), "response": response_body})
                     yield "data: [DONE]\n\n"
+                except (asyncio.CancelledError, GeneratorExit):
+                    answer = "".join(answer_parts)
+                    usage = {
+                        "prompt_tokens": prompt_tokens or _estimate_payload_tokens(service, payload, "input"),
+                        "completion_tokens": max(0, int(service.estimate_tokens(answer))) if answer else 0,
+                    }
+                    usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
+                    if billing_started:
+                        ok, cost = True, 0
+                    else:
+                        billing_started = True
+                        ok, cost, _ = await asyncio.to_thread(service.charge_and_record, user["id"], model, usage)
+                    await complete_conversation(
+                        await resolve_conversation(), None, "", usage, cost if ok else 0,
+                        "CANCELLED" if ok else "BILLING_FAILED", None,
+                    )
+                    try:
+                        await iterator.aclose()
+                    except Exception:
+                        pass
+                    raise
                 except Exception as exc:
                     await fail_conversation(exc)
                     yield _responses_event("error", {"type": "error", "error": {"message": str(exc), "type": "upstream_error"}})
@@ -595,14 +686,14 @@ async def openai_responses(request: Request):
 async def openai_models(request: Request):
     """Expose a small OpenAI-compatible model directory for client probing."""
     service, auth, _ = _beans(request)
-    user = await asyncio.to_thread(auth.user_from_authorization, request.headers.get("Authorization"))
+    user = await _authenticated_user(request, auth)
     if not user:
         return _local_error(401, "Invalid API key", "authentication_error", "local_auth")
     now = int(time.time())
     data = []
     context = request.app.state.spring_application.application_context
     subscription_gateway = context.get_bean("subscription_gateway_service")
-    catalog = service.catalog() + subscription_gateway.catalog()
+    catalog = _group_service(request).filter_catalog(user, service.catalog() + subscription_gateway.catalog())
     seen = set()
     for item in catalog:
         if not item.get("enabled"):

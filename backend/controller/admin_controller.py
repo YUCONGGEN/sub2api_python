@@ -108,9 +108,50 @@ class AdminController:
         result = self.store.list_users(keyword, page, page_size)
         return ok({"ok": True, "users": result["items"], "pagination": result})
 
+    @GetMapping("/user-groups")
+    def user_groups(self, authorization: str = RequestHeader(name="Authorization", required=False), page: int = RequestParam(name="page", required=False, default=1), page_size: int = RequestParam(name="page_size", required=False, default=5)):
+        if not self.admin(authorization):
+            return forbidden()
+        result = self.store.list_user_groups(page, page_size)
+        return ok({"ok": True, "groups": result["items"], "pagination": result})
+
+    @PostMapping("/user-groups")
+    def create_user_group(self, body: dict = RequestBody(), authorization: str = RequestHeader(name="Authorization", required=False)):
+        if not self.admin(authorization):
+            return forbidden()
+        try:
+            group = self.store.create_user_group(body)
+        except (TypeError, ValueError) as exc:
+            return bad(str(exc) or "用户组参数不正确")
+        except Exception:
+            return bad("用户组名称已存在", 409)
+        return ok({"ok": True, "group": group}, "用户组已创建")
+
+    @PatchMapping("/user-groups/{group_id}")
+    def update_user_group(self, group_id: int = PathVariable(name="group_id"), body: dict = RequestBody(), authorization: str = RequestHeader(name="Authorization", required=False)):
+        if not self.admin(authorization):
+            return forbidden()
+        try:
+            group = self.store.update_user_group(group_id, body)
+        except (TypeError, ValueError) as exc:
+            return bad(str(exc) or "用户组参数不正确")
+        except Exception:
+            return bad("用户组名称已存在", 409)
+        return ok({"ok": True, "group": group}, "用户组已更新") if group else not_found("用户组不存在")
+
+    @DeleteMapping("/user-groups/{group_id}")
+    def delete_user_group(self, group_id: int = PathVariable(name="group_id"), authorization: str = RequestHeader(name="Authorization", required=False)):
+        if not self.admin(authorization):
+            return forbidden()
+        try:
+            deleted = self.store.delete_user_group(group_id)
+        except ValueError as exc:
+            return bad(str(exc), 409)
+        return ok({"ok": True}, "用户组已删除，原成员已转入默认组") if deleted else not_found("用户组不存在")
+
     @PostMapping("/users")
     def create_user(self, body: dict = RequestBody(), authorization: str = RequestHeader(name="Authorization", required=False)):
-        """Create an end-user account without exposing or generating an API key."""
+        """Create an account and reveal its first API key exactly once."""
         if not self.admin(authorization):
             return forbidden()
         username = str(body.get("username", "")).strip()
@@ -132,17 +173,26 @@ class AdminController:
         if not math.isfinite(balance) or balance < -0.1 or balance > 1_000_000_000:
             return bad("初始余额必须在 -0.1 到 1000000000 元之间")
         try:
-            user = self.store.create_user(
+            group_id = int(body["group_id"]) if body.get("group_id") not in (None, "") else None
+            user, default_key = self.store.create_user_with_default_key(
                 username,
                 password,
                 email,
                 role,
                 balance=balance,
                 enabled=as_bool(body.get("enabled"), True),
+                group_id=group_id,
             )
+        except ValueError as exc:
+            return bad(str(exc) or "用户组不正确")
         except Exception:
             return bad("创建失败，账户名可能已存在", 409)
-        return ok({"ok": True, "user": self.store.public_user(user)})
+        return ok({
+            "ok": True,
+            "user": self.store.public_user(user),
+            "api_key": default_key.get("api_key"),
+            "api_key_id": default_key.get("id"),
+        })
 
     @PatchMapping("/users/{user_id}")
     def update_user(self, user_id: int = PathVariable(name="user_id"), body: dict = RequestBody(), authorization: str = RequestHeader(name="Authorization", required=False)):
@@ -171,7 +221,12 @@ class AdminController:
                 if len(password) < 6 or len(password) > 128:
                     return bad("密码长度需为 6-128 位")
                 changes["password"] = password
-        user = self.store.update_user(user_id, **changes)
+        if "group_id" in body:
+            changes["group_id"] = body.get("group_id")
+        try:
+            user = self.store.update_user(user_id, **changes)
+        except ValueError as exc:
+            return bad(str(exc) or "用户参数不正确")
         if not user:
             return not_found("用户不存在")
         return ok({"ok": True, "user": user})
@@ -280,10 +335,13 @@ class AdminController:
         try:
             amount = round(float(body.get("amount", 0)), 2)
             count = int(body.get("count", 1))
+            expire_hours = int(body.get("expire_hours", 48))
         except (TypeError, ValueError):
-            return bad("金额和数量必须是数字")
+            return bad("金额、数量和有效期必须是数字")
         if not math.isfinite(amount) or amount <= 0 or amount > 1_000_000 or count < 1 or count > 500:
             return bad("金额或生成数量超出范围")
+        if expire_hours < 1 or expire_hours > 24 * 365:
+            return bad("兑换码有效期必须在 1 小时到 365 天之间")
         alphabet = string.ascii_uppercase + string.digits
         billing = get_config().get("rose", {}).get("billing", {})
         configured_prefix = str(billing.get("recharge-code-prefix", "CODE")).strip().upper()
@@ -292,14 +350,14 @@ class AdminController:
         for _ in range(count):
             code = prefix + "-" + "-".join("".join(secrets.choice(alphabet) for _ in range(4)) for _ in range(3))
             try:
-                row = self.store.create_recharge_code(amount, admin["id"], code)
+                row = self.store.create_recharge_code(amount, admin["id"], code, expire_hours)
             except Exception:
                 continue
             row["code"] = code
             result.append(row)
         if not result:
             return bad("兑换码生成失败，请稍后重试")
-        return ok({"ok": True, "codes": result})
+        return ok({"ok": True, "codes": result, "expire_hours": expire_hours})
 
     @GetMapping("/recharge-codes")
     def recharge_codes(self, authorization: str = RequestHeader(name="Authorization", required=False), page: int = RequestParam(name="page", required=False, default=1), page_size: int = RequestParam(name="page_size", required=False, default=5)):

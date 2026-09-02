@@ -1,26 +1,33 @@
-from springbootai.annotations import Autowired, GetMapping, RequestMapping, RestController, RequestParam
+from springbootai.annotations import Autowired, GetMapping, RequestHeader, RequestMapping, RestController, RequestParam
 
 from backend.service.ai_service import AiGatewayService
 from backend.service.subscription_gateway_service import SubscriptionGatewayService
-from backend.common.response import ok
+from backend.service.auth_service import AuthService
+from backend.service.user_group_service import UserGroupService
+from backend.common.response import ok, unauthorized
 
 
 @RestController
 @RequestMapping("/api/models")
 class ModelController:
     @Autowired
-    def __init__(self, gateway: AiGatewayService, subscription_gateway: SubscriptionGatewayService):
+    def __init__(self, gateway: AiGatewayService, subscription_gateway: SubscriptionGatewayService, auth: AuthService, user_group_service: UserGroupService):
         self.gateway = gateway
         self.subscription_gateway = subscription_gateway
+        self.auth = auth
+        self.groups = user_group_service
 
     @GetMapping("")
-    def models(self, page: int = RequestParam(name="page", required=False, default=1), page_size: int = RequestParam(name="page_size", required=False, default=12), query: str = RequestParam(name="query", required=False, default=""), group: str = RequestParam(name="group", required=False, default=""), provider: str = RequestParam(name="provider", required=False, default=""), availability: str = RequestParam(name="availability", required=False, default="")):
+    def models(self, page: int = RequestParam(name="page", required=False, default=1), page_size: int = RequestParam(name="page_size", required=False, default=12), query: str = RequestParam(name="query", required=False, default=""), group: str = RequestParam(name="group", required=False, default=""), provider: str = RequestParam(name="provider", required=False, default=""), availability: str = RequestParam(name="availability", required=False, default=""), authorization: str = RequestHeader(name="Authorization", required=False)):
+        user = self.auth.user_from_authorization(authorization)
+        if not user:
+            return unauthorized()
         configured_models = self.gateway.catalog()
         subscription_models = self.subscription_gateway.catalog()
         by_id = {str(item.get("id")): item for item in configured_models}
         for item in subscription_models:
             by_id.setdefault(str(item.get("id")), item)
-        all_models = list(by_id.values())
+        all_models = self.groups.filter_catalog(user, list(by_id.values()))
         # Filter against the complete configured catalog before pagination.
         # The UI still receives at most five records per page.
         query_text = str(query or "").strip().lower()

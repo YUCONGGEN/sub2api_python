@@ -39,10 +39,17 @@ class AuthController:
         if self.store.find_by_username(username):
             return bad("账户已存在", 409)
         try:
-            user = self.store.create_user(username, password, email)
+            user, default_key = self.store.create_user_with_default_key(username, password, email)
         except Exception:
             return bad("注册失败，请更换账户名", 409)
-        return ok({"ok": True, "token": self.auth.issue_token(user, user_agent, str(forwarded_for or "").split(",")[0].strip()), "user": self.store.public_user(user)})
+        return ok({
+            "ok": True,
+            "token": self.auth.issue_token(user, user_agent, str(forwarded_for or "").split(",")[0].strip()),
+            "user": self.store.public_user(user),
+            # Plaintext is returned once and is never stored server-side.
+            "api_key": default_key.get("api_key"),
+            "api_key_id": default_key.get("id"),
+        })
 
     @GetMapping("/me")
     def me(self, authorization: str = RequestHeader(name="Authorization", required=False)):
@@ -53,7 +60,7 @@ class AuthController:
 
     @PostMapping("/rotate-key")
     def rotate_key(self, authorization: str = RequestHeader(name="Authorization", required=False)):
-        return bad("系统不再提供默认密钥，请到 API 密钥页面创建命名密钥", 410)
+        return bad("首枚默认密钥只在注册时生成一次；如需更换，请到 API 密钥页面创建命名密钥", 410)
 
     @PatchMapping("/profile")
     def profile(self, body: dict = RequestBody(), authorization: str = RequestHeader(name="Authorization", required=False)):

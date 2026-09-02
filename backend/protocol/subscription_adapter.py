@@ -30,12 +30,24 @@ def _claude_chat_compatibility(request: Request) -> ClaudeChatCompatibilityServi
     return context.get_bean("claude_chat_compatibility_service")
 
 
+def _groups(request: Request):
+    context = request.app.state.spring_application.application_context
+    return context.get_bean("user_group_service")
+
+
 def _local_authorization(request: Request) -> str:
     authorization = str(request.headers.get("Authorization") or "").strip()
     if authorization:
         return authorization
     api_key = str(request.headers.get("x-api-key") or "").strip()
     return f"Bearer {api_key}" if api_key else ""
+
+
+async def _authenticated_user(request: Request, auth: AuthService):
+    cached = request.scope.get("state", {}).get("rose_user")
+    if cached:
+        return cached
+    return await asyncio.to_thread(auth.user_from_authorization, _local_authorization(request))
 
 
 def _error(status: int, message: str, error_type: str = "invalid_request_error", source: str = "") -> Response:
@@ -125,6 +137,8 @@ async def maybe_proxy_claude_chat_subscription(request: Request, payload: dict[s
     """Route matching Chat Completions models through the Claude account pool."""
     gateway, _ = _beans(request)
     model = str(payload.get("model") or "").strip()
+    if not _groups(request).model_allowed(user, model):
+        return _error(403, f"当前用户组不允许使用模型 {model or '<empty>'}", "model_not_allowed", "user_group_policy")
     if not gateway.should_route("claude", model):
         return None
     compatibility = _claude_chat_compatibility(request)
@@ -167,7 +181,7 @@ async def maybe_proxy_claude_chat_subscription(request: Request, payload: dict[s
 
 async def anthropic_messages(request: Request):
     gateway, auth = _beans(request)
-    user = await asyncio.to_thread(auth.user_from_authorization, _local_authorization(request))
+    user = await _authenticated_user(request, auth)
     if not user:
         return _error(401, "Invalid API key", "authentication_error", "local_auth")
     if not user.get("enabled"):
@@ -181,6 +195,8 @@ async def anthropic_messages(request: Request):
     if not isinstance(payload, dict):
         return _error(400, "request body must be a JSON object")
     model = str(payload.get("model") or "").strip()
+    if not _groups(request).model_allowed(user, model):
+        return _error(403, f"当前用户组不允许使用模型 {model or '<empty>'}", "model_not_allowed", "user_group_policy")
     if not gateway.should_route("claude", model):
         return _error(503, f"没有可用于模型 {model or '<empty>'} 的 Claude 订阅账号", "service_unavailable")
     incoming = {key.lower(): value for key, value in request.headers.items()}
@@ -190,11 +206,13 @@ async def anthropic_messages(request: Request):
 
 async def anthropic_count_tokens(request: Request):
     gateway, auth = _beans(request)
-    user = await asyncio.to_thread(auth.user_from_authorization, _local_authorization(request))
+    user = await _authenticated_user(request, auth)
     if not user:
         return _error(401, "Invalid API key", "authentication_error", "local_auth")
     if not user.get("enabled"):
         return _error(403, "Account disabled", "permission_error")
+    if not await asyncio.to_thread(gateway.store.has_usable_balance, int(user["id"])):
+        return _error(402, "Insufficient balance", "insufficient_quota", "local_billing")
     try:
         payload = await request.json()
     except Exception:
@@ -202,6 +220,8 @@ async def anthropic_count_tokens(request: Request):
     if not isinstance(payload, dict):
         return _error(400, "request body must be a JSON object")
     model = str(payload.get("model") or "").strip()
+    if not _groups(request).model_allowed(user, model):
+        return _error(403, f"当前用户组不允许使用模型 {model or '<empty>'}", "model_not_allowed", "user_group_policy")
     if not gateway.should_route("claude", model):
         return _error(503, f"没有可用于模型 {model or '<empty>'} 的 Claude 订阅账号", "service_unavailable")
     incoming = {key.lower(): value for key, value in request.headers.items()}

@@ -24,7 +24,7 @@ class StoreMapper:
     def find_user_by_api_key(self, api_key_hash: str) -> Mapping[str, Any] | None:
         pass
 
-    def touch_api_key(self, api_key_hash: str, last_used: str) -> int:
+    def touch_api_key(self, api_key_hash: str, last_used: str, touch_before: str) -> int:
         pass
 
     def insert_user(self, user: Mapping[str, Any]) -> int:
@@ -58,6 +58,45 @@ class StoreMapper:
         pass
 
     def list_users(self, keyword: str = "", offset: int = 0, limit: int = 5) -> list[dict]:
+        pass
+
+    def find_user_group(self, group_id: int) -> Mapping[str, Any] | None:
+        pass
+
+    def find_default_user_group(self) -> Mapping[str, Any] | None:
+        pass
+
+    def find_named_user_group(self, name: str) -> Mapping[str, Any] | None:
+        pass
+
+    def find_user_group_by_weight(self, weight: int, exclude_group_id: int | None = None) -> Mapping[str, Any] | None:
+        pass
+
+    def count_user_groups(self) -> int:
+        pass
+
+    def list_user_groups(self, offset: int = 0, limit: int = 5) -> list[dict]:
+        pass
+
+    def insert_user_group(self, group: Mapping[str, Any]) -> int:
+        pass
+
+    def update_user_group(self, group_id: int, changes: Mapping[str, Any]) -> int:
+        pass
+
+    def clear_default_user_groups(self, group_id: int, updated_at: str) -> int:
+        pass
+
+    def assign_users_to_group(self, source_group_id: int, target_group_id: int) -> int:
+        pass
+
+    def clear_subscription_plan_group(self, group_id: int, updated_at: str) -> int:
+        pass
+
+    def list_active_subscription_group_candidates(self, user_id: int, now: str) -> list[dict]:
+        pass
+
+    def delete_user_group(self, group_id: int) -> int:
         pass
 
     def soft_delete_user(self, user_id: int, anonymized_username: str, password_hash: str, revoked_key: str, deleted_at: str) -> int:

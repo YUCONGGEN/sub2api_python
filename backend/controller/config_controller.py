@@ -22,7 +22,7 @@ class ConfigController:
         """
         raw = str(value or "").strip()
         if not raw:
-            raw = "http://localhost:8241"
+            raw = "http://www.yucg.cn:8241"
         if "://" not in raw:
             raw = "http://" + raw.lstrip("/")
         parsed = urlsplit(raw)

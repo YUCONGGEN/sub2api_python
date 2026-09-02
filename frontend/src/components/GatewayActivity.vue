@@ -17,7 +17,7 @@
         <div v-for="item in queuedUsers" :key="`queued-${item.request_id}`" class="activity-row">
           <div class="activity-user"><router-link :to="`/admin/users/${item.user_id}`">@{{ item.username }}</router-link><span>请求 #{{ item.request_id }}</span></div>
           <div class="activity-tags"><span>模型 {{ item.model || '未知' }}</span><span>推理强度 {{ reasoningLabel(item.reasoning_effort) }}</span><span>该用户并发 {{ item.user_concurrent_tasks || 0 }}</span></div>
-          <small>{{ providerLabel(item.provider) }} · 等待账号 #{{ item.account_id }} · 该用户排队 {{ item.user_queued_tasks || 1 }} · 已排队 {{ elapsed(item.queued_at) }}</small>
+          <small v-if="item.provider === '用户组并发'">{{ item.group_name || '用户组' }} · 每人并发 {{ item.concurrency_limit || 1 }} · 该用户排队 {{ item.user_queued_tasks || 1 }} · 已排队 {{ elapsed(item.queued_at) }}</small><small v-else>{{ providerLabel(item.provider) }} · 等待账号 #{{ item.account_id }} · 该用户排队 {{ item.user_queued_tasks || 1 }} · 已排队 {{ elapsed(item.queued_at) }}</small>
         </div>
       </div>
       <div v-else class="activity-empty">当前没有用户排队</div>

@@ -1,4 +1,16 @@
 -- Fresh MySQL schema for the SpringBootAI proxy. Existing SQLite data is not migrated.
+CREATE TABLE IF NOT EXISTS user_groups (
+  id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(120) NOT NULL UNIQUE,
+  description VARCHAR(500) NOT NULL DEFAULT '',
+  weight INT NOT NULL DEFAULT 0,
+  concurrency_limit INT NOT NULL DEFAULT 1,
+  allowed_models_json LONGTEXT NOT NULL,
+  is_default TINYINT NOT NULL DEFAULT 0,
+  created_at VARCHAR(40) NOT NULL,
+  updated_at VARCHAR(40) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS users (
   id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
   username VARCHAR(64) NOT NULL UNIQUE,
@@ -11,7 +23,9 @@ CREATE TABLE IF NOT EXISTS users (
   created_at VARCHAR(40) NOT NULL,
   last_login VARCHAR(40),
   session_version BIGINT NOT NULL DEFAULT 0,
-  deleted_at VARCHAR(40)
+  deleted_at VARCHAR(40),
+  group_id BIGINT,
+  KEY idx_users_group (group_id, deleted_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Fresh installs include the initial administrator.  The stored value is a
@@ -122,7 +136,8 @@ CREATE TABLE IF NOT EXISTS payment_listener_status (
 CREATE TABLE IF NOT EXISTS subscription_plans (
   id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY, name VARCHAR(120) NOT NULL UNIQUE, description TEXT NOT NULL,
   price DECIMAL(20,8) NOT NULL DEFAULT 0, duration_days INT NOT NULL DEFAULT 30, daily_amount DECIMAL(20,8) NOT NULL DEFAULT 0,
-  daily_tokens BIGINT NOT NULL DEFAULT 0, enabled TINYINT NOT NULL DEFAULT 1, created_at VARCHAR(40) NOT NULL, updated_at VARCHAR(40) NOT NULL
+  daily_tokens BIGINT NOT NULL DEFAULT 0, group_id BIGINT, enabled TINYINT NOT NULL DEFAULT 1, created_at VARCHAR(40) NOT NULL, updated_at VARCHAR(40) NOT NULL,
+  KEY idx_subscription_plans_group (group_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS user_subscriptions (
   id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL, plan_id BIGINT NOT NULL, starts_at VARCHAR(40) NOT NULL,

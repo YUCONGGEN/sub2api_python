@@ -41,6 +41,8 @@ class KeyController:
                 return bad("过期时间格式不正确")
         try:
             key = self.store.create_api_key(user["id"], name, str(expires_at) if expires_at else None)
+        except ValueError as exc:
+            return bad(str(exc))
         except Exception:
             return bad("创建密钥失败，请稍后重试")
         return ok({"ok": True, "key": key})

@@ -5,9 +5,12 @@
     <div class="codex-auth-snow" aria-hidden="true"><span></span><span></span><span></span></div>
 
     <header class="codex-auth-header">
-      <div class="codex-auth-brand">
-        <span class="codex-auth-mark" aria-hidden="true">↗</span>
-        <span>{{ appName }}</span>
+      <div class="codex-auth-brand-cluster">
+        <div class="codex-auth-brand">
+          <span class="codex-auth-mark" aria-hidden="true">↗</span>
+          <span>{{ appName }}</span>
+        </div>
+        <router-link class="codex-auth-docs-link" to="/docs"><i aria-hidden="true">⌘</i><span>配置教程</span><b aria-hidden="true">↗</b></router-link>
       </div>
       <router-link class="codex-auth-header-action" to="/register">注册账户</router-link>
     </header>
@@ -40,12 +43,12 @@
       </section>
     </main>
 
-    <footer class="codex-auth-footer"><span>{{ appName }}</span><span>AI GATEWAY · 2026</span></footer>
+    <footer class="codex-auth-footer"><div class="codex-auth-footer-left"><span>{{ appName }}</span><a href="https://github.com/YUCONGGEN/sub2api_python" target="_blank" rel="noopener"><i aria-hidden="true">GH</i><span>GitHub</span><b aria-hidden="true">↗</b></a></div><span>AI GATEWAY · 2026</span></footer>
   </div>
 </template>
 <script>
 import { api } from '../api'
-export default { props: { appName: String }, data: () => ({ form: { username: '', password: '' }, loading: false, error: '' }), methods: { async submit () { this.error = ''; this.loading = true; try { const data = await api.login(this.form); if (!data.ok) throw new Error(data.message); localStorage.setItem('rose_token', data.token); this.$router.push('/dashboard') } catch (e) { this.error = e.message } finally { this.loading = false } } } }
+export default { props: { appName: String }, data: () => ({ form: { username: '', password: '' }, loading: false, error: '' }), methods: { async submit () { this.error = ''; this.loading = true; try { const data = await api.login(this.form); if (!data.ok) throw new Error(data.message); window.sessionStorage.removeItem('rose_fresh_api_key'); localStorage.setItem('rose_token', data.token); this.$router.push('/dashboard') } catch (e) { this.error = e.message } finally { this.loading = false } } } }
 </script>
 
 

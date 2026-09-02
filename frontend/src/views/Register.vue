@@ -15,9 +15,9 @@
     <main class="codex-auth-main">
       <section class="codex-auth-hero">
         <div class="codex-auth-kicker"><i></i> START BUILDING</div>
-        <p>注册后自主创建 API 密钥，按实际 Token 用量透明计费，并在一个控制台里查看全部调用状态。</p>
+        <p>注册后自动生成首枚 API 密钥，按实际 Token 用量透明计费，并在一个控制台里查看全部调用状态。</p>
         <div class="codex-auth-features" aria-label="平台特性">
-          <span>按需创建密钥</span>
+          <span>自动生成首枚密钥</span>
           <span>透明额度管理</span>
           <span>统一 API 接入</span>
         </div>
@@ -27,7 +27,7 @@
         <div class="codex-auth-panel-head">
           <span>CREATE ACCOUNT</span>
           <h2 id="register-title">创建账户</h2>
-          <p>注册后请前往 API 密钥页面创建密钥。</p>
+          <p>注册成功会自动生成首枚密钥，并填入配置教程。</p>
         </div>
         <form @submit.prevent="submit" novalidate>
           <label>账户名<input v-model.trim="form.username" autocomplete="username" minlength="3" maxlength="32" placeholder="至少 3 位字符" /></label>
@@ -77,7 +77,8 @@ export default {
         const data = await api.register({ username: this.form.username, password: this.form.password, email: this.form.email })
         if (!data.ok) throw new Error(data.message || '注册失败，请稍后重试')
         localStorage.setItem('rose_token', data.token)
-        this.$router.push('/dashboard')
+        if (data.api_key) window.sessionStorage.setItem('rose_fresh_api_key', data.api_key)
+        this.$router.push('/docs')
       } catch (e) {
         this.showError(e.message || '注册失败，请稍后重试')
       } finally {

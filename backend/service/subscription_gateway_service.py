@@ -16,6 +16,7 @@ from springbootai import Autowired, PostConstruct, PreDestroy, Service, Slf4j, g
 
 from backend.service.store_service import StoreService
 from backend.service.subscription_account_service import SubscriptionAccountService
+from backend.service.user_group_service import user_group_runtime
 
 
 OPENAI_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses"
@@ -272,6 +273,14 @@ class SubscriptionGatewayService:
             snapshot["queued_users"] = [
                 with_username(item) for item in sorted(queued_activities, key=lambda row: row.get("queued_at") or "")
             ]
+        group_runtime = user_group_runtime()
+        if group_runtime:
+            group_queue = group_runtime.queue_metrics(include_users=include_users)
+            snapshot["queue_waiting"] += int(group_queue.get("queue_waiting") or 0)
+            snapshot["queued_total"] += int(group_queue.get("queued_total") or 0)
+            snapshot["queue_rejected"] += int(group_queue.get("queue_rejected") or 0)
+            if include_users:
+                snapshot["queued_users"] = list(snapshot.get("queued_users") or []) + list(group_queue.get("queued_users") or [])
         try:
             rows = self.accounts.repository.list_provider("openai") + self.accounts.repository.list_provider("claude")
             now = datetime.now(timezone.utc)
@@ -674,6 +683,7 @@ class SubscriptionGatewayService:
                         stream=self._stream_and_bill(
                             response, provider, account, user_id, model, semaphore,
                             iterator=stream_iterator, prefix=stream_prefix, activity_id=activity_id,
+                            fallback_input_tokens=self._estimate_input_tokens(payload),
                         ),
                     )
                 body = await response.aread()
@@ -726,13 +736,17 @@ class SubscriptionGatewayService:
         iterator: AsyncIterator[bytes] | None = None,
         prefix: bytes = b"",
         activity_id: int = 0,
+        fallback_input_tokens: int = 0,
     ) -> AsyncIterator[bytes]:
         line_buffer = b""
         usage = {"input_tokens": 0, "output_tokens": 0}
         terminal_failure = ""
+        observed_bytes = 0
+        billing_started = False
 
         def observe(chunk: bytes) -> None:
-            nonlocal line_buffer, terminal_failure
+            nonlocal line_buffer, terminal_failure, observed_bytes
+            observed_bytes += len(chunk)
             line_buffer += chunk
             lines = line_buffer.split(b"\n")
             line_buffer = lines.pop()
@@ -766,6 +780,7 @@ class SubscriptionGatewayService:
                     provider, model, int(account["id"]), user_id, not overloaded, terminal_failure[:300],
                 )
                 return
+            billing_started = True
             billing_error = await self._bill(user_id, model, account, usage)
             if billing_error:
                 self.logger.warning(
@@ -778,7 +793,21 @@ class SubscriptionGatewayService:
                 provider, model, int(account["id"]), user_id,
                 usage["input_tokens"], usage["output_tokens"],
             )
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, GeneratorExit):
+            # The terminal usage event is often absent after a disconnect.
+            # Conservatively settle the observed stream so disconnecting does
+            # not bypass billing; normal streaming remains unbuffered.
+            usage["input_tokens"] = max(int(usage.get("input_tokens") or 0), int(fallback_input_tokens or 0))
+            if not usage.get("output_tokens") and observed_bytes:
+                usage["output_tokens"] = max(1, observed_bytes // 12)
+            if not billing_started:
+                try:
+                    await self._bill(user_id, model, account, usage)
+                except Exception:
+                    self.logger.warning(
+                        "订阅网关客户端断开后的计费失败 provider=%s model=%s account_id=%s user_id=%s",
+                        provider, model, int(account["id"]), user_id,
+                    )
             raise
         except Exception as exc:
             self.accounts.record_failure(account, 502, str(exc))
@@ -837,6 +866,20 @@ class SubscriptionGatewayService:
         except (ValueError, UnicodeError):
             return None
         return payload if isinstance(payload, dict) else None
+
+    @staticmethod
+    def _estimate_input_tokens(payload: dict[str, Any]) -> int:
+        """Cheap fallback used only when a disconnected stream has no usage event."""
+        try:
+            relevant = {
+                key: payload.get(key)
+                for key in ("input", "messages", "instructions", "system", "tools")
+                if payload.get(key) not in (None, "", [])
+            }
+            size = len(json.dumps(relevant, ensure_ascii=False, separators=(",", ":")))
+            return max(1, math.ceil(size / 4))
+        except Exception:
+            return 1
 
     @classmethod
     def _failure_from_payload(cls, payload: dict[str, Any]) -> str:

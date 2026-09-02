@@ -56,7 +56,7 @@
 
             <article class="codex-step">
               <div class="codex-step-index">03</div>
-              <div class="codex-step-body"><h3>配置用户级 config.toml</h3><p>桌面版和 Windows 原生 CLI 共用 <code>%USERPROFILE%\.codex</code>。创建并打开其中的 <code>config.toml</code>，粘贴下面内容，再把 <code>&lt;粘贴本站 API Key&gt;</code> 替换为刚创建的完整密钥。必须使用当前本站生成的 <code>sk-api-...</code>，不能沿用其他站点或上游账号的 Key。供应商配置必须放在用户级文件中，不能放在项目目录的 <code>.codex/config.toml</code>。</p><div class="code-block large"><div class="code-head"><span>~/.codex/config.toml</span><button @click="copy(codexConfigText)">复制</button></div><pre>{{ codexConfigText }}</pre></div><div class="codex-file-command"><code>notepad "$env:USERPROFILE\.codex\config.toml"</code><button @click="copy(codexOpenConfigCommand)">复制打开命令</button></div></div>
+              <div class="codex-step-body"><h3>完整替换用户级 config.toml</h3><p>桌面版和 Windows 原生 CLI 共用 <code>%USERPROFILE%\.codex</code>。创建并打开其中的 <code>config.toml</code>，<strong>先删除文件内原有的全部内容，再用下面的配置完整替换，不能追加或只修改其中一部分</strong>。随后把 <code>&lt;粘贴本站 API Key&gt;</code> 替换为刚创建的完整密钥。必须使用当前本站生成的 <code>sk-api-...</code>，不能沿用其他站点或上游账号的 Key。供应商配置必须放在用户级文件中，不能放在项目目录的 <code>.codex/config.toml</code>。</p><div class="code-block large"><div class="code-head"><span>config.toml 完整文件内容（全部替换）</span><button @click="copy(codexConfigText)">复制完整配置</button></div><pre>{{ codexConfigText }}</pre></div><div class="codex-file-command"><code>notepad "$env:USERPROFILE\.codex\config.toml"</code><button @click="copy(codexOpenConfigCommand)">复制打开命令</button></div></div>
             </article>
 
             <article class="codex-step">

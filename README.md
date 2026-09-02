@@ -2,6 +2,53 @@
 
 基于 `springbootAI` Python 框架和 Vue 2 的 OpenAI 兼容代理控制台。页面参考 Rose API 的信息架构，提供登录、模型广场、控制台、API Key、用量、充值订单和管理员用户管理。
 
+## 界面预览
+
+以下截图覆盖公开入口、普通用户控制台和管理员页面。点击图片可以查看原图。
+
+### 登录与注册
+
+<table>
+  <tr>
+    <td width="50%"><b>登录</b><br><a href="./docs/screenshots/login.png"><img src="./docs/screenshots/login.png" alt="登录页面"></a></td>
+    <td width="50%"><b>注册</b><br><a href="./docs/screenshots/register.png"><img src="./docs/screenshots/register.png" alt="注册页面"></a></td>
+  </tr>
+</table>
+
+### 用户控制台
+
+<table>
+  <tr>
+    <td width="50%"><b>控制台</b><br><a href="./docs/screenshots/dashboard.png"><img src="./docs/screenshots/dashboard.png" alt="控制台页面"></a></td>
+    <td width="50%"><b>模型广场</b><br><a href="./docs/screenshots/models.png"><img src="./docs/screenshots/models.png" alt="模型广场页面"></a></td>
+  </tr>
+  <tr>
+    <td width="50%"><b>余额与充值</b><br><a href="./docs/screenshots/billing.png"><img src="./docs/screenshots/billing.png" alt="余额与充值页面"></a></td>
+    <td width="50%"><b>配置教程</b><br><a href="./docs/screenshots/docs.png"><img src="./docs/screenshots/docs.png" alt="配置教程页面"></a></td>
+  </tr>
+  <tr>
+    <td width="50%"><b>模型监控</b><br><a href="./docs/screenshots/monitoring.png"><img src="./docs/screenshots/monitoring.png" alt="模型监控页面"></a></td>
+    <td width="50%"><b>API 密钥</b><br><a href="./docs/screenshots/api-keys.png"><img src="./docs/screenshots/api-keys.png" alt="API 密钥页面"></a></td>
+  </tr>
+  <tr>
+    <td width="50%"><b>个人资料与登录设备</b><br><a href="./docs/screenshots/profile.png"><img src="./docs/screenshots/profile.png" alt="个人资料和登录设备页面"></a></td>
+    <td width="50%"></td>
+  </tr>
+</table>
+
+### 管理后台
+
+<table>
+  <tr>
+    <td width="50%"><b>业务管理</b><br><a href="./docs/screenshots/admin.png"><img src="./docs/screenshots/admin.png" alt="管理后台业务管理页面"></a></td>
+    <td width="50%"><b>订阅账号池</b><br><a href="./docs/screenshots/subscription-accounts.png"><img src="./docs/screenshots/subscription-accounts.png" alt="订阅账号池页面"></a></td>
+  </tr>
+  <tr>
+    <td width="50%"><b>用户详情</b><br><a href="./docs/screenshots/admin-user-detail.png"><img src="./docs/screenshots/admin-user-detail.png" alt="管理后台用户详情页面"></a></td>
+    <td width="50%"></td>
+  </tr>
+</table>
+
 ## 快速启动
 
 ```powershell

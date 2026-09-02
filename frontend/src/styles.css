@@ -186,6 +186,15 @@ th{color:#6c8498;border-bottom-color:#dce7f0}td{border-bottom-color:#e8f0f5}
 .admin-user-page .page-head h1{font-size:42px;color:#1d3855}
 .admin-user-page .metric-grid{margin-bottom:18px}
 .admin-user-page .metric-card{min-height:140px}
+.admin-recent-usage{margin-top:18px}
+.admin-recent-usage>.panel-head{margin-bottom:18px}
+.admin-recent-usage .panel-note{margin:7px 0 0}
+.admin-activity-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:22px}
+.admin-activity-summary>div{min-width:0;padding:14px 15px;border:1px solid #d8e5ee;border-radius:11px;background:#f7fbfd}
+.admin-activity-summary small,.admin-activity-summary span{display:block;color:#73899a;font-size:10px}
+.admin-activity-summary strong{display:block;margin:7px 0 4px;color:#1d4c69;font:500 20px 'Playfair Display',Georgia,serif;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.admin-activity-summary .login-time{font:600 13px var(--mono)}
+.admin-usage-error{margin-bottom:18px}
 .account-control{position:relative;overflow:hidden;background:linear-gradient(145deg,#ffffff,#f0f6fc);border-color:#bcd4e5}
 .account-control::before{content:"";position:absolute;inset:0 0 auto;height:5px;background:linear-gradient(90deg,#176f88,#6b56a2,#b95772)}
 .account-control .panel-head{margin-bottom:22px}
@@ -282,6 +291,8 @@ th{color:#6c8498;border-bottom-color:#dce7f0}td{border-bottom-color:#e8f0f5}
 .bar-value span{position:absolute;left:50%;bottom:calc(100% + 5px);transform:translateX(-50%);font:9px var(--mono);color:#557088;white-space:nowrap}
 .bar-item small{font:9px var(--mono);color:#7890a3;white-space:nowrap}
 @media(max-width:900px){.admin-detail-grid{grid-template-columns:1fr}.account-control{order:-1}}
+@media(max-width:900px){.admin-activity-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:560px){.admin-activity-summary{grid-template-columns:1fr}}
 @media(min-width:1200px){
   .admin-user-page>.metric-grid{grid-template-columns:repeat(5,minmax(0,1fr))}
   .admin-user-page>.metric-grid .metric-card{min-width:0;padding:16px 15px}
@@ -710,6 +721,10 @@ html[data-theme="dark"] .panel::before,
 html[data-theme="dark"] .metric-card::before,
 html[data-theme="dark"] .model-card::before,
 html[data-theme="dark"] .monitor-card::before{opacity:.62}
+html[data-theme="dark"] .admin-activity-summary>div{background:#14232e;border-color:#294353}
+html[data-theme="dark"] .admin-activity-summary small,
+html[data-theme="dark"] .admin-activity-summary span{color:#8fa5b3}
+html[data-theme="dark"] .admin-activity-summary strong{color:#d5e2e9}
 html[data-theme="dark"] .page h1,
 html[data-theme="dark"] .panel-head h2,
 html[data-theme="dark"] .admin-section-heading h2,

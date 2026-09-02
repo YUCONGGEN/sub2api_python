@@ -82,9 +82,15 @@
         FROM usage_records WHERE user_id = #{user_id} AND (#{start_at} IS NULL OR created_at &gt;= #{start_at})
     </select>
     <select id="user_usage_daily">
-        SELECT substr(created_at,1,10) day, COALESCE(SUM(total_tokens),0) tokens, COALESCE(SUM(cost),0) cost, COUNT(*) requests
+        SELECT date(datetime(created_at, '+8 hours')) day, COALESCE(SUM(total_tokens),0) tokens, COALESCE(SUM(cost),0) cost, COUNT(*) requests
         FROM usage_records WHERE user_id = #{user_id} AND (#{start_at} IS NULL OR created_at &gt;= #{start_at})
-        GROUP BY substr(created_at,1,10) ORDER BY day ASC
+        GROUP BY date(datetime(created_at, '+8 hours')) ORDER BY day ASC
+    </select>
+    <select id="user_usage_daily" databaseId="mysql">
+        SELECT DATE(DATE_ADD(STR_TO_DATE(SUBSTRING(created_at,1,19), '%Y-%m-%dT%H:%i:%s'), INTERVAL 8 HOUR)) day,
+               COALESCE(SUM(total_tokens),0) tokens, COALESCE(SUM(cost),0) cost, COUNT(*) requests
+        FROM usage_records WHERE user_id = #{user_id} AND (#{start_at} IS NULL OR created_at &gt;= #{start_at})
+        GROUP BY DATE(DATE_ADD(STR_TO_DATE(SUBSTRING(created_at,1,19), '%Y-%m-%dT%H:%i:%s'), INTERVAL 8 HOUR)) ORDER BY day ASC
     </select>
     <select id="user_usage_by_model">
         SELECT model, COALESCE(SUM(total_tokens),0) tokens, COALESCE(SUM(cost),0) cost, COUNT(*) requests
@@ -408,23 +414,44 @@
     <select id="count_active_recharge_codes" resultType="int">SELECT COUNT(*) FROM recharge_codes WHERE status = 'ACTIVE'</select>
 
     <select id="admin_daily_usage">
-        SELECT substr(created_at,1,10) day,COUNT(*) requests,
+        SELECT date(datetime(created_at, '+8 hours')) day,COUNT(*) requests,
                COALESCE(SUM(total_tokens),0) total_tokens,
                COALESCE(SUM(cost),0) total_cost,
                COALESCE(SUM(CASE WHEN status IN ('FAILED','BILLING_FAILED') THEN 1 ELSE 0 END),0) failed_requests
         FROM usage_records
         WHERE created_at &gt;= #{start_at}
-        GROUP BY substr(created_at,1,10)
+        GROUP BY date(datetime(created_at, '+8 hours'))
+        ORDER BY day ASC
+        LIMIT #{limit}
+    </select>
+    <select id="admin_daily_usage" databaseId="mysql">
+        SELECT DATE(DATE_ADD(STR_TO_DATE(SUBSTRING(created_at,1,19), '%Y-%m-%dT%H:%i:%s'), INTERVAL 8 HOUR)) day,COUNT(*) requests,
+               COALESCE(SUM(total_tokens),0) total_tokens,
+               COALESCE(SUM(cost),0) total_cost,
+               COALESCE(SUM(CASE WHEN status IN ('FAILED','BILLING_FAILED') THEN 1 ELSE 0 END),0) failed_requests
+        FROM usage_records
+        WHERE created_at &gt;= #{start_at}
+        GROUP BY DATE(DATE_ADD(STR_TO_DATE(SUBSTRING(created_at,1,19), '%Y-%m-%dT%H:%i:%s'), INTERVAL 8 HOUR))
         ORDER BY day ASC
         LIMIT #{limit}
     </select>
     <select id="admin_daily_activity">
-        SELECT substr(created_at,1,10) day,
+        SELECT date(datetime(created_at, '+8 hours')) day,
                COUNT(DISTINCT user_id) active_users,
                COUNT(*) requests
         FROM usage_records
         WHERE created_at &gt;= #{start_at}
-        GROUP BY substr(created_at,1,10)
+        GROUP BY date(datetime(created_at, '+8 hours'))
+        ORDER BY day ASC
+        LIMIT #{limit}
+    </select>
+    <select id="admin_daily_activity" databaseId="mysql">
+        SELECT DATE(DATE_ADD(STR_TO_DATE(SUBSTRING(created_at,1,19), '%Y-%m-%dT%H:%i:%s'), INTERVAL 8 HOUR)) day,
+               COUNT(DISTINCT user_id) active_users,
+               COUNT(*) requests
+        FROM usage_records
+        WHERE created_at &gt;= #{start_at}
+        GROUP BY DATE(DATE_ADD(STR_TO_DATE(SUBSTRING(created_at,1,19), '%Y-%m-%dT%H:%i:%s'), INTERVAL 8 HOUR))
         ORDER BY day ASC
         LIMIT #{limit}
     </select>

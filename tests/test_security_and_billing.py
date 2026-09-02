@@ -2,6 +2,7 @@ import sqlite3
 import json
 
 from backend.controller.auth_controller import AuthController
+from backend.controller.admin_controller import AdminController
 from backend.repository.store import StoreRepository
 from backend.service.store_service import StoreService
 from backend.service.subscription_account_service import SubscriptionAccountService
@@ -128,6 +129,65 @@ def test_login_sessions_are_returned_as_a_server_side_page():
     assert result["pagination"] == {"page": 2, "page_size": 5, "total": 7, "pages": 2}
     assert result["sessions"][0]["current"] is True
     assert result["sessions"][1]["current"] is False
+
+
+class UsagePageMapper:
+    def __init__(self):
+        self.query = None
+
+    @staticmethod
+    def count_usage(user_id):
+        return 7
+
+    def list_usage(self, user_id, offset, limit):
+        self.query = (user_id, offset, limit)
+        return [{"id": 6, "model": "gpt-test", "total_tokens": 120, "cost": 0.02, "status": "SUCCEEDED"}]
+
+
+def test_recent_usage_uses_the_same_five_item_page_for_user_and_admin_views():
+    mapper = UsagePageMapper()
+    result = service_with(mapper).list_usage_page(9, page=2, page_size=20)
+
+    assert mapper.query == (9, 5, 5)
+    assert result["items"][0]["model"] == "gpt-test"
+    assert result["page"] == 2
+    assert result["page_size"] == 5
+    assert result["total"] == 7
+    assert result["pages"] == 2
+
+
+class AdminUsageStore:
+    def __init__(self):
+        self.query = None
+
+    @staticmethod
+    def find_user(user_id):
+        return {"id": user_id}
+
+    def list_usage_page(self, user_id, page, page_size):
+        self.query = (user_id, page, page_size)
+        return {"items": [{"id": 31}], "page": page, "page_size": page_size, "total": 1, "pages": 1}
+
+
+class AdminUsageAuth:
+    def __init__(self):
+        self.store = AdminUsageStore()
+
+    @staticmethod
+    def user_from_authorization(authorization):
+        return {"id": 1, "role": "ADMIN"}
+
+
+def test_admin_can_page_a_users_recent_usage_without_loading_the_whole_detail():
+    auth = AdminUsageAuth()
+    controller = AdminController(auth, object(), object())
+
+    response = controller.user_usage(7, "Bearer admin", page=2, page_size=5)
+
+    assert auth.store.query == (7, 2, 5)
+    assert response.data["ok"] is True
+    assert response.data["usage"] == [{"id": 31}]
+    assert response.data["pagination"]["page"] == 2
 
 
 class RevocationOnlyMapper:

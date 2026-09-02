@@ -18,6 +18,7 @@ except ImportError:  # SQLite-only installations do not need the optional import
     MySQLIntegrityError = type("MySQLIntegrityError", (Exception,), {})
 
 from backend.repository.store import StoreRepository
+from backend.common.time_utils import business_date_keys, business_day_start_utc, business_month_start_utc, business_week_start_utc
 
 
 def utc_now() -> str:
@@ -153,25 +154,34 @@ class StoreService:
         if not user:
             return None
         now = datetime.now(timezone.utc)
-        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-        week_start = (now - timedelta(days=now.weekday())).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        ).isoformat()
-        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+        day_start = business_day_start_utc(now).isoformat()
+        week_start = business_week_start_utc(now).isoformat()
+        month_start = business_month_start_utc(now).isoformat()
+        chart_start = business_day_start_utc(now - timedelta(days=13)).isoformat()
+        chart_rows = {}
+        for value in self.mapper.user_usage_daily(user_id, chart_start):
+            row = dict(value)
+            chart_rows[str(row.get("day"))] = row
+        chart = []
+        for day in business_date_keys(14, now):
+            chart.append({"day": day, "tokens": 0, "cost": 0, "requests": 0, **chart_rows.get(day, {})})
         usage = {
             "today": dict(self.mapper.count_user_usage(user_id, day_start)),
             "week": dict(self.mapper.count_user_usage(user_id, week_start)),
             "month": dict(self.mapper.count_user_usage(user_id, month_start)),
             "total": dict(self.mapper.count_user_usage(user_id, None)),
-            "chart": list(reversed(self.mapper.user_usage_daily(user_id, None))),
+            "chart": chart,
         }
         orders = self.list_orders(user_id, order_page, page_size)
+        recent_usage = self.list_usage_page(user_id, 1, 5)
         # Four wider cards per page keep the admin entitlement view readable.
         subscriptions = self.list_user_subscriptions(user_id, 1, 4)
         quotas = self.list_user_quotas(user_id, 1, 4)
         return {
             "user": self.public_user(user),
             "usage": usage,
+            "recent_usage": recent_usage["items"],
+            "recent_usage_pagination": recent_usage,
             "orders": orders["items"],
             "orders_pagination": orders,
             "subscriptions": subscriptions["items"],
@@ -581,12 +591,12 @@ class StoreService:
     def _subscription_with_usage(self, value: Mapping[str, Any], now: datetime) -> dict[str, Any]:
         row = dict(value)
         active = self._entitlement_active(row, now, "SUBSCRIPTION")
-        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        day_start = business_day_start_utc(now).isoformat()
         totals = dict(self.mapper.subscription_usage_totals(int(row.get("id") or 0), day_start, None))
         row["usage"] = {
             "active": active,
             "as_of": now.isoformat(),
-            "period": "UTC_DAY",
+            "period": "ASIA_SHANGHAI_DAY",
             "daily_amount": self._usage_dimension(
                 row.get("daily_amount") or 0, totals.get("subscription_cost") or 0, active, money=True
             ),
@@ -600,7 +610,7 @@ class StoreService:
         row = dict(value)
         active = self._entitlement_active(row, now, "FREE")
         quota_id = int(row.get("id") or 0)
-        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        day_start = business_day_start_utc(now).isoformat()
         daily = dict(self.mapper.quota_usage_totals(int(user_id), quota_id, day_start, None))
         try:
             window_hours = max(0.1, min(168.0, float(row.get("hourly_window_hours") or 1)))
@@ -611,7 +621,7 @@ class StoreService:
         row["usage"] = {
             "active": active,
             "as_of": now.isoformat(),
-            "period": "UTC_DAY",
+            "period": "ASIA_SHANGHAI_DAY",
             "daily_amount": self._usage_dimension(
                 row.get("daily_amount") or 0, daily.get("free_cost") or 0, active, money=True
             ),
@@ -942,7 +952,7 @@ class StoreService:
         """
         if kind == "FREE":
             identifier = int(entitlement.get("id") or 0)
-            daily_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+            daily_start = business_day_start_utc(now).isoformat()
             daily = dict(self.mapper.quota_usage_totals(int(user_id), identifier, daily_start, None))
             daily_amount = max(0.0, float(entitlement.get("daily_amount") or 0))
             daily_tokens = max(0, int(entitlement.get("daily_tokens") or 0))
@@ -958,7 +968,7 @@ class StoreService:
             used_hourly_tokens = max(0, int(hourly.get("free_tokens") or 0))
         else:
             identifier = int(entitlement.get("id") or 0)
-            daily_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+            daily_start = business_day_start_utc(now).isoformat()
             used = dict(self.mapper.subscription_usage_totals(identifier, daily_start, None))
             daily_amount = max(0.0, float(entitlement.get("daily_amount") or 0))
             daily_tokens = max(0, int(entitlement.get("daily_tokens") or 0))
@@ -1122,24 +1132,26 @@ class StoreService:
         # remainder of the request.
         return bool(self.mapper.has_active_entitlement(int(user_id), utc_now()))
 
-    def usage_summary(self, user_id: int, page: int = 1, page_size: int = 5) -> dict[str, Any]:
-        totals = dict(self.mapper.user_usage_totals(int(user_id)))
+    def list_usage_page(self, user_id: int, page: int = 1, page_size: int = 5) -> dict[str, Any]:
         page = max(1, int(page))
         page_size = max(1, min(int(page_size), 5))
         total = self.mapper.count_usage(int(user_id))
         recent = self.mapper.list_usage(int(user_id), (page - 1) * page_size, page_size)
+        return self.page_result(recent, total, page, page_size)
+
+    def usage_summary(self, user_id: int, page: int = 1, page_size: int = 5) -> dict[str, Any]:
+        totals = dict(self.mapper.user_usage_totals(int(user_id)))
+        recent = self.list_usage_page(user_id, page, page_size)
         return {
             **totals,
-            "recent": [dict(item) for item in recent],
-            "recent_pagination": self.page_result(recent, total, page, page_size),
+            "recent": recent["items"],
+            "recent_pagination": recent,
         }
 
     def admin_summary(self) -> dict[str, Any]:
         self.mapper.expire_recharge_codes(utc_now())
         totals = dict(self.mapper.admin_totals())
-        month_start = datetime.now(timezone.utc).replace(
-            day=1, hour=0, minute=0, second=0, microsecond=0
-        ).isoformat()
+        month_start = business_month_start_utc().isoformat()
         model_rows = [dict(row) for row in self.mapper.admin_model_usage(month_start)]
         configured_models = get_config().get("rose", {}).get("models", []) or []
         if isinstance(configured_models, dict):

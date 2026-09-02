@@ -62,7 +62,7 @@ class MonitorController:
         pages = max(1, (total + page_size - 1) // page_size)
         page = min(page, pages)
         start = (page - 1) * page_size
-        gateway_metrics = self.subscription_gateway.metrics() if hasattr(self.subscription_gateway, "metrics") else {}
+        gateway_metrics = self.subscription_gateway.metrics(include_users=user.get("role") == "ADMIN") if hasattr(self.subscription_gateway, "metrics") else {}
         runtime = self.observability.request_metrics() if self.observability else {}
         summary = {
             "total": total,

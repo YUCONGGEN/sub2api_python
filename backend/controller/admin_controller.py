@@ -185,6 +185,15 @@ class AdminController:
             return not_found("用户不存在")
         return ok({"ok": True, **detail})
 
+    @GetMapping("/users/{user_id}/usage")
+    def user_usage(self, user_id: int = PathVariable(name="user_id"), authorization: str = RequestHeader(name="Authorization", required=False), page: int = RequestParam(name="page", required=False, default=1), page_size: int = RequestParam(name="page_size", required=False, default=5)):
+        if not self.admin(authorization):
+            return forbidden()
+        if not self.store.find_user(user_id):
+            return not_found("用户不存在")
+        result = self.store.list_usage_page(user_id, page, page_size)
+        return ok({"ok": True, "usage": result["items"], "pagination": result})
+
     @GetMapping("/users/{user_id}/quotas")
     def user_quotas(self, user_id: int = PathVariable(name="user_id"), authorization: str = RequestHeader(name="Authorization", required=False), page: int = RequestParam(name="page", required=False, default=1), page_size: int = RequestParam(name="page_size", required=False, default=5)):
         if not self.admin(authorization):

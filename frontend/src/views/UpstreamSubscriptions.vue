@@ -17,13 +17,14 @@
     </div>
     <div class="gateway-strip gateway-capacity" aria-label="订阅账号池实时容量">
       <span><small>正在执行</small><b>{{ gatewayMetrics.active_requests || 0 }}</b></span>
-      <span><small>排队人数</small><b>{{ gatewayMetrics.queue_waiting || 0 }} / {{ gatewayMetrics.queue_limit || 0 }}</b></span>
+      <span><small>排队请求</small><b>{{ gatewayMetrics.queue_waiting || 0 }} / {{ gatewayMetrics.queue_limit || 0 }}</b></span>
       <span><small>RPM 使用</small><b>{{ gatewayMetrics.rpm_used || 0 }} / {{ gatewayMetrics.rpm_capacity || 0 }}</b></span>
       <span><small>账号冷却</small><b>{{ gatewayMetrics.cooldown_accounts || 0 }} / {{ gatewayMetrics.account_pool_total || 0 }}</b></span>
       <span><small>本地限流</small><b>{{ gatewayMetrics.local_rate_limits || 0 }}</b></span>
       <span><small>上游容量不足</small><b>{{ gatewayMetrics.upstream_capacity_failures || 0 }}</b></span>
       <span><small>排队拒绝</small><b>{{ gatewayMetrics.queue_rejected || 0 }}</b></span>
     </div>
+    <GatewayActivity :gateway="gatewayMetrics" />
 
     <section v-if="showForm" class="panel account-editor">
       <div class="panel-head">
@@ -126,14 +127,18 @@
 <script>
 import { api } from '../api'
 import { askConfirm, notify } from '../ui'
+import GatewayActivity from '../components/GatewayActivity.vue'
 
 const defaults = provider => ({ mode: 'oauth', provider, name: '', models: provider === 'openai' ? 'gpt-5.4, gpt-5.4-mini' : 'claude-sonnet-4-6, claude-opus-4-6', priority: 0, weight: 1, input_price_cny: 0, output_price_cny: 0, price_multiplier: 1, enabled: true, access_token: '', refresh_token: '', expires_at: '', email: '', callback_value: '', compliance_confirmed: false })
 
 export default {
   name: 'UpstreamSubscriptions',
-  data: () => ({ accounts: [], summary: {}, gatewayMetrics: {}, pagination: { page: 1, pages: 1, total: 0 }, error: '', loading: false, busy: false, actionId: null, filter: '', showForm: false, editingId: null, oauthSession: null, gatewayEnabled: false, form: defaults('openai') }),
+  components: { GatewayActivity },
+  data: () => ({ accounts: [], summary: {}, gatewayMetrics: {}, pagination: { page: 1, pages: 1, total: 0 }, error: '', loading: false, busy: false, actionId: null, filter: '', showForm: false, editingId: null, oauthSession: null, gatewayEnabled: false, metricsTimer: null, form: defaults('openai') }),
   watch: { 'form.provider' (next, previous) { if (!this.editingId && !this.oauthSession && next !== previous) this.form.models = defaults(next).models } },
-  created () { this.load() },
+  created () { this.load(); this.metricsTimer = window.setInterval(this.refreshGatewayMetrics, 5000) },
+  beforeUnmount () { window.clearInterval(this.metricsTimer) },
+  beforeDestroy () { window.clearInterval(this.metricsTimer) },
   methods: {
     providerLabel (provider) { return provider === 'openai' ? 'OpenAI / Codex' : 'Claude / Anthropic' },
     providerCount (provider) { return Number(this.summary[provider] || 0) },
@@ -142,6 +147,7 @@ export default {
     displayTime (value) { if (!value) return '—'; const date = new Date(value); return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN') },
     payload () { return { provider: this.form.provider, name: this.form.name, models: this.form.models, priority: this.form.priority, weight: this.form.weight, input_price_cny: this.form.input_price_cny, output_price_cny: this.form.output_price_cny, price_multiplier: this.form.price_multiplier, enabled: this.form.enabled, compliance_confirmed: this.form.compliance_confirmed } },
     async load () { this.loading = true; this.error = ''; try { const data = await api.upstreamSubscriptions({ provider: this.filter, page: this.pagination.page, page_size: 12 }); this.accounts = data.accounts || []; this.summary = data.summary || {}; this.gatewayMetrics = data.gateway_metrics || {}; this.pagination = data.pagination || this.pagination; this.gatewayEnabled = !!data.gateway_enabled } catch (error) { this.error = error.message || '请检查后端服务后重试'; notify(this.error, 'error') } finally { this.loading = false } },
+    async refreshGatewayMetrics () { try { const data = await api.upstreamGatewayMetrics(); this.gatewayMetrics = data.gateway_metrics || this.gatewayMetrics } catch (error) {} },
     setFilter (provider) { this.filter = provider; this.pagination.page = 1; this.load() },
     changePage (page) { this.pagination.page = page; this.load() },
     openCreate () { this.editingId = null; this.oauthSession = null; this.form = defaults('openai'); this.showForm = true; this.$nextTick(() => document.querySelector('.account-editor')?.scrollIntoView({ behavior: 'smooth' })) },

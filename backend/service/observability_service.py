@@ -20,6 +20,8 @@ from typing import Any
 import psutil
 from springbootai import Autowired, PostConstruct, Service, get_config
 
+from backend.common.time_utils import business_date_keys, business_day_start_utc
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -169,10 +171,20 @@ class ObservabilityService:
         return _page_result([dict(row) for row in rows], total, page, page_size)
 
     def analytics(self) -> dict[str, Any]:
-        start = (datetime.now(timezone.utc) - timedelta(days=13)).isoformat()
+        now = datetime.now(timezone.utc)
+        start = business_day_start_utc(now - timedelta(days=13)).isoformat()
+        days = business_date_keys(14, now)
+        daily_rows = {}
+        for value in self.mapper.admin_daily_usage(start, 30) or []:
+            row = dict(value)
+            daily_rows[str(row.get("day"))] = row
+        activity_rows = {}
+        for value in self.mapper.admin_daily_activity(start, 30) or []:
+            row = dict(value)
+            activity_rows[str(row.get("day"))] = row
         return {
-            "daily": [dict(row) for row in (self.mapper.admin_daily_usage(start, 30) or [])],
-            "activity": [dict(row) for row in (self.mapper.admin_daily_activity(start, 30) or [])],
+            "daily": [{"day": day, "requests": 0, "total_tokens": 0, "total_cost": 0, "failed_requests": 0, **daily_rows.get(day, {})} for day in days],
+            "activity": [{"day": day, "active_users": 0, "requests": 0, **activity_rows.get(day, {})} for day in days],
             "users": [dict(row) for row in (self.mapper.admin_user_usage(10) or [])],
             "statuses": [dict(row) for row in (self.mapper.admin_status_usage() or [])],
             "billing_sources": [dict(row) for row in (self.mapper.admin_billing_usage() or [])],

@@ -13,11 +13,12 @@
     </div>
     <div v-if="summary.gateway" class="gateway-strip" aria-label="订阅网关实时状态">
       <span><small>正在执行</small><b>{{ summary.gateway.active_requests || 0 }}</b></span>
-      <span><small>排队人数</small><b>{{ summary.gateway.queue_waiting || 0 }} / {{ summary.gateway.queue_limit || 0 }}</b></span>
+      <span><small>排队请求</small><b>{{ summary.gateway.queue_waiting || 0 }} / {{ summary.gateway.queue_limit || 0 }}</b></span>
       <span><small>本地限流</small><b>{{ summary.gateway.local_rate_limits || 0 }}</b></span>
       <span><small>上游容量不足</small><b>{{ summary.gateway.upstream_capacity_failures || 0 }}</b></span>
       <span class="updated-at"><small>最近检测</small><b>{{ updatedLabel }}</b></span>
     </div>
+    <GatewayActivity :gateway="summary.gateway || {}" />
     <div v-if="loading && !models.length" class="loading-state" aria-live="polite">正在读取模型健康状态…</div>
     <div v-else class="monitor-grid">
       <article v-for="model in models" :key="model.id" class="monitor-card">
@@ -35,8 +36,10 @@
 
 <script>
 import { api } from '../api'
+import GatewayActivity from '../components/GatewayActivity.vue'
 
 export default {
+  components: { GatewayActivity },
   data: () => ({ models: [], summary: {}, updated: '', error: '', loading: false, clock: Date.now(), timer: null, pagination: { page: 1, pages: 1, total: 0 } }),
   computed: {
     updatedLabel () {

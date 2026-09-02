@@ -64,6 +64,9 @@ class SubscriptionGatewayService:
         self._queue_timeouts = 0
         self._local_rate_limits = 0
         self._upstream_capacity_failures = 0
+        self._activity_sequence = 0
+        self._queued_activities: dict[int, dict[str, Any]] = {}
+        self._active_activities: dict[int, dict[str, Any]] = {}
         self.max_queued_requests = 200
 
     @PostConstruct
@@ -128,10 +131,31 @@ class SubscriptionGatewayService:
             window.append(now)
             return True
 
-    async def _acquire_account_slot(self, semaphore: asyncio.Semaphore, account_id: int = 0) -> float:
+    def _new_activity(self, provider: str, model: str, user_id: int, account_id: int) -> dict[str, Any]:
+        with self._safety_lock:
+            self._activity_sequence += 1
+            activity_id = self._activity_sequence
+        return {
+            "request_id": activity_id,
+            "user_id": int(user_id),
+            "provider": str(provider),
+            "model": str(model),
+            "account_id": int(account_id),
+            "requested_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def _finish_activity(self, activity_id: int) -> None:
+        if not activity_id:
+            return
+        with self._safety_lock:
+            self._queued_activities.pop(int(activity_id), None)
+            self._active_activities.pop(int(activity_id), None)
+
+    async def _acquire_account_slot(self, semaphore: asyncio.Semaphore, account_id: int = 0, activity: dict[str, Any] | None = None) -> float:
         """Wait for an account slot and return the queue duration in milliseconds."""
         started_at = time.monotonic()
         queued = semaphore.locked()
+        activity_id = int((activity or {}).get("request_id") or 0)
         if queued:
             with self._safety_lock:
                 if self._queue_waiters >= self.max_queued_requests:
@@ -139,6 +163,11 @@ class SubscriptionGatewayService:
                     raise OverflowError("subscription queue is full")
                 self._queue_waiters += 1
                 self._queue_total += 1
+                if activity_id:
+                    self._queued_activities[activity_id] = {
+                        **activity,
+                        "queued_at": datetime.now(timezone.utc).isoformat(),
+                    }
         try:
             if self.queue_timeout <= 0:
                 await semaphore.acquire()
@@ -148,10 +177,20 @@ class SubscriptionGatewayService:
             if queued:
                 with self._safety_lock:
                     self._queue_waiters = max(0, self._queue_waiters - 1)
-        return (time.monotonic() - started_at) * 1000.0
+                    if activity_id:
+                        self._queued_activities.pop(activity_id, None)
+        wait_ms = (time.monotonic() - started_at) * 1000.0
+        if activity_id:
+            with self._safety_lock:
+                self._active_activities[activity_id] = {
+                    **activity,
+                    "started_at": datetime.now(timezone.utc).isoformat(),
+                    "queue_wait_ms": round(wait_ms, 1),
+                }
+        return wait_ms
 
-    def metrics(self) -> dict[str, Any]:
-        """Return privacy-safe queue/capacity counters for admin monitoring."""
+    def metrics(self, include_users: bool = False) -> dict[str, Any]:
+        """Return queue counters and, for admins, current user activity."""
         with self._safety_lock:
             semaphores = list(self._account_semaphores.values())
             now_mono = time.monotonic()
@@ -173,6 +212,27 @@ class SubscriptionGatewayService:
                 "queue_timeout_seconds": self.queue_timeout,
                 "rpm_used": rpm_used,
             }
+            active_activities = [dict(item) for item in self._active_activities.values()]
+            queued_activities = [dict(item) for item in self._queued_activities.values()]
+        if include_users:
+            usernames: dict[int, str] = {}
+            for user_id in {int(item["user_id"]) for item in active_activities + queued_activities}:
+                try:
+                    user = self.store.find_user(user_id) if self.store else None
+                except Exception:
+                    user = None
+                usernames[user_id] = str((user or {}).get("username") or f"用户 #{user_id}")
+
+            def with_username(item: dict[str, Any]) -> dict[str, Any]:
+                user_id = int(item["user_id"])
+                return {**item, "username": usernames[user_id]}
+
+            snapshot["active_users"] = [
+                with_username(item) for item in sorted(active_activities, key=lambda row: row.get("started_at") or "")
+            ]
+            snapshot["queued_users"] = [
+                with_username(item) for item in sorted(queued_activities, key=lambda row: row.get("queued_at") or "")
+            ]
         try:
             rows = self.accounts.repository.list_provider("openai") + self.accounts.repository.list_provider("claude")
             now = datetime.now(timezone.utc)
@@ -431,8 +491,10 @@ class SubscriptionGatewayService:
             account_id = int(account["id"])
             excluded.add(account_id)
             semaphore = self._account_semaphore(account_id)
+            activity = self._new_activity(provider, model, user_id, account_id)
+            activity_id = int(activity["request_id"])
             try:
-                queue_wait_ms = await self._acquire_account_slot(semaphore, account_id)
+                queue_wait_ms = await self._acquire_account_slot(semaphore, account_id, activity)
             except OverflowError:
                 last_status = 429
                 last_detail = "本地订阅账号等待队列已满，请稍后重试"
@@ -571,7 +633,7 @@ class SubscriptionGatewayService:
                         int(response.status_code), self._safe_response_headers(response),
                         stream=self._stream_and_bill(
                             response, provider, account, user_id, model, semaphore,
-                            iterator=stream_iterator, prefix=stream_prefix,
+                            iterator=stream_iterator, prefix=stream_prefix, activity_id=activity_id,
                         ),
                     )
                 body = await response.aread()
@@ -605,6 +667,7 @@ class SubscriptionGatewayService:
                 return SubscriptionGatewayResponse(int(response.status_code), self._safe_response_headers(response), body=body)
             finally:
                 if not release_in_stream:
+                    self._finish_activity(activity_id)
                     semaphore.release()
         status = last_status if 400 <= last_status < 500 else 502
         if last_error_type in {"local_queue_timeout", "upstream_capacity"}:
@@ -622,6 +685,7 @@ class SubscriptionGatewayService:
         *,
         iterator: AsyncIterator[bytes] | None = None,
         prefix: bytes = b"",
+        activity_id: int = 0,
     ) -> AsyncIterator[bytes]:
         line_buffer = b""
         usage = {"input_tokens": 0, "output_tokens": 0}
@@ -675,8 +739,11 @@ class SubscriptionGatewayService:
             self.accounts.record_failure(account, 502, str(exc))
             raise
         finally:
-            await response.aclose()
-            semaphore.release()
+            try:
+                await response.aclose()
+            finally:
+                self._finish_activity(activity_id)
+                semaphore.release()
 
     async def _prefetch_openai_stream(
         self,

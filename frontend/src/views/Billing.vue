@@ -21,7 +21,7 @@
     </div>
     <div class="panel entitlement-overview-panel">
       <div class="entitlement-list">
-        <div class="entitlement-title"><span>套餐与免费赠送用量</span><small>每日统计按 UTC 00:00 重置；滚动窗口按标注小时实时计算</small></div>
+        <div class="entitlement-title"><span>套餐与免费赠送用量</span><small>每日统计按北京时间当天 00:00 重置；滚动窗口按标注小时实时计算</small></div>
         <section v-if="entitlements.length" class="entitlement-group entitlement-combined-list">
           <article v-for="item in entitlements" :key="`${item.entitlement_type}-${item.id}`" :class="['entitlement-row', { 'subscription-entitlement-row': item.entitlement_type === 'SUBSCRIPTION' }]">
             <template v-if="item.entitlement_type === 'FREE'">

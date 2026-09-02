@@ -9,14 +9,13 @@
     </div>
 
     <nav class="admin-overview-tabs" aria-label="管理后台分区">
-      <button :class="{ active: activeAdminSection === 'default' }" @click="activeAdminSection = 'default'">默认</button>
       <button :class="{ active: activeAdminSection === 'business' }" @click="activeAdminSection = 'business'">业务管理</button>
       <button :class="{ active: activeAdminSection === 'visuals' }" @click="activeAdminSection = 'visuals'">数据可视化</button>
       <button :class="{ active: activeAdminSection === 'logs' }" @click="activeAdminSection = 'logs'">后台日志</button>
       <button :class="{ active: activeAdminSection === 'device' }" @click="activeAdminSection = 'device'">设备信息</button>
     </nav>
 
-    <div v-if="activeAdminSection === 'default'" id="admin-default" class="metric-grid admin-metrics">
+    <div v-if="activeAdminSection === 'business'" id="admin-business-overview" class="metric-grid admin-metrics">
       <div class="metric-card"><span>用户总数</span><strong>{{ summary.users || 0 }}</strong><small>已注册账户</small></div>
       <div class="metric-card"><span>活跃用户</span><strong>{{ summary.active_users || 0 }}</strong><small>当前可调用</small></div>
       <div class="metric-card"><span>总请求</span><strong>{{ summary.total_requests || 0 }}</strong><small>全站请求</small></div>
@@ -25,7 +24,7 @@
       <div class="metric-card highlight"><span>累计充值</span><strong>¥{{ Number(summary.total_recharge || 0).toFixed(2) }}</strong><small>已支付订单</small></div>
     </div>
 
-    <div v-if="activeAdminSection === 'default'" class="metric-grid admin-runtime-metrics">
+    <div v-if="activeAdminSection === 'business'" class="metric-grid admin-runtime-metrics">
       <div class="metric-card runtime-card"><span>运行期吞吐</span><strong>{{ Number(requestMetrics.throughput_rpm || 0).toFixed(0) }}</strong><small>最近 60 秒请求数</small></div>
       <div class="metric-card runtime-card"><span>平均延迟</span><strong>{{ Number(requestMetrics.average_latency_ms || 0).toFixed(0) }}<em>ms</em></strong><small>运行期 HTTP 请求</small></div>
       <div class="metric-card runtime-card warning"><span>警告 / 异常</span><strong>{{ requestMetrics.warnings || 0 }} / {{ requestMetrics.exceptions || 0 }}</strong><small>后台运行期记录</small></div>
@@ -216,7 +215,7 @@ import { copyToClipboard, notify, askConfirm, focusDialog, trapDialogFocus } fro
 export default {
   data: () => ({
     summary: {},
-    activeAdminSection: 'default',
+    activeAdminSection: 'business',
     modelUsage: [],
     recentConversations: [],
     analytics: { daily: [], activity: [], users: [], statuses: [], billing_sources: [], orders: [] },

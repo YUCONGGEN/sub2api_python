@@ -1,5 +1,6 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
+from backend.common.time_utils import business_date_keys, business_day_start_utc, business_month_start_utc, business_week_start_utc
 from backend.service.store_service import StoreService
 
 
@@ -30,7 +31,7 @@ class EntitlementMapper:
     @staticmethod
     def subscription_usage_totals(subscription_id, start_at, end_at):
         assert subscription_id == 41
-        assert datetime.fromisoformat(start_at).hour == 0
+        assert datetime.fromisoformat(start_at).hour == 16
         return {"subscription_cost": 1.25, "subscription_tokens": 250}
 
     @staticmethod
@@ -63,7 +64,7 @@ class EntitlementMapper:
         assert quota_id == 73
         self.quota_queries.append(start_at)
         if len(self.quota_queries) == 1:
-            assert datetime.fromisoformat(start_at).hour == 0
+            assert datetime.fromisoformat(start_at).hour == 16
             return {"free_cost": 0.5, "free_tokens": 200}
         return {"free_cost": 0.1, "free_tokens": 90}
 
@@ -79,7 +80,7 @@ def test_subscription_list_includes_actual_used_and_remaining_amounts():
     usage = result["items"][0]["usage"]
 
     assert usage["active"] is True
-    assert usage["period"] == "UTC_DAY"
+    assert usage["period"] == "ASIA_SHANGHAI_DAY"
     assert usage["daily_amount"] == {
         "limit": 5.0, "used": 1.25, "remaining": 3.75, "unlimited": False,
     }
@@ -122,3 +123,12 @@ def test_combined_entitlements_use_one_five_item_page():
     assert result["items"][1]["usage"]["daily_tokens"]["remaining"] == 750
     assert mapper.entitlement_query["offset"] == 0
     assert mapper.entitlement_query["limit"] == 5
+
+
+def test_business_calendar_uses_beijing_midnight_while_storing_utc():
+    now = datetime(2026, 9, 2, 1, 30, tzinfo=timezone.utc)
+
+    assert business_day_start_utc(now).isoformat() == "2026-09-01T16:00:00+00:00"
+    assert business_week_start_utc(now).isoformat() == "2026-08-30T16:00:00+00:00"
+    assert business_month_start_utc(now).isoformat() == "2026-08-31T16:00:00+00:00"
+    assert business_date_keys(3, now) == ["2026-08-31", "2026-09-01", "2026-09-02"]

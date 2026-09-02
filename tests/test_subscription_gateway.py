@@ -259,6 +259,48 @@ def test_gateway_zero_queue_timeout_waits_until_slot_is_available():
     asyncio.run(scenario())
 
 
+def test_gateway_admin_metrics_identify_queued_and_active_users():
+    class UserStore:
+        @staticmethod
+        def find_user(user_id):
+            return {"id": user_id, "username": "alice"}
+
+    async def scenario():
+        gateway = SubscriptionGatewayService(None, UserStore())
+        gateway.per_account_concurrency = 1
+        gateway.per_account_rpm = 20
+        gateway.queue_timeout = 0
+        gateway.max_queued_requests = 200
+        semaphore = gateway._account_semaphore(3)
+        await semaphore.acquire()
+        activity = gateway._new_activity("openai", "gpt-test", 9, 3)
+
+        waiter = asyncio.create_task(gateway._acquire_account_slot(semaphore, 3, activity))
+        await asyncio.sleep(0.01)
+        queued = gateway.metrics(include_users=True)
+        public = gateway.metrics()
+
+        assert queued["queue_waiting"] == 1
+        assert queued["queued_users"][0]["username"] == "alice"
+        assert queued["queued_users"][0]["model"] == "gpt-test"
+        assert "active_users" not in public
+        assert "queued_users" not in public
+
+        semaphore.release()
+        await waiter
+        active = gateway.metrics(include_users=True)
+        assert active["queue_waiting"] == 0
+        assert active["queued_users"] == []
+        assert active["active_users"][0]["user_id"] == 9
+        assert active["active_users"][0]["account_id"] == 3
+
+        gateway._finish_activity(activity["request_id"])
+        semaphore.release()
+        assert gateway.metrics(include_users=True)["active_users"] == []
+
+    asyncio.run(scenario())
+
+
 def test_usage_parsing_and_cost_for_both_protocols():
     openai_usage = {"input_tokens": 0, "output_tokens": 0}
     SubscriptionGatewayService._update_usage_from_sse(

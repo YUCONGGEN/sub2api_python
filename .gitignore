@@ -12,6 +12,7 @@ data/
 log/
 *.log
 *.pid
+.run/
 
 # FRP binaries, archives, and machine-specific scripts
 frp/

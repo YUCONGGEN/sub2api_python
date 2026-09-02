@@ -71,7 +71,14 @@
           <div v-else class="empty compact-empty">暂无状态数据</div>
         </div>
         <div class="panel chart-panel">
-          <div class="panel-head"><div><span class="eyebrow">TOP USERS</span><h2>用户用量排行</h2></div></div>
+          <div class="panel-head"><div><span class="eyebrow">TODAY TOP USERS</span><h2>当日用户用量排行</h2></div><small class="panel-period">北京时间当天</small></div>
+          <div v-if="analytics.today_users && analytics.today_users.length" class="rank-list">
+            <div v-for="(item,index) in analytics.today_users" :key="item.user_id" class="rank-row user-rank"><div><strong><span class="rank-number">{{ index + 1 }}</span>{{ item.username }}</strong><small>{{ item.requests || 0 }} 次请求 · ¥{{ money(item.total_cost) }}</small></div><b>{{ tokens(item.total_tokens) }}</b><i class="rank-track"><em :style="{ width: valueWidth(item.total_tokens, todayUserTokenMax) + '%' }"></em></i></div>
+          </div>
+          <div v-else class="empty compact-empty">今日暂无用户用量</div>
+        </div>
+        <div class="panel chart-panel">
+          <div class="panel-head"><div><span class="eyebrow">ALL-TIME TOP USERS</span><h2>历史用户用量排行</h2></div></div>
           <div v-if="analytics.users && analytics.users.length" class="rank-list">
             <div v-for="(item,index) in analytics.users" :key="item.user_id" class="rank-row user-rank"><div><strong><span class="rank-number">{{ index + 1 }}</span>{{ item.username }}</strong><small>{{ item.requests || 0 }} 次请求 · ¥{{ money(item.total_cost) }}</small></div><b>{{ tokens(item.total_tokens) }}</b><i class="rank-track"><em :style="{ width: valueWidth(item.total_tokens, userTokenMax) + '%' }"></em></i></div>
           </div>
@@ -218,7 +225,7 @@ export default {
     activeAdminSection: 'business',
     modelUsage: [],
     recentConversations: [],
-    analytics: { daily: [], activity: [], users: [], statuses: [], billing_sources: [], orders: [] },
+    analytics: { daily: [], activity: [], today_users: [], users: [], statuses: [], billing_sources: [], orders: [] },
     requestMetrics: {},
     recentLogs: [],
     device: { cpu: {}, memory: {}, storage: {}, network: {} },
@@ -286,6 +293,9 @@ export default {
     },
     userTokenMax () {
       return Math.max(1, ...((this.analytics.users || []).map(item => Number(item.total_tokens || 0))))
+    },
+    todayUserTokenMax () {
+      return Math.max(1, ...((this.analytics.today_users || []).map(item => Number(item.total_tokens || 0))))
     },
     activityUserMax () {
       return Math.max(1, ...((this.analytics.activity || []).map(item => Number(item.active_users || 0))))
@@ -430,6 +440,7 @@ export default {
 .line-point.activity { fill: #5eaa8c; }
 .line-axis-label { fill: #8298a9; font: 8px var(--mono); text-anchor: middle; }
 .line-chart-scale { display: flex; justify-content: space-between; gap: 12px; margin-top: -1px; color: #8298a9; font: 9px var(--mono); }
+.panel-period { color: #8298a9; font: 9px var(--mono); white-space: nowrap; }
 .conversation-summary-panel { margin-top: 1rem; background: linear-gradient(145deg, #fff 0%, #f8fbff 72%, #f7f3fb 100%); }
 .conversation-summary-panel .panel-head { margin-bottom: 20px; }
 .conversation-summary-panel .panel-note { max-width: 620px; margin: 8px 0 0; }

@@ -346,6 +346,9 @@ class StoreMapper:
     def admin_user_usage(self, limit: int = 10) -> list[dict]:
         pass
 
+    def admin_today_user_usage(self, start_at: str, limit: int = 10) -> list[dict]:
+        pass
+
     def admin_status_usage(self) -> list[dict]:
         pass
 

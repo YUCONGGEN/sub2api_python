@@ -1,5 +1,5 @@
 from backend.controller.monitor_controller import MonitorController
-from backend.common.time_utils import business_date_keys
+from backend.common.time_utils import business_date_keys, business_day_start_utc
 from backend.service.observability_service import ObservabilityService
 
 
@@ -92,6 +92,8 @@ def test_monitoring_only_exposes_current_gateway_usernames_to_admins():
 
 
 class EmptyAnalyticsMapper:
+    today_start = None
+
     @staticmethod
     def admin_daily_usage(start, limit):
         return []
@@ -102,6 +104,11 @@ class EmptyAnalyticsMapper:
 
     @staticmethod
     def admin_user_usage(limit):
+        return []
+
+    @classmethod
+    def admin_today_user_usage(cls, start, limit):
+        cls.today_start = start
         return []
 
     @staticmethod
@@ -128,3 +135,5 @@ def test_admin_daily_charts_always_include_the_current_beijing_day():
     assert analytics["daily"][-1]["day"] == business_date_keys(1)[0]
     assert analytics["daily"][-1]["requests"] == 0
     assert analytics["activity"][-1]["active_users"] == 0
+    assert analytics["today_users"] == []
+    assert EmptyAnalyticsMapper.today_start == business_day_start_utc().isoformat()

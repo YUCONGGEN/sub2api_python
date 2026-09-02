@@ -273,7 +273,7 @@ def test_gateway_admin_metrics_identify_queued_and_active_users():
         gateway.max_queued_requests = 200
         semaphore = gateway._account_semaphore(3)
         await semaphore.acquire()
-        activity = gateway._new_activity("openai", "gpt-test", 9, 3)
+        activity = gateway._new_activity("openai", "gpt-test", 9, 3, "high")
 
         waiter = asyncio.create_task(gateway._acquire_account_slot(semaphore, 3, activity))
         await asyncio.sleep(0.01)
@@ -281,8 +281,12 @@ def test_gateway_admin_metrics_identify_queued_and_active_users():
         public = gateway.metrics()
 
         assert queued["queue_waiting"] == 1
+        assert queued["concurrent_tasks"] == 1
         assert queued["queued_users"][0]["username"] == "alice"
         assert queued["queued_users"][0]["model"] == "gpt-test"
+        assert queued["queued_users"][0]["reasoning_effort"] == "high"
+        assert queued["queued_users"][0]["user_concurrent_tasks"] == 0
+        assert queued["queued_users"][0]["user_queued_tasks"] == 1
         assert "active_users" not in public
         assert "queued_users" not in public
 
@@ -293,12 +297,20 @@ def test_gateway_admin_metrics_identify_queued_and_active_users():
         assert active["queued_users"] == []
         assert active["active_users"][0]["user_id"] == 9
         assert active["active_users"][0]["account_id"] == 3
+        assert active["active_users"][0]["reasoning_effort"] == "high"
+        assert active["active_users"][0]["user_concurrent_tasks"] == 1
 
         gateway._finish_activity(activity["request_id"])
         semaphore.release()
         assert gateway.metrics(include_users=True)["active_users"] == []
 
     asyncio.run(scenario())
+
+
+def test_gateway_extracts_reasoning_effort_from_supported_request_shapes():
+    assert SubscriptionGatewayService._reasoning_effort({"reasoning": {"effort": "xhigh"}}) == "xhigh"
+    assert SubscriptionGatewayService._reasoning_effort({"reasoning_effort": "medium"}) == "medium"
+    assert SubscriptionGatewayService._reasoning_effort({}) == ""
 
 
 def test_usage_parsing_and_cost_for_both_protocols():
@@ -453,3 +465,45 @@ def test_capacity_failure_after_output_is_not_replayed_and_is_not_marked_success
     assert accounts.successes == []
     assert accounts.failures == [(3, 503, "Selected model is at capacity. Please try a different model.")]
     assert store.charges == []
+
+
+def test_currently_overloaded_after_output_does_not_cool_account():
+    late_failure = streaming_response(
+        b'data: {"type":"response.created"}\n\n',
+        b'data: {"type":"response.output_text.delta","delta":"partial"}\n\n',
+        b'data: {"type":"response.failed","error":{"message":"Our servers are currently overloaded. Please try again later."}}\n\n',
+    )
+    client = SequenceClient([late_failure])
+    accounts = RecordingAccounts()
+    store = RecordingStore()
+    gateway = configured_gateway(accounts, store, client)
+
+    async def scenario():
+        result = await gateway._proxy(
+            "openai", "gpt-test", {"model": "gpt-test", "stream": True}, 9, {},
+        )
+        return b"".join([chunk async for chunk in result.stream])
+
+    body = asyncio.run(scenario())
+
+    assert b"currently overloaded" in body
+    assert accounts.successes == []
+    assert accounts.failures == []
+    assert gateway._upstream_capacity_failures == 1
+    assert store.charges == []
+
+
+def test_currently_overloaded_never_updates_account_failure_state():
+    repository = MemoryRepository([account(3)])
+    service = SubscriptionAccountService(
+        repository, JsonCipher(), NoopOAuth(), SubscriptionAccountPoolService(),
+    )
+    before = repository.find(3)
+
+    service.record_failure(
+        before,
+        503,
+        "Our servers are currently overloaded. Please try again later.",
+    )
+
+    assert repository.find(3) == before

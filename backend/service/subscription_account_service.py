@@ -19,6 +19,10 @@ DEFAULT_MODELS = {
     "claude": ["claude-opus-5", "claude-sonnet-5", "claude-fable-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
 }
 
+NO_COOLDOWN_ERROR_MARKERS = (
+    "currently overloaded",
+)
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -503,6 +507,9 @@ class SubscriptionAccountService:
         )
 
     def record_failure(self, row: dict[str, Any], status_code: int | None, detail: str, retry_after: float | None = None) -> None:
+        normalized_detail = str(detail or "").strip().lower()
+        if any(marker in normalized_detail for marker in NO_COOLDOWN_ERROR_MARKERS):
+            return
         code = int(status_code or 0)
         error_count = int(row.get("error_count") or 0) + 1
         if code in {401, 403}:

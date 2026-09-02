@@ -29,6 +29,10 @@ CAPACITY_ERROR_MARKERS = (
     "model is at capacity",
     "currently at capacity",
     "model capacity",
+    "currently overloaded",
+)
+OVERLOAD_ERROR_MARKERS = (
+    "currently overloaded",
 )
 OPENAI_STREAM_CONTROL_EVENTS = {
     "response.created",
@@ -131,7 +135,14 @@ class SubscriptionGatewayService:
             window.append(now)
             return True
 
-    def _new_activity(self, provider: str, model: str, user_id: int, account_id: int) -> dict[str, Any]:
+    def _new_activity(
+        self,
+        provider: str,
+        model: str,
+        user_id: int,
+        account_id: int,
+        reasoning_effort: str = "",
+    ) -> dict[str, Any]:
         with self._safety_lock:
             self._activity_sequence += 1
             activity_id = self._activity_sequence
@@ -140,9 +151,22 @@ class SubscriptionGatewayService:
             "user_id": int(user_id),
             "provider": str(provider),
             "model": str(model),
+            "reasoning_effort": str(reasoning_effort or ""),
             "account_id": int(account_id),
             "requested_at": datetime.now(timezone.utc).isoformat(),
         }
+
+    @staticmethod
+    def _reasoning_effort(payload: dict[str, Any]) -> str:
+        reasoning = payload.get("reasoning")
+        if isinstance(reasoning, dict):
+            value = reasoning.get("effort")
+            if value is not None:
+                return str(value).strip()[:40]
+        value = payload.get("reasoning_effort")
+        if value is None:
+            value = payload.get("reasoning-effort")
+        return str(value or "").strip()[:40]
 
     def _finish_activity(self, activity_id: int) -> None:
         if not activity_id:
@@ -212,6 +236,7 @@ class SubscriptionGatewayService:
                 "queue_timeout_seconds": self.queue_timeout,
                 "rpm_used": rpm_used,
             }
+            snapshot["concurrent_tasks"] = snapshot["active_requests"]
             active_activities = [dict(item) for item in self._active_activities.values()]
             queued_activities = [dict(item) for item in self._queued_activities.values()]
         if include_users:
@@ -223,9 +248,23 @@ class SubscriptionGatewayService:
                     user = None
                 usernames[user_id] = str((user or {}).get("username") or f"用户 #{user_id}")
 
+            active_counts: dict[int, int] = {}
+            queued_counts: dict[int, int] = {}
+            for item in active_activities:
+                user_id = int(item["user_id"])
+                active_counts[user_id] = active_counts.get(user_id, 0) + 1
+            for item in queued_activities:
+                user_id = int(item["user_id"])
+                queued_counts[user_id] = queued_counts.get(user_id, 0) + 1
+
             def with_username(item: dict[str, Any]) -> dict[str, Any]:
                 user_id = int(item["user_id"])
-                return {**item, "username": usernames[user_id]}
+                return {
+                    **item,
+                    "username": usernames[user_id],
+                    "user_concurrent_tasks": active_counts.get(user_id, 0),
+                    "user_queued_tasks": queued_counts.get(user_id, 0),
+                }
 
             snapshot["active_users"] = [
                 with_username(item) for item in sorted(active_activities, key=lambda row: row.get("started_at") or "")
@@ -457,6 +496,7 @@ class SubscriptionGatewayService:
 
     async def _proxy(self, provider: str, model: str, payload: dict[str, Any], user_id: int, incoming_headers: dict[str, str], *, count_tokens: bool = False) -> SubscriptionGatewayResponse:
         stream_requested = bool(payload.get("stream")) and not count_tokens
+        reasoning_effort = self._reasoning_effort(payload)
         session_key = self._session_key(provider, user_id, payload)
         preferred_account_id = self._preferred_account(session_key)
         excluded: set[int] = set()
@@ -491,7 +531,7 @@ class SubscriptionGatewayService:
             account_id = int(account["id"])
             excluded.add(account_id)
             semaphore = self._account_semaphore(account_id)
-            activity = self._new_activity(provider, model, user_id, account_id)
+            activity = self._new_activity(provider, model, user_id, account_id, reasoning_effort)
             activity_id = int(activity["request_id"])
             try:
                 queue_wait_ms = await self._acquire_account_slot(semaphore, account_id, activity)
@@ -715,10 +755,15 @@ class SubscriptionGatewayService:
                 terminal_failure = self._failure_from_sse_line(line_buffer) or terminal_failure
             if terminal_failure:
                 failure_status = 503 if self._is_capacity_error(terminal_failure) else 502
-                self.accounts.record_failure(account, failure_status, terminal_failure)
+                overloaded = self._is_overload_error(terminal_failure)
+                if overloaded:
+                    with self._safety_lock:
+                        self._upstream_capacity_failures += 1
+                else:
+                    self.accounts.record_failure(account, failure_status, terminal_failure)
                 self.logger.warning(
-                    "订阅网关流式请求失败 provider=%s model=%s account_id=%s user_id=%s detail=%s",
-                    provider, model, int(account["id"]), user_id, terminal_failure[:300],
+                    "订阅网关流式请求失败 provider=%s model=%s account_id=%s user_id=%s account_cooldown=%s detail=%s",
+                    provider, model, int(account["id"]), user_id, not overloaded, terminal_failure[:300],
                 )
                 return
             billing_error = await self._bill(user_id, model, account, usage)
@@ -823,6 +868,11 @@ class SubscriptionGatewayService:
     def _is_capacity_error(detail: str) -> bool:
         normalized = str(detail or "").strip().lower()
         return any(marker in normalized for marker in CAPACITY_ERROR_MARKERS)
+
+    @staticmethod
+    def _is_overload_error(detail: str) -> bool:
+        normalized = str(detail or "").strip().lower()
+        return any(marker in normalized for marker in OVERLOAD_ERROR_MARKERS)
 
     def _capacity_retry_delay(self, retry_index: int, retry_after: float | None) -> float:
         if retry_after is not None and retry_after > 0:

@@ -464,6 +464,16 @@
         ORDER BY total_tokens DESC,requests DESC,username ASC
         LIMIT #{limit}
     </select>
+    <select id="admin_today_user_usage">
+        SELECT ur.user_id,COALESCE(u.username,'已删除用户') username,
+               COUNT(*) requests,COALESCE(SUM(ur.total_tokens),0) total_tokens,
+               COALESCE(SUM(ur.cost),0) total_cost
+        FROM usage_records ur LEFT JOIN users u ON u.id=ur.user_id
+        WHERE ur.created_at &gt;= #{start_at}
+        GROUP BY ur.user_id,u.username
+        ORDER BY total_tokens DESC,requests DESC,username ASC
+        LIMIT #{limit}
+    </select>
     <select id="admin_status_usage">
         SELECT status,COUNT(*) requests,COALESCE(SUM(total_tokens),0) total_tokens,
                COALESCE(SUM(cost),0) total_cost

@@ -1,4 +1,4 @@
-springbootAI>=2.3.7
+springbootAI==2.3.7
 uvicorn[standard]>=0.30
 pymysql>=1.1.0
 cryptography>=42.0

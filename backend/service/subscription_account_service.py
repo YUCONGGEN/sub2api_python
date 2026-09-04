@@ -6,7 +6,7 @@ import math
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from springbootai import Autowired, Service, Slf4j, Transactional
+from springbootai import Autowired, PostConstruct, Service, Slf4j, Transactional, get_config
 
 from backend.repository.subscription_repository import SubscriptionRepository
 from backend.service.credential_cipher_service import CredentialCipherService
@@ -65,6 +65,21 @@ class SubscriptionAccountService:
         self.oauth = oauth
         self.pool = pool
         self._refresh_locks: dict[int, asyncio.Lock] = {}
+        # Keep the historical behavior for directly constructed instances
+        # (including tests); application configuration is applied at startup.
+        self.cooldown_enabled = True
+
+    @PostConstruct
+    def init(self) -> None:
+        cfg = get_config().get("rose", {}).get("subscription-gateway", {})
+        self.cooldown_enabled = as_bool(cfg.get("account-cooldown-enabled"), True)
+        self.logger.info("订阅账号临时冷却 enabled=%s", self.cooldown_enabled)
+
+    def _is_cooling(self, row: dict[str, Any], now: datetime | None = None) -> bool:
+        if not getattr(self, "cooldown_enabled", True):
+            return False
+        until = parse_time(row.get("cooldown_until"))
+        return bool(until and until > (now or datetime.now(timezone.utc)))
 
     @staticmethod
     def normalize_provider(value: Any) -> str:
@@ -203,6 +218,9 @@ class SubscriptionAccountService:
             models = []
         data["models"] = models if isinstance(models, list) else []
         data["enabled"] = bool(data.get("enabled"))
+        if not getattr(self, "cooldown_enabled", True) and data.get("status") == "COOLDOWN":
+            data["status"] = "READY" if data["enabled"] else "DISABLED"
+            data["cooldown_until"] = None
         data["credential_mask"] = "••••••••" if data["has_access_token"] else "未配置"
         return data
 
@@ -395,7 +413,7 @@ class SubscriptionAccountService:
             row for row in self.repository.list_provider(provider)
             if int(row.get("id") or 0) not in excluded
             and self._supports(row, model)
-            and (not parse_time(row.get("cooldown_until")) or parse_time(row.get("cooldown_until")) <= now)
+            and not self._is_cooling(row, now)
         ]
         if not rows:
             raise LookupError(f"没有可用于模型 {model} 的 {provider} 订阅账号")
@@ -441,7 +459,7 @@ class SubscriptionAccountService:
         now = datetime.now(timezone.utc)
         return any(
             self._supports(row, model)
-            and (not parse_time(row.get("cooldown_until")) or parse_time(row.get("cooldown_until")) <= now)
+            and not self._is_cooling(row, now)
             for row in self.repository.list_provider(provider)
         )
 
@@ -460,8 +478,7 @@ class SubscriptionAccountService:
         for (provider, model), accounts in routes.items():
             available = [
                 account for account in accounts
-                if not parse_time(account.get("cooldown_until"))
-                or parse_time(account.get("cooldown_until")) <= now
+                if not self._is_cooling(account, now)
             ]
             cooling = len(accounts) - len(available)
             is_available = bool(available)
@@ -511,9 +528,21 @@ class SubscriptionAccountService:
         if any(marker in normalized_detail for marker in NO_COOLDOWN_ERROR_MARKERS):
             return
         code = int(status_code or 0)
+        # Request validation failures are caused by the caller's payload and
+        # say nothing about account health.  Only authentication, timeout,
+        # rate-limit and server-side failures are eligible to penalize an
+        # upstream account.
+        if 400 <= code < 500 and code not in {401, 403, 408, 429}:
+            return
         error_count = int(row.get("error_count") or 0) + 1
         if code in {401, 403}:
             status = "INVALID"
+            cooldown = None
+        elif not getattr(self, "cooldown_enabled", True):
+            # Preserve diagnostics without removing this account from the pool.
+            # The current gateway attempt still excludes it and can fail over
+            # to another account, but later requests may try it again.
+            status = "READY" if as_bool(row.get("enabled"), True) else "DISABLED"
             cooldown = None
         else:
             status = "COOLDOWN"

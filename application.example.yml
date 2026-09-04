@@ -129,6 +129,9 @@ rose:
     capacity-retries: ${ROSE_SUBSCRIPTION_CAPACITY_RETRIES:2}
     capacity-retry-base-seconds: ${ROSE_SUBSCRIPTION_CAPACITY_RETRY_BASE_SECONDS:1}
     stream-prefetch-bytes: ${ROSE_SUBSCRIPTION_STREAM_PREFETCH_BYTES:65536}
+    # false：记录失败原因并在当前请求内切换账号，但不让订阅账号进入临时冷却。
+    # 401/403 凭据失效仍会标记为 INVALID，避免持续使用无效凭据。
+    account-cooldown-enabled: ${ROSE_SUBSCRIPTION_ACCOUNT_COOLDOWN_ENABLED:false}
     max-connections: ${ROSE_SUBSCRIPTION_MAX_CONNECTIONS:100}
     max-keepalive-connections: ${ROSE_SUBSCRIPTION_MAX_KEEPALIVE_CONNECTIONS:20}
     # 合规保护：不模拟浏览器或人为操作，只限制单账号并发/突发流量，并把显式

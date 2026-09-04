@@ -285,17 +285,18 @@ class SubscriptionGatewayService:
             rows = self.accounts.repository.list_provider("openai") + self.accounts.repository.list_provider("claude")
             now = datetime.now(timezone.utc)
             cooling = 0
-            for row in rows:
-                raw = str(row.get("cooldown_until") or "").strip()
-                if not raw:
-                    continue
-                try:
-                    until = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-                    if until.tzinfo is None:
-                        until = until.replace(tzinfo=timezone.utc)
-                    cooling += int(until > now)
-                except ValueError:
-                    continue
+            if getattr(self.accounts, "cooldown_enabled", True):
+                for row in rows:
+                    raw = str(row.get("cooldown_until") or "").strip()
+                    if not raw:
+                        continue
+                    try:
+                        until = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                        if until.tzinfo is None:
+                            until = until.replace(tzinfo=timezone.utc)
+                        cooling += int(until > now)
+                    except ValueError:
+                        continue
             account_count = len(rows)
             snapshot.update({
                 "account_pool_total": account_count,
@@ -481,6 +482,39 @@ class SubscriptionGatewayService:
         if not model:
             return self._json_error(400, "model is required", "invalid_request_error")
         outgoing = dict(payload)
+        # The public Responses API calls this field ``max_output_tokens``, but
+        # ChatGPT's Codex subscription transport currently accepts
+        # ``max_tokens`` and rejects ``max_output_tokens``.  Accept either
+        # public spelling and normalize it to the subscription wire format
+        # before an account is acquired.
+        raw_max_tokens = outgoing.get("max_output_tokens")
+        if raw_max_tokens is None:
+            raw_max_tokens = outgoing.get("max_completion_tokens")
+        if raw_max_tokens is None:
+            raw_max_tokens = outgoing.get("max_tokens")
+        outgoing.pop("max_output_tokens", None)
+        outgoing.pop("max_tokens", None)
+        outgoing.pop("max_completion_tokens", None)
+        if raw_max_tokens is not None:
+            try:
+                if isinstance(raw_max_tokens, bool):
+                    raise ValueError
+                max_output_tokens = int(raw_max_tokens)
+                if isinstance(raw_max_tokens, float) and not raw_max_tokens.is_integer():
+                    raise ValueError
+            except (TypeError, ValueError, OverflowError):
+                return self._json_error(
+                    400,
+                    "max_tokens/max_output_tokens must be a positive integer",
+                    "invalid_request_error",
+                )
+            if max_output_tokens <= 0:
+                return self._json_error(
+                    400,
+                    "max_tokens/max_output_tokens must be a positive integer",
+                    "invalid_request_error",
+                )
+            outgoing["max_tokens"] = max_output_tokens
         outgoing["store"] = False
         if not str(outgoing.get("instructions") or "").strip() and not self._has_instruction_input(outgoing.get("input")):
             outgoing["instructions"] = "You are a helpful coding assistant. Follow the user's instructions carefully."
@@ -640,6 +674,17 @@ class SubscriptionGatewayService:
                             # account is attempted before retrying the pool.
                             preferred_account_id = None
                         continue
+                    # A normal 4xx request/schema rejection belongs to the
+                    # caller, not the selected subscription account.  Returning
+                    # it directly avoids poisoning the account health state and
+                    # retrying the same bad payload against every account.
+                    if 400 <= last_status < 500 and last_status not in {401, 403, 408, 429}:
+                        response_headers["x-rose-error-source"] = "upstream_request"
+                        self.logger.info(
+                            "订阅网关请求参数被上游拒绝 provider=%s model=%s account_id=%s status=%s",
+                            provider, model, account_id, last_status,
+                        )
+                        return SubscriptionGatewayResponse(last_status, response_headers, body=body)
                     last_error_type = "upstream_error"
                     last_headers = response_headers
                     self.accounts.record_failure(account, last_status, last_detail, retry_after)
@@ -648,7 +693,7 @@ class SubscriptionGatewayService:
                         "订阅网关上游拒绝 provider=%s model=%s account_id=%s status=%s",
                         provider, model, account_id, last_status,
                     )
-                    if last_status in {401, 403, 408, 409, 429} or last_status >= 500:
+                    if last_status in {401, 403, 408, 429} or last_status >= 500:
                         continue
                     return SubscriptionGatewayResponse(last_status, response_headers, body=body)
                 self._remember_account(session_key, account_id)

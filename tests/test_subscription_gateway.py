@@ -345,6 +345,7 @@ class SequenceClient:
     def __init__(self, responses):
         self.responses = list(responses)
         self.calls = 0
+        self.requests = []
 
     @staticmethod
     def build_request(method, url, **kwargs):
@@ -352,6 +353,7 @@ class SequenceClient:
 
     async def send(self, request, stream=False):
         self.calls += 1
+        self.requests.append(request)
         response = self.responses.pop(0)
         response.request = request
         return response
@@ -406,6 +408,66 @@ def streaming_response(*chunks):
         headers={"content-type": "text/event-stream"},
         stream=AsyncChunks(*chunks),
     )
+
+
+@pytest.mark.parametrize("field", ["max_tokens", "max_output_tokens", "max_completion_tokens"])
+def test_responses_token_limit_is_normalized_for_subscription_transport(field):
+    response = httpx.Response(200, json={
+        "id": "resp_test",
+        "status": "completed",
+        "usage": {"input_tokens": 4, "output_tokens": 2},
+    })
+    client = SequenceClient([response])
+    accounts = RecordingAccounts()
+    gateway = configured_gateway(accounts, RecordingStore(), client)
+
+    result = asyncio.run(gateway.proxy_openai({
+        "model": "gpt-test",
+        "input": "hello",
+        field: 256,
+    }, 9))
+
+    forwarded = json.loads(client.requests[0].content)
+    assert result.status_code == 200
+    assert forwarded["max_tokens"] == 256
+    assert "max_output_tokens" not in forwarded
+    assert "max_completion_tokens" not in forwarded
+    assert accounts.failures == []
+
+
+def test_invalid_responses_max_tokens_is_rejected_before_using_an_account():
+    client = SequenceClient([])
+    accounts = RecordingAccounts()
+    gateway = configured_gateway(accounts, RecordingStore(), client)
+
+    result = asyncio.run(gateway.proxy_openai({
+        "model": "gpt-test",
+        "input": "hello",
+        "max_tokens": "not-a-number",
+    }, 9))
+
+    assert result.status_code == 400
+    assert client.calls == 0
+    assert accounts.failures == []
+
+
+def test_upstream_request_400_does_not_cool_or_retry_subscription_account():
+    rejected = httpx.Response(400, json={
+        "error": {"message": "Unknown parameter: max_tokens"},
+    })
+    client = SequenceClient([rejected])
+    accounts = RecordingAccounts()
+    gateway = configured_gateway(accounts, RecordingStore(), client)
+
+    result = asyncio.run(gateway._proxy(
+        "openai", "gpt-test", {"model": "gpt-test", "unexpected": True}, 9, {},
+    ))
+
+    assert result.status_code == 400
+    assert result.headers["x-rose-error-source"] == "upstream_request"
+    assert client.calls == 1
+    assert accounts.failures == []
+    assert accounts.successes == []
 
 
 def test_capacity_failure_before_output_is_retried_without_leaking_failed_stream():
@@ -507,3 +569,58 @@ def test_currently_overloaded_never_updates_account_failure_state():
     )
 
     assert repository.find(3) == before
+
+
+def test_client_request_error_never_updates_account_failure_state():
+    repository = MemoryRepository([account(3)])
+    service = SubscriptionAccountService(
+        repository, JsonCipher(), NoopOAuth(), SubscriptionAccountPoolService(),
+    )
+    before = repository.find(3)
+
+    service.record_failure(
+        before,
+        400,
+        "Unknown parameter: max_tokens",
+    )
+
+    assert repository.find(3) == before
+
+
+def test_disabled_cooldown_records_failure_without_removing_account_from_pool():
+    cooling = account(3)
+    cooling.update({
+        "status": "COOLDOWN",
+        "error_count": 2,
+        "cooldown_until": "2099-01-01T00:00:00+00:00",
+        "last_error": "old transport failure",
+    })
+    repository = MemoryRepository([cooling])
+    service = SubscriptionAccountService(
+        repository, JsonCipher(), NoopOAuth(), SubscriptionAccountPoolService(),
+    )
+    service.cooldown_enabled = False
+
+    selected, _ = asyncio.run(service.acquire("openai", "gpt-test"))
+    service.record_failure(selected, 502, "temporary proxy disconnect")
+
+    saved = repository.find(3)
+    assert saved["status"] == "READY"
+    assert saved["error_count"] == 3
+    assert saved["cooldown_until"] is None
+    assert saved["last_error"] == "temporary proxy disconnect"
+    assert service.find_public(3)["status"] == "READY"
+
+
+def test_disabled_cooldown_still_invalidates_bad_credentials():
+    repository = MemoryRepository([account(3)])
+    service = SubscriptionAccountService(
+        repository, JsonCipher(), NoopOAuth(), SubscriptionAccountPoolService(),
+    )
+    service.cooldown_enabled = False
+
+    service.record_failure(repository.find(3), 401, "token expired")
+
+    saved = repository.find(3)
+    assert saved["status"] == "INVALID"
+    assert saved["cooldown_until"] is None

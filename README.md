@@ -163,7 +163,7 @@ $env:ROSE_SUBSCRIPTION_CREDENTIAL_SECRET = '<至少 32 位的随机值>'
 python app.py
 ```
 
-主要配置位于 `rose.subscription-gateway`，可以控制总开关、OAuth/请求超时、连接池和单次请求尝试的账号数。账号池由 SpringBootAI 管理的平滑加权轮询服务调度：优先选择最高优先级，同优先级按权重轮询；带会话粘连键的请求优先沿用原健康账号。账号支持模型白名单、冷却与自动 Token 刷新；401/403 会将凭据标记为失效，429/网络错误会临时冷却并轮询池内下一个账号，当前优先级不可用时继续降级到下一优先级。
+主要配置位于 `rose.subscription-gateway`，可以控制总开关、OAuth/请求超时、连接池和单次请求尝试的账号数。账号池由 SpringBootAI 管理的平滑加权轮询服务调度：优先选择最高优先级，同优先级按权重轮询；带会话粘连键的请求优先沿用原健康账号。账号支持模型白名单、可配置冷却与自动 Token 刷新；401/403 始终会将凭据标记为失效。默认关闭临时冷却，429/网络错误仍会记录并在当前请求内切换池内下一个账号，但不会阻止后续请求再次调度该账号。
 
 OpenAI 订阅上游有时会以 HTTP 200 的 SSE `response.failed` 返回“Selected model is at capacity”。网关会在任何正文、推理增量或工具参数尚未发给客户端时自动退避重试；一旦已经输出语义内容则绝不重放，避免重复回答或重复执行工具。默认重试 2 次、退避 1 秒，可用 `ROSE_SUBSCRIPTION_CAPACITY_RETRIES` 和 `ROSE_SUBSCRIPTION_CAPACITY_RETRY_BASE_SECONDS` 调整。重试耗尽时返回 `503 upstream_capacity`，并带 `Retry-After` 和 `X-Rose-Error-Source: upstream_capacity`。
 
@@ -174,6 +174,7 @@ OpenAI 订阅上游有时会以 HTTP 200 的 SSE `response.failed` 返回“Sele
 ```powershell
 $env:ROSE_SUBSCRIPTION_ACCOUNT_CONCURRENCY = '1'
 $env:ROSE_SUBSCRIPTION_ACCOUNT_RPM = '20'
+$env:ROSE_SUBSCRIPTION_ACCOUNT_COOLDOWN_ENABLED = 'false'
 $env:ROSE_SUBSCRIPTION_QUEUE_TIMEOUT_SECONDS = '0'
 $env:ROSE_SUBSCRIPTION_SESSION_AFFINITY_TTL_SECONDS = '3600'
 ```

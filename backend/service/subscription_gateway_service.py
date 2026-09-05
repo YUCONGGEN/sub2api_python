@@ -14,13 +14,14 @@ from typing import Any, AsyncIterator
 import httpx
 from springbootai import Autowired, PostConstruct, PreDestroy, Service, Slf4j, get_config
 
+from backend.common.codex_client import DEFAULT_CODEX_CLIENT_VERSION, codex_client_version, codex_identity_headers
 from backend.service.store_service import StoreService
 from backend.service.subscription_account_service import SubscriptionAccountService
 from backend.service.user_group_service import user_group_runtime
 
 
 OPENAI_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses"
-OPENAI_MODELS_URL = "https://chatgpt.com/backend-api/codex/models?client_version=0.146.0"
+OPENAI_MODELS_URL = "https://chatgpt.com/backend-api/codex/models"
 CLAUDE_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 CLAUDE_COUNT_TOKENS_URL = "https://api.anthropic.com/v1/messages/count_tokens"
 CLAUDE_MODELS_URL = "https://api.anthropic.com/v1/models"
@@ -73,6 +74,7 @@ class SubscriptionGatewayService:
         self._queued_activities: dict[int, dict[str, Any]] = {}
         self._active_activities: dict[int, dict[str, Any]] = {}
         self.max_queued_requests = 200
+        self.codex_client_version = DEFAULT_CODEX_CLIENT_VERSION
 
     @PostConstruct
     def init(self) -> None:
@@ -83,6 +85,7 @@ class SubscriptionGatewayService:
             return
         self._gateway_initialized = True
         cfg = get_config().get("rose", {}).get("subscription-gateway", {})
+        self.codex_client_version = codex_client_version(cfg)
         self.enabled = str(cfg.get("enabled", True)).strip().lower() in {"1", "true", "yes", "on"}
         self.timeout = max(5.0, min(900.0, float(cfg.get("request-timeout-seconds", 600) or 600)))
         self.connect_timeout = max(1.0, min(60.0, float(cfg.get("connect-timeout-seconds", 10) or 10)))
@@ -400,16 +403,13 @@ class SubscriptionGatewayService:
     def catalog(self) -> list[dict[str, Any]]:
         return self.accounts.catalog() if self.enabled else []
 
-    @staticmethod
-    def _openai_headers(credentials: dict[str, Any], account: dict[str, Any], stream: bool) -> dict[str, str]:
+    def _openai_headers(self, credentials: dict[str, Any], account: dict[str, Any], stream: bool) -> dict[str, str]:
         headers = {
             "Authorization": "Bearer " + str(credentials.get("access_token") or ""),
             "Content-Type": "application/json",
             "Accept": "text/event-stream" if stream else "application/json",
             "OpenAI-Beta": "responses=experimental",
-            "Originator": "codex-tui",
-            "User-Agent": "codex-tui/0.146.0 (Ubuntu 22.4.0; x86_64) xterm-256color",
-            "Version": "0.146.0",
+            **codex_identity_headers(self.codex_client_version),
         }
         account_ref = str(credentials.get("account_id") or credentials.get("chatgpt_account_id") or account.get("account_ref") or "").strip()
         if account_ref:
@@ -1025,7 +1025,7 @@ class SubscriptionGatewayService:
         credentials = fresh["credentials"]
         provider = str(account["provider"])
         if provider == "openai":
-            url = OPENAI_MODELS_URL
+            url = f"{OPENAI_MODELS_URL}?client_version={self.codex_client_version}"
             headers = self._openai_headers(credentials, account, False)
         else:
             url = CLAUDE_MODELS_URL

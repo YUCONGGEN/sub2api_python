@@ -116,6 +116,8 @@ rose:
     # 仅管理员可接入自己有权使用的 Claude/OpenAI 订阅账号。OAuth 凭据在数据库中
     # 使用独立密钥加密；生产环境必须设置为随机值，修改后旧凭据需要重新授权。
     enabled: ${ROSE_SUBSCRIPTION_GATEWAY_ENABLED:true}
+    # Codex 订阅传输的版本兼容标识（不是模型授权）。请求、模型查询与 OAuth 统一使用。
+    codex-client-version: ${ROSE_CODEX_CLIENT_VERSION:0.153.2}
     credential-secret: ${ROSE_SUBSCRIPTION_CREDENTIAL_SECRET:}
     oauth-timeout-seconds: ${ROSE_SUBSCRIPTION_OAUTH_TIMEOUT_SECONDS:60}
     request-timeout-seconds: ${ROSE_SUBSCRIPTION_REQUEST_TIMEOUT_SECONDS:600}

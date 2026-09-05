@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 import httpx
 from springbootai import PostConstruct, Service, get_config
 
+from backend.common.codex_client import codex_client_version, codex_identity_headers
 
 OPENAI_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 OPENAI_AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize"
@@ -44,6 +45,7 @@ class SubscriptionOAuthService:
     @PostConstruct
     def init(self) -> None:
         cfg = get_config().get("rose", {}).get("subscription-gateway", {})
+        self.codex_client_version = codex_client_version(cfg)
         self.timeout = max(5.0, min(180.0, float(cfg.get("oauth-timeout-seconds", 60) or 60)))
         self.trust_env = str(cfg.get("trust-env", False)).strip().lower() in {"1", "true", "yes", "on"}
         self._sessions: dict[str, dict[str, Any]] = {}
@@ -146,7 +148,7 @@ class SubscriptionOAuthService:
                 "redirect_uri": OPENAI_REDIRECT_URI,
                 "code_verifier": session["verifier"],
             }
-            response = await self._post_token(OPENAI_TOKEN_URL, data=form, headers={"originator": "codex-tui", "User-Agent": "codex-tui/0.146.0"})
+            response = await self._post_token(OPENAI_TOKEN_URL, data=form, headers=codex_identity_headers(self.codex_client_version))
         else:
             body = {
                 "grant_type": "authorization_code",
@@ -175,7 +177,7 @@ class SubscriptionOAuthService:
                     "client_id": OPENAI_CLIENT_ID,
                     "scope": "openid profile email",
                 },
-                headers={"originator": "codex-tui", "User-Agent": "codex-tui/0.146.0"},
+                headers=codex_identity_headers(self.codex_client_version),
             )
         else:
             response = await self._post_token(

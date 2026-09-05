@@ -156,6 +156,12 @@ npm run dev
 
 管理员登录后可在“订阅账号”页面接入自己有权使用的 Claude 或 OpenAI 订阅账号。推荐使用页面生成的 PKCE OAuth 链接，也可导入已授权的 Access Token / Refresh Token。OAuth state 会绑定当前管理员和供应商，Token 只以 Fernet 密文写入 `upstream_subscription_accounts`，管理 API 和页面不会回传明文。
 
+Codex 订阅请求、模型查询和 OAuth 使用统一的版本兼容标识，默认 `0.153.2`（对齐开发机已安装的 CLI，并非声明这是官方最低版本）。可通过 `rose.subscription-gateway.codex-client-version` 或 `ROSE_CODEX_CLIENT_VERSION` 调整；未设置的新旧配置均使用默认值，无须覆盖部署环境的 `application.yml`。仅在启动时读取，不增加转发过程中的探测、子进程或等待。
+
+调用 `gpt-6-astra` 时，订阅账号和用户分组都须允许该模型，客户端也应更新 Codex。推荐使用 `/v1/responses` 并传入 `"model": "gpt-6-astra"`、`"reasoning": {"effort": "low"}`（或该模型支持的其他强度）。更新网关版本标识不等于给账号增加模型权限，也不能替代客户端对新协议的支持。网关保留 Responses 的工具、推理和流式事件字段；不要把“流在 response.completed 前断开”单独当成模型版本错误，仍需查看实际上游错误。
+
+2026-09-05 在部署服务器上对同一已授权账号实测：旧标识 `0.146.0` 返回 HTTP 400，提示 Astra 需要新版 Codex；`0.153.2` 返回 HTTP 200，并收到 `response.completed`。这是该环境的兼容性验证，不代表所有账号均拥有 Astra 权限。
+
 生产启动前必须设置独立且稳定的加密密钥；修改该值后，已经保存的凭据需要重新授权：
 
 ```powershell

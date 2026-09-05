@@ -9,6 +9,7 @@ import httpx
 import pytest
 from cryptography.fernet import Fernet
 
+from backend.common.codex_client import DEFAULT_CODEX_CLIENT_VERSION, codex_client_version
 from backend.service.credential_cipher_service import CredentialCipherService
 from backend.service.subscription_account_pool_service import SubscriptionAccountPoolService
 from backend.service.subscription_account_service import SubscriptionAccountService
@@ -408,6 +409,100 @@ def streaming_response(*chunks):
         headers={"content-type": "text/event-stream"},
         stream=AsyncChunks(*chunks),
     )
+
+
+def test_codex_version_defaults_and_overrides(monkeypatch):
+    monkeypatch.delenv("ROSE_CODEX_CLIENT_VERSION", raising=False)
+    assert codex_client_version({}) == DEFAULT_CODEX_CLIENT_VERSION
+    monkeypatch.setenv("ROSE_CODEX_CLIENT_VERSION", "0.153.3")
+    assert codex_client_version({}) == "0.153.3"
+    assert codex_client_version({"codex-client-version": "0.153.4"}) == "0.153.4"
+    with pytest.raises(ValueError, match="版本号"):
+        codex_client_version({"codex-client-version": "0.153.2\r\nInjected: value"})
+
+
+def test_codex_model_query_and_headers_use_same_configured_version():
+    class Accounts(RecordingAccounts):
+        async def refresh_account(self, account_id, force=False):
+            return {"account": account(account_id), "credentials": {"access_token": "test"}}
+
+    class Client:
+        async def get(self, url, headers):
+            assert parse_qs(urlparse(url).query)["client_version"] == ["0.153.3"]
+            assert headers["Version"] == "0.153.3"
+            assert headers["User-Agent"] == "codex-tui/0.153.3"
+            return httpx.Response(200, json={"models": [{"slug": "gpt-6-astra"}]})
+
+    gateway = configured_gateway(Accounts(), RecordingStore(), Client())
+    gateway.codex_client_version = "0.153.3"
+    result = asyncio.run(gateway.test_account(3))
+    assert result["model_count"] == 1
+
+
+def test_codex_oauth_exchange_and_refresh_use_same_version(monkeypatch):
+    monkeypatch.setenv("ROSE_CODEX_CLIENT_VERSION", "0.153.3")
+    oauth = SubscriptionOAuthService()
+    oauth.init()
+    calls = []
+
+    async def post_token(url, **kwargs):
+        calls.append(kwargs["headers"])
+        return {"access_token": "access", "refresh_token": "refresh"}
+
+    oauth._post_token = post_token
+    generated = oauth.generate_authorization("openai", 17)
+    state = parse_qs(urlparse(generated["authorization_url"]).query)["state"][0]
+    asyncio.run(oauth.exchange("openai", session_id=generated["session_id"],
+                               callback_value="code", state=state, admin_id=17))
+    asyncio.run(oauth.refresh("openai", "refresh"))
+    assert len(calls) == 2
+    assert all(headers["Version"] == "0.153.3" for headers in calls)
+    assert all(headers["User-Agent"] == "codex-tui/0.153.3" for headers in calls)
+
+
+def test_astra_request_and_split_stream_events_are_preserved():
+    completed = b'data: {"type":"response.completed","response":{"usage":{"input_tokens":4,"output_tokens":2}}}\n\n'
+    chunks = [
+        b'data: {"type":"response.created"}\n\n',
+        b'data: {"type":"response.output_text.delta","delta":"ok"}\n\n',
+        completed[:23], completed[23:],
+    ]
+    client = SequenceClient([streaming_response(*chunks)])
+    store = RecordingStore()
+    gateway = configured_gateway(RecordingAccounts(), store, client)
+    payload = {
+        "model": "gpt-6-astra", "stream": True,
+        "input": [{"role": "user", "content": "hello"}],
+        "reasoning": {"effort": "high"},
+        "tools": [{"type": "function", "name": "inspect", "parameters": {"type": "object"}, "async": True}],
+    }
+
+    async def scenario():
+        response = await gateway.proxy_openai(payload, 9)
+        return b"".join([chunk async for chunk in response.stream])
+
+    assert asyncio.run(scenario()) == b"".join(chunks)
+    forwarded = json.loads(client.requests[0].content)
+    for key, value in payload.items():
+        assert forwarded[key] == value
+    assert client.requests[0].headers["version"] == DEFAULT_CODEX_CLIENT_VERSION
+    assert store.charges == [(9, "gpt-6-astra", 4, 2, 0)]
+    assert "store" not in payload  # Caller-owned request remains unchanged.
+
+
+def test_astra_version_rejection_is_returned_without_retry_or_cooldown():
+    detail = "The 'gpt-6-astra' model requires a newer version of Codex."
+    client = SequenceClient([httpx.Response(400, json={"detail": detail})])
+    accounts = RecordingAccounts()
+    store = RecordingStore()
+    gateway = configured_gateway(accounts, store, client)
+    response = asyncio.run(gateway.proxy_openai({"model": "gpt-6-astra", "input": "hello"}, 9))
+    assert response.status_code == 400
+    assert json.loads(response.body) == {"detail": detail}
+    assert response.headers["x-rose-error-source"] == "upstream_request"
+    assert client.calls == 1
+    assert accounts.failures == []
+    assert store.charges == []
 
 
 @pytest.mark.parametrize("field", ["max_tokens", "max_output_tokens", "max_completion_tokens"])

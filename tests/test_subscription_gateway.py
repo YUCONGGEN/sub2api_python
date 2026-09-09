@@ -3,6 +3,7 @@ import base64
 import hashlib
 import json
 import logging
+from copy import deepcopy
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -10,7 +11,9 @@ import pytest
 from cryptography.fernet import Fernet
 
 from backend.common.codex_client import DEFAULT_CODEX_CLIENT_VERSION, codex_client_version
+from backend.protocol import subscription_adapter
 from backend.service.credential_cipher_service import CredentialCipherService
+from backend.service.openai_chat_compatibility_service import OpenAIChatCompatibilityService
 from backend.service.subscription_account_pool_service import SubscriptionAccountPoolService
 from backend.service.subscription_account_service import SubscriptionAccountService
 from backend.service.subscription_gateway_service import SubscriptionGatewayService
@@ -409,6 +412,227 @@ def streaming_response(*chunks):
         headers={"content-type": "text/event-stream"},
         stream=AsyncChunks(*chunks),
     )
+
+
+def configured_chat_bridge(monkeypatch, client):
+    """Exercise the real bridge and gateway without a database or live accounts."""
+    accounts = RecordingAccounts()
+    store = RecordingStore()
+    gateway = configured_gateway(accounts, store, client)
+    gateway.should_route = lambda provider, model: provider == "openai" and model == "gpt-6-astra"
+    monkeypatch.setattr(subscription_adapter, "_beans", lambda request: (gateway, None))
+    monkeypatch.setattr(subscription_adapter, "_chat_compatibility", lambda request: OpenAIChatCompatibilityService())
+    return gateway, accounts, store
+
+
+@pytest.mark.parametrize("limit_field", ["max_tokens", "max_completion_tokens", "max_output_tokens"])
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("tool_call", [False, True])
+def test_trae_chat_bridge_sanitizes_actual_upstream_request(monkeypatch, limit_field, stream, tool_call):
+    output = [{"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": '{"q":"x"}'}] if tool_call else [
+        {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "hello"}]},
+    ]
+    completed = {
+        "type": "response.completed",
+        "response": {
+            "id": "resp_trae", "model": "gpt-6-astra", "created_at": 123,
+            "status": "completed", "output": output,
+            "usage": {"input_tokens": 4, "output_tokens": 2, "total_tokens": 6},
+        },
+    }
+    source = ("data: " + json.dumps(completed) + "\n\n").encode()
+    source += b"data: [DONE]\n\n"
+    client = SequenceClient([streaming_response(source[:31], source[31:])])
+    _, accounts, store = configured_chat_bridge(monkeypatch, client)
+    payload = {
+        "model": "gpt-6-astra",
+        "messages": [{"role": "user", "content": "hello"}],
+        "tools": [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}],
+        "tool_choice": "auto", "parallel_tool_calls": True,
+        "stream": stream, "stream_options": {"include_usage": True},
+        limit_field: 256, "temperature": 1, "top_p": 1,
+        "metadata": {"client": "trae"}, "truncation": "auto", "safety_identifier": "test-user",
+        "reasoning_effort": "high", "prompt_cache_key": "test-session",
+    }
+    original = deepcopy(payload)
+
+    async def scenario():
+        response = await subscription_adapter.maybe_proxy_openai_chat_subscription(None, payload, {"id": 9})
+        assert response.status_code == 200
+        if stream:
+            assert response.headers["content-type"].startswith("text/event-stream")
+            raw = b"".join([chunk async for chunk in response.body_iterator]).decode()
+            assert raw.endswith("data: [DONE]\n\n")
+            frames = [json.loads(block[6:]) for block in raw.strip().split("\n\n") if block != "data: [DONE]"]
+            assert frames[-1]["usage"]["total_tokens"] == 6
+            assert frames[-2]["choices"][0]["finish_reason"] == ("tool_calls" if tool_call else "stop")
+            deltas = [frame["choices"][0]["delta"] for frame in frames if frame["choices"]]
+            if tool_call:
+                calls = [call for delta in deltas for call in delta.get("tool_calls", [])]
+                assert calls[0]["id"] == "call_1"
+                assert calls[0]["function"]["name"] == "lookup"
+                assert "".join(call["function"].get("arguments", "") for call in calls) == '{"q":"x"}'
+            else:
+                assert "".join(delta.get("content", "") for delta in deltas) == "hello"
+        else:
+            assert response.headers["content-type"].startswith("application/json")
+            body = json.loads(response.body)
+            assert body["object"] == "chat.completion"
+            assert body["usage"]["total_tokens"] == 6
+            assert body["choices"][0]["finish_reason"] == ("tool_calls" if tool_call else "stop")
+            message = body["choices"][0]["message"]
+            if tool_call:
+                assert message["tool_calls"][0]["function"] == {"name": "lookup", "arguments": '{"q":"x"}'}
+            else:
+                assert message["content"] == "hello"
+
+    asyncio.run(scenario())
+    assert client.calls == 1
+    forwarded = json.loads(client.requests[0].content)
+    assert not {"max_tokens", "max_output_tokens", "max_completion_tokens", "temperature", "top_p",
+                "metadata", "safety_identifier", "truncation", "stream_options"} & forwarded.keys()
+    assert forwarded["model"] == "gpt-6-astra"
+    assert forwarded["input"] == [{"role": "user", "content": "hello"}]
+    assert forwarded["reasoning"] == {"effort": "high"}
+    assert forwarded["prompt_cache_key"] == "test-session"
+    assert forwarded["stream"] is True
+    assert forwarded["tools"][0]["name"] == "lookup"
+    assert forwarded["tool_choice"] == "auto"
+    assert forwarded["parallel_tool_calls"] is True
+    assert payload == original
+    assert accounts.failures == []
+    assert accounts.successes == [3]
+    assert store.charges == [(9, "gpt-6-astra", 4, 2, 0)]
+
+
+def test_invalid_trae_limit_fails_before_gateway_or_account_use(monkeypatch):
+    client = SequenceClient([])
+    gateway, accounts, store = configured_chat_bridge(monkeypatch, client)
+
+    async def unexpected_proxy(*args, **kwargs):
+        raise AssertionError("invalid request must not use the gateway")
+
+    monkeypatch.setattr(gateway, "proxy_openai", unexpected_proxy)
+    response = asyncio.run(subscription_adapter.maybe_proxy_openai_chat_subscription(None, {
+        "model": "gpt-6-astra", "messages": [{"role": "user", "content": "hello"}], "max_tokens": True,
+    }, {"id": 9}))
+    assert response.status_code == 400
+    assert "max_tokens must be a positive integer" in json.loads(response.body)["error"]["message"]
+    assert client.calls == 0
+    assert accounts.failures == []
+    assert store.charges == []
+
+
+def test_trae_stream_emits_text_before_upstream_completion_and_releases_account(monkeypatch):
+    async def scenario():
+        text_delivered = asyncio.Event()
+
+        class GatedStream(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                yield b'data: {"type":"response.output_text.delta","delta":"hello"}\n\n'
+                # A buffering regression cannot reach the terminal event.
+                await asyncio.wait_for(text_delivered.wait(), timeout=1)
+                yield b'data: {"type":"response.completed","response":{"usage":{"input_tokens":4,"output_tokens":2}}}\n\n'
+
+        upstream = httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=GatedStream())
+        client = SequenceClient([upstream])
+        gateway, accounts, store = configured_chat_bridge(monkeypatch, client)
+        response = await subscription_adapter.maybe_proxy_openai_chat_subscription(None, {
+            "model": "gpt-6-astra", "messages": [{"role": "user", "content": "hello"}],
+            "stream": True, "max_tokens": 256,
+        }, {"id": 9})
+        received = []
+        async for chunk in response.body_iterator:
+            received.append(chunk)
+            if b'"content":"hello"' in chunk:
+                text_delivered.set()
+
+        assert text_delivered.is_set()
+        assert b"".join(received).endswith(b"data: [DONE]\n\n")
+        assert store.charges == [(9, "gpt-6-astra", 4, 2, 0)]
+        assert accounts.successes == [3]
+        assert accounts.failures == []
+        assert not gateway._account_semaphore(3).locked()
+        assert upstream.is_closed
+        assert client.calls == 1
+
+    asyncio.run(scenario())
+
+
+def test_non_subscription_chat_bypasses_trae_compatibility(monkeypatch):
+    configured_chat_bridge(monkeypatch, SequenceClient([]))
+
+    def unexpected_bridge(request):
+        raise AssertionError("ordinary API and Claude models must bypass the OpenAI bridge")
+
+    monkeypatch.setattr(subscription_adapter, "_chat_compatibility", unexpected_bridge)
+    for model in ("deepseek-v4-flash", "claude-sonnet-4-6"):
+        payload = {"model": model, "messages": [{"role": "user", "content": "hello"}], "max_tokens": 256}
+        original = deepcopy(payload)
+        assert asyncio.run(subscription_adapter.maybe_proxy_openai_chat_subscription(None, payload, {"id": 9})) is None
+        assert payload == original
+
+
+def test_codex_native_route_bypasses_trae_filter_and_preserves_sse(monkeypatch):
+    chunks = [
+        b'data: {"type":"response.output_text.delta","delta":"hello"}\n\n',
+        b'data: {"type":"response.completed","response":{"usage":{"input_tokens":4,"output_tokens":2}}}\n\n',
+    ]
+    client = SequenceClient([streaming_response(*chunks)])
+    configured_chat_bridge(monkeypatch, client)
+
+    def unexpected_bridge(request):
+        raise AssertionError("Codex Responses must not enter Chat compatibility")
+
+    monkeypatch.setattr(subscription_adapter, "_chat_compatibility", unexpected_bridge)
+    payload = {
+        "model": "gpt-6-astra", "stream": True, "store": False, "instructions": "Be concise.",
+        "input": [{"role": "user", "content": "hello"}],
+        "reasoning": {"effort": "high", "summary": "auto"},
+        "include": ["reasoning.encrypted_content"], "prompt_cache_key": "codex-session",
+        "tools": [{"type": "function", "name": "inspect", "parameters": {"type": "object"}, "async": True}],
+        # These sentinel fields must not be filtered on the native route.
+        "metadata": {"test": "untouched"}, "truncation": "disabled", "temperature": 1,
+    }
+    original = deepcopy(payload)
+
+    async def scenario():
+        response = await subscription_adapter.maybe_proxy_openai_subscription(None, payload, {"id": 9})
+        return b"".join([chunk async for chunk in response.body_iterator])
+
+    assert asyncio.run(scenario()) == b"".join(chunks)
+    assert json.loads(client.requests[0].content) == original
+    assert payload == original
+    assert client.calls == 1
+
+
+def test_cancel_before_first_semantic_stream_event_closes_response_and_account_slot():
+    async def scenario():
+        waiting = asyncio.Event()
+
+        class PendingStream(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                yield b'data: {"type":"response.created"}\n\n'
+                waiting.set()
+                await asyncio.Event().wait()
+
+        upstream = httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=PendingStream())
+        client = SequenceClient([upstream])
+        accounts = RecordingAccounts()
+        store = RecordingStore()
+        gateway = configured_gateway(accounts, store, client)
+        task = asyncio.create_task(gateway.proxy_openai({"model": "gpt-6-astra", "input": "hello", "stream": True}, 9))
+        await asyncio.wait_for(waiting.wait(), 2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert upstream.is_closed
+        assert not gateway._account_semaphore(3).locked()
+        assert gateway.metrics()["active_requests"] == 0
+        assert accounts.failures == []
+        assert store.charges == []
+
+    asyncio.run(scenario())
 
 
 def test_codex_version_defaults_and_overrides(monkeypatch):

@@ -189,6 +189,8 @@ $env:ROSE_SUBSCRIPTION_SESSION_AFFINITY_TTL_SECONDS = '3600'
 
 无限等待并不等于无限堆积：`ROSE_SUBSCRIPTION_MAX_QUEUED_REQUESTS` 默认限制为 200。超过队列上限返回 `429 local_queue_full`。本地 API Key 失败会返回 `X-Rose-Error-Source: local_auth`，本地余额失败返回 `local_billing`，便于与上游 401/429 明确区分。
 
+用户并发排队会监听客户端断线：取消或断开后自动移出等待队列，正在处理的请求取消后释放对应用户名额；上游首段内容到达前取消也会关闭已打开的连接。正常连接仍按原有规则等待，不新增总时限、不提高并发上限。监听使用 ASGI 断线事件，不轮询数据库、不额外复制请求体，也不缓冲正常 SSE。
+
 对外调用继续使用本系统创建的 API Key，不要把上游订阅 Token 交给客户端：
 
 ```powershell
@@ -219,6 +221,13 @@ curl.exe http://localhost:8241/v1/chat/completions `
 ```
 
 OpenAI 订阅账号接管命中账号模型白名单的 `/v1/responses` 和 `/v1/chat/completions` 请求。Claude 订阅账号同时提供统一的 `/v1/chat/completions`、原生 `/v1/messages` 与 `/v1/messages/count_tokens`。Chat Completions 的消息、多模态内容、函数工具、普通 JSON 响应和流式 SSE 会由 SpringBootAI 管理的兼容服务自动转换；未命中任何订阅池的模型仍走 `application.yml` 中已有的普通模型上游。完成后根据上游 usage 进入现有余额与用量统计。
+
+### Trae 使用 OpenAI 订阅模型
+
+- API 格式选择 **OpenAI Chat Completions**。关闭“完整 URL”时填写 `http://www.yucg.cn:8241/v1`；打开时必须填写 `http://www.yucg.cn:8241/v1/chat/completions`，不能只填 `/v1`。
+- 模型 ID 填写账号池和用户分组均允许的模型，例如 `gpt-6-astra`；密钥使用本系统生成的 API Key。
+- 仅在 OpenAI 订阅的 Chat Completions 兼容层，接受并校验客户端输出长度参数，但不向 Codex 上游发送 `max_tokens`、`max_completion_tokens`、`max_output_tokens`；同时过滤上游不支持的采样默认值及 `metadata`、`safety_identifier`、`truncation`，避免 `Unsupported parameter`。**此路径不能保证客户端指定的输出 Token 上限**，现有余额、额度和计费逻辑不变。
+- 消息、工具调用、推理强度、会话缓存键及流式/非流式响应保留。此兼容处理不应用于 Codex 原生 `/v1/responses`、Claude 订阅或普通 API 上游，也不会增加网络探测和重试。
 
 ## 部署前清空数据（不可恢复）
 

@@ -1,5 +1,8 @@
 import asyncio
 import json
+from copy import deepcopy
+
+import pytest
 
 from backend.service.openai_chat_compatibility_service import OpenAIChatCompatibilityService
 
@@ -41,7 +44,7 @@ def test_chat_request_converts_messages_images_tools_and_reasoning():
     assert converted["model"] == "gpt-5.4"
     assert converted["stream"] is True
     assert converted["store"] is False
-    assert converted["max_output_tokens"] == 128
+    assert not {"max_tokens", "max_completion_tokens", "max_output_tokens"} & converted.keys()
     assert converted["reasoning"] == {"effort": "medium"}
     assert converted["prompt_cache_key"] == "conversation-7"
     assert "temperature" not in converted
@@ -64,6 +67,66 @@ def test_chat_request_converts_messages_images_tools_and_reasoning():
     }
     assert converted["tools"][0]["strict"] is False
     assert converted["tool_choice"] == {"type": "function", "name": "lookup"}
+
+
+@pytest.mark.parametrize("field", ["max_tokens", "max_completion_tokens", "max_output_tokens"])
+@pytest.mark.parametrize("limit", [1, 256, "256", 256.0, None])
+def test_subscription_chat_accepts_but_does_not_forward_output_limits(field, limit):
+    payload = {
+        "model": "gpt-6-astra",
+        "messages": [{"role": "user", "content": "hello"}],
+        field: limit,
+    }
+    original = deepcopy(payload)
+
+    converted = OpenAIChatCompatibilityService().to_responses(payload)
+
+    assert not {"max_tokens", "max_completion_tokens", "max_output_tokens"} & converted.keys()
+    assert payload == original
+
+
+@pytest.mark.parametrize("field", ["max_tokens", "max_completion_tokens", "max_output_tokens"])
+@pytest.mark.parametrize("limit", [True, False, 0, -1, 1.5, "1.5", "invalid", [], {}, float("inf")])
+def test_subscription_chat_rejects_invalid_output_limits(field, limit):
+    with pytest.raises(ValueError, match=field + " must be a positive integer"):
+        OpenAIChatCompatibilityService().to_responses({
+            "model": "gpt-6-astra",
+            "messages": [{"role": "user", "content": "hello"}],
+            field: limit,
+        })
+
+
+@pytest.mark.parametrize("model", ["gpt-6-astra", "gpt-5.6-sol", "o3", "custom-model-alias"])
+def test_subscription_chat_filters_unsupported_defaults_without_changing_supported_fields(model):
+    unsupported = {
+        "max_tokens": 32,
+        "max_completion_tokens": 64,
+        "max_output_tokens": 128,
+        "temperature": 1,
+        "top_p": 1,
+        "frequency_penalty": 0,
+        "presence_penalty": 0,
+        "metadata": {"client": "trae"},
+        "safety_identifier": "client-user",
+        "truncation": "auto",
+        "stream_options": {"include_usage": True},
+    }
+    supported = {
+        "model": model,
+        "instructions": "Be concise.",
+        "parallel_tool_calls": True,
+        "prompt_cache_key": "conversation-7",
+        "service_tier": "priority",
+        "reasoning": {"effort": "high", "summary": "auto"},
+    }
+    payload = {**unsupported, **supported, "messages": [{"role": "user", "content": "hello"}]}
+    original = deepcopy(payload)
+
+    converted = OpenAIChatCompatibilityService().to_responses(payload)
+
+    assert not unsupported.keys() & converted.keys()
+    assert all(converted[key] == value for key, value in supported.items())
+    assert payload == original
 
 
 def test_non_stream_responses_converts_text_tools_and_usage():

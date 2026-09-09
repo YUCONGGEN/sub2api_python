@@ -605,6 +605,7 @@ class SubscriptionGatewayService:
                 )
                 continue
             release_in_stream = False
+            response: httpx.Response | None = None
             try:
                 if queue_wait_ms >= 500:
                     self.logger.info(
@@ -762,8 +763,15 @@ class SubscriptionGatewayService:
                 return SubscriptionGatewayResponse(int(response.status_code), self._safe_response_headers(response), body=body)
             finally:
                 if not release_in_stream:
-                    self._finish_activity(activity_id)
-                    semaphore.release()
+                    try:
+                        # A disconnect can cancel header/body reads or SSE
+                        # prefetch before ownership passes to _stream_and_bill.
+                        # Close that response too, without touching live streams.
+                        if response is not None and not response.is_closed:
+                            await response.aclose()
+                    finally:
+                        self._finish_activity(activity_id)
+                        semaphore.release()
         status = last_status if 400 <= last_status < 500 else 502
         if last_error_type in {"local_queue_timeout", "upstream_capacity"}:
             status = 503

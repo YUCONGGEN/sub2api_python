@@ -31,14 +31,13 @@ class _ChatStreamState:
 @Service("openai_chat_compatibility_service")
 @Slf4j
 class OpenAIChatCompatibilityService:
-    """Translate Chat Completions requests to Responses and back.
+    """Translate subscription Chat Completions requests to Codex Responses.
 
     The raw ASGI route remains a thin wire adapter. All protocol compatibility
     rules live in this SpringBootAI service so they are discovered, managed,
     and testable in the same way as the rest of the application services.
+    Native Responses and ordinary API-key upstreams do not use this service.
     """
-
-    _MIN_OUTPUT_TOKENS = 128
 
     def to_responses(self, payload: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(payload, dict):
@@ -64,41 +63,41 @@ class OpenAIChatCompatibilityService:
         if isinstance(instructions, str) and instructions.strip():
             outgoing["instructions"] = instructions
 
+        # This is the subscription transport, not the public Responses API.
+        # Only forward supported fields: metadata, safety_identifier,
+        # truncation and sampling defaults (including Astra's) are rejected
+        # by the Codex upstream. stream_options is handled locally by the
+        # adapter when returning Chat SSE usage.
         for key in (
-            "metadata",
             "parallel_tool_calls",
             "prompt_cache_key",
-            "safety_identifier",
             "service_tier",
-            "truncation",
         ):
             if key in payload and payload[key] is not None:
                 outgoing[key] = payload[key]
 
-        max_tokens = payload.get("max_completion_tokens")
-        if max_tokens is None:
-            max_tokens = payload.get("max_tokens")
-        if max_tokens is not None:
+        # Clients such as Trae send output limits by default. Validate them,
+        # but do not send any spelling to Codex: converting to another token
+        # limit name still produces an upstream 400. This transport cannot
+        # enforce the requested output cap; normal gateway quotas still apply.
+        for key in ("max_tokens", "max_completion_tokens", "max_output_tokens"):
+            raw_limit = payload.get(key)
+            if raw_limit is None:
+                continue
             try:
-                value = int(max_tokens)
-            except (TypeError, ValueError) as exc:
-                raise ValueError("max_completion_tokens must be an integer") from exc
-            if value > 0:
-                outgoing["max_output_tokens"] = max(value, self._MIN_OUTPUT_TOKENS)
+                if isinstance(raw_limit, bool):
+                    raise ValueError
+                limit = int(raw_limit)
+                if limit <= 0 or (isinstance(raw_limit, float) and not raw_limit.is_integer()):
+                    raise ValueError
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError(f"{key} must be a positive integer") from exc
 
         reasoning = payload.get("reasoning")
         if isinstance(reasoning, dict):
             outgoing["reasoning"] = dict(reasoning)
         elif payload.get("reasoning_effort") is not None:
             outgoing["reasoning"] = {"effort": payload["reasoning_effort"]}
-
-        # GPT-5/o-series subscription endpoints reject sampling parameters for
-        # most reasoning modes. Omitting client defaults is safer and matches
-        # sub2api's compatibility behavior.
-        if not self._is_reasoning_model(model):
-            for key in ("temperature", "top_p"):
-                if key in payload and payload[key] is not None:
-                    outgoing[key] = payload[key]
 
         tools = self._tools_to_responses(payload.get("tools"), payload.get("functions"))
         if tools:
@@ -168,16 +167,19 @@ class OpenAIChatCompatibilityService:
         )
         try:
             async for event in self._iter_sse_events(raw_stream):
+                # Send terminal chunks promptly, then let the source finish
+                # normally so the gateway settles actual usage and releases
+                # its account slot. Returning here closes it as a disconnect.
+                if state.finalized:
+                    continue
                 if event == "[DONE]":
                     for chunk in self._finalize_stream(state, include_usage):
                         yield chunk
-                    return
+                    continue
                 if not isinstance(event, dict):
                     continue
                 for chunk in self._event_to_chat_chunks(event, state, include_usage):
                     yield chunk
-                if state.finalized:
-                    return
         except Exception as exc:
             if not state.finalized:
                 error = {"error": {"message": str(exc), "type": "upstream_error"}}
@@ -210,7 +212,8 @@ class OpenAIChatCompatibilityService:
 
         async for event in self._iter_sse_events(raw_stream):
             if event == "[DONE]":
-                break
+                # Consume through EOF to finish normal gateway settlement.
+                continue
             if not isinstance(event, dict):
                 continue
             event_type = str(event.get("type") or "")
@@ -491,11 +494,6 @@ class OpenAIChatCompatibilityService:
         if payload.get("verbosity") is not None:
             text["verbosity"] = payload["verbosity"]
         return text
-
-    @staticmethod
-    def _is_reasoning_model(model: str) -> bool:
-        value = str(model or "").strip().lower()
-        return value.startswith(("gpt-5", "o1", "o3", "o4")) or "codex" in value
 
     @classmethod
     def _response_output(cls, response: dict[str, Any]) -> tuple[str, str, list[dict[str, Any]], str]:

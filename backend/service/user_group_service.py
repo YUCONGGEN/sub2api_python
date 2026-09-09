@@ -145,8 +145,14 @@ class UserGroupService:
                 self._active_by_user[int(user_id)] = int(self._active_by_user.get(int(user_id), 0)) + 1
                 if not queue:
                     self._waiters_by_user.pop(int(user_id), None)
-        if wake and not wake["future"].done():
-            wake["loop"].call_soon_threadsafe(wake["future"].set_result, None)
+        if wake:
+            def notify_waiter():
+                # Cancellation may happen after release schedules this callback.
+                # Check on the owning event loop, not before scheduling it.
+                if not wake["future"].done():
+                    wake["future"].set_result(None)
+
+            wake["loop"].call_soon_threadsafe(notify_waiter)
 
     def active_for_user(self, user_id: int) -> int:
         with self._lock:

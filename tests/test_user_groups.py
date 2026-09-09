@@ -42,6 +42,27 @@ def test_group_concurrency_waits_and_releases_fifo():
     asyncio.run(scenario())
 
 
+def test_cancel_after_release_schedules_wakeup_does_not_leak_or_raise():
+    async def scenario():
+        service = UserGroupService()
+        user = {"id": 7, "group_concurrency_limit": 1}
+        errors = []
+        loop = asyncio.get_running_loop()
+        loop.set_exception_handler(lambda loop, context: errors.append(context))
+        first = await service.acquire(user)
+        second = asyncio.create_task(service.acquire(user))
+        await asyncio.sleep(0)
+        first.release()
+        second.cancel()  # Cancel before the scheduled set_result callback runs.
+        await asyncio.gather(second, return_exceptions=True)
+        await asyncio.sleep(0)
+        assert errors == []
+        assert service.active_for_user(7) == 0
+        assert service.queue_metrics()["queue_waiting"] == 0
+
+    asyncio.run(scenario())
+
+
 def test_legacy_users_are_assigned_to_seeded_groups():
     connection = sqlite3.connect(":memory:")
     connection.row_factory = sqlite3.Row

@@ -15,6 +15,7 @@ from springbootai.ai.core import ChatClientBuilder, Message, ChatResponse, Gener
 from springbootai.ai.providers import OpenAIChatModel
 
 from backend.common.multimodal import parse_dsml_tool_calls, text_content as multimodal_text_content
+from backend.common.reasoning import DEFAULT_GPT_REASONING_EFFORT, configured_gpt_reasoning_effort, default_gpt_reasoning_effort, requested_reasoning_effort
 from backend.service.store_service import StoreService
 
 
@@ -642,6 +643,7 @@ class AiGatewayService:
         self.clients: dict[str, Any] = {}
         self.models: dict[str, dict[str, Any]] = {}
         self.model_name = "gpt-5.6-sol"
+        self.gpt_default_reasoning_effort = DEFAULT_GPT_REASONING_EFFORT
         self.demo_mode = True
         self.pricing = {}
         self.health: dict[str, dict[str, Any]] = {}
@@ -655,6 +657,7 @@ class AiGatewayService:
     @PostConstruct
     def init(self):
         cfg = get_config()
+        self.gpt_default_reasoning_effort = configured_gpt_reasoning_effort(cfg)
         ai_cfg = cfg.get("springbootai", {}).get("ai", {})
         openai_cfg = ai_cfg.get("openai", {}) if isinstance(ai_cfg, dict) else {}
         rose_cfg = cfg.get("rose", {})
@@ -1017,7 +1020,7 @@ class AiGatewayService:
         return answer, usage, model
 
     @staticmethod
-    def _request_options(payload: dict, reasoning_effort: str = "", streaming: bool = False) -> dict[str, Any]:
+    def _request_options(payload: dict, reasoning_effort: str = "", streaming: bool = False, *, model: str | None = None, default_effort: str = DEFAULT_GPT_REASONING_EFFORT) -> dict[str, Any]:
         """Forward OpenAI-compatible generation controls to the provider."""
         allowed = {
             "max_tokens", "max_completion_tokens", "temperature", "top_p", "n",
@@ -1026,9 +1029,13 @@ class AiGatewayService:
             "top_logprobs", "modalities", "prediction", "service_tier",
         }
         options = {key: payload[key] for key in allowed if key in payload and payload[key] is not None}
-        requested_reasoning = payload.get("reasoning_effort") or payload.get("reasoning-effort")
-        if requested_reasoning or reasoning_effort:
-            options["reasoning_effort"] = str(requested_reasoning or reasoning_effort)
+        requested_reasoning = requested_reasoning_effort(payload)
+        if requested_reasoning is None:
+            # Use the resolved upstream name (not a public alias), including
+            # requests that omit model and use the configured default model.
+            requested_reasoning = default_gpt_reasoning_effort(model if model is not None else payload.get("model"), default_effort) or reasoning_effort
+        if requested_reasoning is not None and requested_reasoning != "":
+            options["reasoning_effort"] = str(requested_reasoning)
         if streaming:
             # OpenAI-compatible providers return token usage in the final SSE
             # event when this option is enabled. Older providers simply ignore
@@ -1060,7 +1067,7 @@ class AiGatewayService:
             usage = {"prompt_tokens": prompt_tokens, "completion_tokens": self.estimate_tokens(answer), "total_tokens": prompt_tokens + self.estimate_tokens(answer)}
             return answer, usage, model, {"demo": True}
         reasoning_effort = str(spec.get("reasoning-effort") or "").strip()
-        options = self._request_options(payload, reasoning_effort=reasoning_effort)
+        options = self._request_options(payload, reasoning_effort=reasoning_effort, model=spec.get("upstream-model") or model, default_effort=self.gpt_default_reasoning_effort)
         # Call the SpringBootAI ChatModel directly so request options reach
         # OpenAI-compatible HTTP providers.  This remains within the
         # SpringBootAI abstraction and avoids provider-specific SDK coupling.
@@ -1100,7 +1107,7 @@ class AiGatewayService:
             completion_tokens = self.estimate_tokens(answer)
             return answer, {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens, "total_tokens": prompt_tokens + completion_tokens}, model, {"demo": True}
         reasoning_effort = str(spec.get("reasoning-effort") or "").strip()
-        options = self._request_options(payload, reasoning_effort=reasoning_effort)
+        options = self._request_options(payload, reasoning_effort=reasoning_effort, model=spec.get("upstream-model") or model, default_effort=self.gpt_default_reasoning_effort)
         response = await client.chat_model.acall(messages, options=options or None)
         answer = response.content()
         metadata = response.metadata or {}
@@ -1136,7 +1143,7 @@ class AiGatewayService:
             yield {"delta": answer, "model": model, "prompt_tokens": prompt_tokens, "metadata": {"demo": True}}
             return
         reasoning_effort = str(spec.get("reasoning-effort") or "").strip()
-        options = self._request_options(payload, reasoning_effort=reasoning_effort, streaming=True)
+        options = self._request_options(payload, reasoning_effort=reasoning_effort, streaming=True, model=spec.get("upstream-model") or model, default_effort=self.gpt_default_reasoning_effort)
         for response in client.chat_model.stream(spring_messages, options=options or None):
             delta = response.content() if response else ""
             metadata = response.metadata if response else {}
@@ -1172,7 +1179,7 @@ class AiGatewayService:
             yield {"delta": answer, "model": model, "prompt_tokens": self.estimate_message_tokens(messages), "metadata": {"demo": True}}
             return
         reasoning_effort = str(spec.get("reasoning-effort") or "").strip()
-        options = self._request_options(payload, reasoning_effort=reasoning_effort, streaming=True)
+        options = self._request_options(payload, reasoning_effort=reasoning_effort, streaming=True, model=spec.get("upstream-model") or model, default_effort=self.gpt_default_reasoning_effort)
         prompt_tokens = 0
         async for response in client.chat_model.astream(messages, options=options or None):
             delta = response.content() if response else ""

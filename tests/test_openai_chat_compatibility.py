@@ -129,6 +129,28 @@ def test_subscription_chat_filters_unsupported_defaults_without_changing_support
     assert payload == original
 
 
+@pytest.mark.parametrize("fields, expected", [
+    ({"reasoning_effort": "low", "reasoning": {"summary": "auto"}}, {"effort": "low", "summary": "auto"}),
+    ({"reasoning_effort": "none", "reasoning": {"effort": None}}, {"effort": "none"}),
+    ({"reasoning-effort": "medium"}, {"effort": "medium"}),
+    ({"reasoning_effort": "high", "reasoning": {"effort": "max"}}, {"effort": "max"}),
+])
+def test_chat_bridge_keeps_explicit_effort_before_gateway_default(fields, expected):
+    payload = {"model": "gpt-5.6-sol", "messages": [{"role": "user", "content": "hello"}], **fields}
+    original = deepcopy(payload)
+    assert OpenAIChatCompatibilityService().to_responses(payload)["reasoning"] == expected
+    assert payload == original
+
+
+@pytest.mark.parametrize("reasoning", ["high", [], False, 0])
+def test_chat_bridge_does_not_default_malformed_reasoning(reasoning):
+    with pytest.raises(ValueError, match="reasoning must be a JSON object"):
+        OpenAIChatCompatibilityService().to_responses({
+            "model": "gpt-5.6-sol", "messages": [{"role": "user", "content": "hello"}],
+            "reasoning": reasoning,
+        })
+
+
 def test_non_stream_responses_converts_text_tools_and_usage():
     service = OpenAIChatCompatibilityService()
     converted = service.from_responses({

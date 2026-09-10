@@ -15,6 +15,7 @@ import httpx
 from springbootai import Autowired, PostConstruct, PreDestroy, Service, Slf4j, get_config
 
 from backend.common.codex_client import DEFAULT_CODEX_CLIENT_VERSION, codex_client_version, codex_identity_headers
+from backend.common.reasoning import DEFAULT_GPT_REASONING_EFFORT, configured_gpt_reasoning_effort, with_responses_reasoning
 from backend.service.store_service import StoreService
 from backend.service.subscription_account_service import SubscriptionAccountService
 from backend.service.user_group_service import user_group_runtime
@@ -75,6 +76,7 @@ class SubscriptionGatewayService:
         self._active_activities: dict[int, dict[str, Any]] = {}
         self.max_queued_requests = 200
         self.codex_client_version = DEFAULT_CODEX_CLIENT_VERSION
+        self.gpt_default_reasoning_effort = DEFAULT_GPT_REASONING_EFFORT
 
     @PostConstruct
     def init(self) -> None:
@@ -84,7 +86,9 @@ class SubscriptionGatewayService:
         if getattr(self, "_gateway_initialized", False):
             return
         self._gateway_initialized = True
-        cfg = get_config().get("rose", {}).get("subscription-gateway", {})
+        config = get_config()
+        self.gpt_default_reasoning_effort = configured_gpt_reasoning_effort(config)
+        cfg = config.get("rose", {}).get("subscription-gateway", {})
         self.codex_client_version = codex_client_version(cfg)
         self.enabled = str(cfg.get("enabled", True)).strip().lower() in {"1", "true", "yes", "on"}
         self.timeout = max(5.0, min(900.0, float(cfg.get("request-timeout-seconds", 600) or 600)))
@@ -481,7 +485,9 @@ class SubscriptionGatewayService:
         model = str(payload.get("model") or "").strip()
         if not model:
             return self._json_error(400, "model is required", "invalid_request_error")
-        outgoing = dict(payload)
+        # Apply the default before _proxy snapshots activity and sends JSON:
+        # the panel must show the effort actually requested from upstream.
+        outgoing = with_responses_reasoning(payload, self.gpt_default_reasoning_effort)
         # The public Responses API calls this field ``max_output_tokens``, but
         # ChatGPT's Codex subscription transport currently accepts
         # ``max_tokens`` and rejects ``max_output_tokens``.  Accept either

@@ -11,6 +11,8 @@ from typing import Any, AsyncIterator
 
 from springbootai import Service, Slf4j
 
+from backend.common.reasoning import requested_reasoning_effort
+
 
 @dataclass
 class _ChatStreamState:
@@ -94,10 +96,15 @@ class OpenAIChatCompatibilityService:
                 raise ValueError(f"{key} must be a positive integer") from exc
 
         reasoning = payload.get("reasoning")
+        if reasoning is not None and not isinstance(reasoning, dict):
+            raise ValueError("reasoning must be a JSON object")
         if isinstance(reasoning, dict):
             outgoing["reasoning"] = dict(reasoning)
-        elif payload.get("reasoning_effort") is not None:
-            outgoing["reasoning"] = {"effort": payload["reasoning_effort"]}
+        # A summary-only/empty Responses object must not hide an explicit
+        # Chat effort. Missing effort is defaulted once at the gateway boundary.
+        effort = requested_reasoning_effort(payload)
+        if effort is not None:
+            outgoing.setdefault("reasoning", {})["effort"] = effort
 
         tools = self._tools_to_responses(payload.get("tools"), payload.get("functions"))
         if tools:

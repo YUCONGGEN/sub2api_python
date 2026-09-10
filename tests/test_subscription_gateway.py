@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 from copy import deepcopy
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -503,6 +504,113 @@ def test_trae_chat_bridge_sanitizes_actual_upstream_request(monkeypatch, limit_f
     assert accounts.failures == []
     assert accounts.successes == [3]
     assert store.charges == [(9, "gpt-6-astra", 4, 2, 0)]
+
+
+@pytest.mark.parametrize("model", ["gpt-5.6-sol", "gpt-6-astra"])
+@pytest.mark.parametrize("chat", [False, True])
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("explicit_effort", [None, "low"])
+@pytest.mark.parametrize("configured_effort", ["high", "medium"])
+def test_gpt_effective_effort_is_sent_upstream_and_displayed_in_activity(monkeypatch, model, chat, stream, explicit_effort, configured_effort):
+    expected_effort = explicit_effort or configured_effort
+    completed = {
+        "id": "resp_high", "model": model, "status": "completed",
+        "output": [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "hello"}]}],
+        "usage": {"input_tokens": 4, "output_tokens": 2},
+    }
+    source = ('data: ' + json.dumps({"type": "response.completed", "response": completed}) + '\n\n').encode()
+    upstream = streaming_response(source[:17], source[17:]) if chat or stream else httpx.Response(200, json=completed)
+    client = SequenceClient([upstream])
+    gateway, accounts, store = configured_chat_bridge(monkeypatch, client)
+    gateway.gpt_default_reasoning_effort = configured_effort
+    gateway.should_route = lambda provider, requested: provider == "openai" and requested == model
+    send = client.send
+
+    async def inspect_active_request(request, stream=False):
+        # Verify the real activity snapshot while forwarding, not a UI-only
+        # fallback or a fabricated post-completion label.
+        activity = gateway.metrics(include_users=True)["active_users"]
+        assert len(activity) == 1
+        assert activity[0]["model"] == model
+        assert activity[0]["reasoning_effort"] == expected_effort
+        assert activity[0]["user_id"] == 9
+        return await send(request, stream=stream)
+
+    monkeypatch.setattr(client, "send", inspect_active_request)
+    payload = {
+        "model": model, "stream": stream, "reasoning": {"summary": "auto"},
+        "prompt_cache_key": "unchanged-session", "service_tier": "priority",
+    }
+    if chat:
+        payload["messages"] = [{"role": "user", "content": "hello"}]
+        if explicit_effort is not None:
+            payload["reasoning_effort"] = explicit_effort
+    else:
+        payload["input"] = [{"role": "user", "content": "hello"}]
+        if explicit_effort is not None:
+            payload["reasoning"]["effort"] = explicit_effort
+    original = deepcopy(payload)
+
+    async def scenario():
+        proxy = subscription_adapter.maybe_proxy_openai_chat_subscription if chat else subscription_adapter.maybe_proxy_openai_subscription
+        response = await proxy(None, payload, {"id": 9})
+        assert response.status_code == 200
+        if stream:
+            raw = b"".join([chunk async for chunk in response.body_iterator])
+            if chat:
+                assert raw.endswith(b"data: [DONE]\n\n")
+                assert b'"content":"hello"' in raw
+            else:
+                assert raw == source  # native SSE remains byte-for-byte intact
+        else:
+            assert json.loads(response.body)["id"] == ("chatcmpl-high" if chat else "resp_high")
+        assert gateway.metrics()["active_requests"] == 0
+        assert not gateway._account_semaphore(3).locked()
+
+    asyncio.run(scenario())
+    forwarded = json.loads(client.requests[0].content)
+    assert forwarded["reasoning"] == {"effort": expected_effort, "summary": "auto"}
+    assert not {"reasoning_effort", "reasoning-effort"} & forwarded.keys()
+    assert forwarded["model"] == model
+    assert forwarded["prompt_cache_key"] == "unchanged-session"
+    assert forwarded["service_tier"] == "priority"
+    assert client.calls == 1
+    assert payload == original
+    assert accounts.failures == []
+    assert accounts.successes == [3]
+    assert store.charges == [(9, model, 4, 2, 0)]
+
+
+def test_openai_subscription_routes_do_not_forward_downstream_client_headers(monkeypatch):
+    source = b'data: {"type":"response.completed","response":{"usage":{"input_tokens":4,"output_tokens":2}}}\n\n'
+    client = SequenceClient([streaming_response(source), streaming_response(source)])
+    gateway, _, _ = configured_chat_bridge(monkeypatch, client)
+    incoming = SimpleNamespace(headers={
+        "User-Agent": "Trae/test-client", "Originator": "trae",
+        "X-Trae-Request-Id": "client-only-id", "X-Client-Version": "client-only-version",
+        "Authorization": "Bearer downstream-key", "Cookie": "client-only-cookie",
+    })
+
+    async def scenario():
+        for chat in (True, False):
+            payload = {"model": "gpt-6-astra", "stream": True}
+            payload["messages" if chat else "input"] = [{"role": "user", "content": "hello"}]
+            proxy = subscription_adapter.maybe_proxy_openai_chat_subscription if chat else subscription_adapter.maybe_proxy_openai_subscription
+            response = await proxy(incoming, payload, {"id": 9})
+            assert response.status_code == 200
+            _ = [chunk async for chunk in response.body_iterator]
+
+    asyncio.run(scenario())
+    assert len(client.requests) == 2
+    for request in client.requests:
+        headers = request.headers
+        assert headers["user-agent"] == f"codex-tui/{gateway.codex_client_version}"
+        assert headers["originator"] == "codex-tui"
+        assert headers["version"] == gateway.codex_client_version
+        assert headers["authorization"] == "Bearer token-3"
+        assert not {"x-trae-request-id", "x-client-version", "cookie"} & headers.keys()
+        assert "trae" not in str(dict(headers)).lower()
+        assert json.loads(request.content)["reasoning"]["effort"] == "high"
 
 
 def test_invalid_trae_limit_fails_before_gateway_or_account_use(monkeypatch):

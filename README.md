@@ -228,6 +228,24 @@ OpenAI 订阅账号接管命中账号模型白名单的 `/v1/responses` 和 `/v1
 - 模型 ID 填写账号池和用户分组均允许的模型，例如 `gpt-6-astra`；密钥使用本系统生成的 API Key。
 - 仅在 OpenAI 订阅的 Chat Completions 兼容层，接受并校验客户端输出长度参数，但不向 Codex 上游发送 `max_tokens`、`max_completion_tokens`、`max_output_tokens`；同时过滤上游不支持的采样默认值及 `metadata`、`safety_identifier`、`truncation`，避免 `Unsupported parameter`。**此路径不能保证客户端指定的输出 Token 上限**，现有余额、额度和计费逻辑不变。
 - 消息、工具调用、推理强度、会话缓存键及流式/非流式响应保留。此兼容处理不应用于 Codex 原生 `/v1/responses`、Claude 订阅或普通 API 上游，也不会增加网络探测和重试。
+- 两个 OpenAI 订阅入口共用网关的 Codex 兼容请求头，不透传下游客户端的 `User-Agent`、`Originator`、自定义请求头、Cookie 或网关 API Key；上游认证仍使用订阅账号凭据。这只是协议兼容和凭据隔离，并不保证来源不可辨识或免除上游使用限制，消息内容、工具定义及行为仍可能体现客户端差异。
+
+### GPT 请求的默认推理强度
+
+在 `application.yml` 中设置（**修改后重启后端生效**，前端无需重启）：
+
+```yaml
+rose:
+  proxy:
+    default-gpt-reasoning-effort: high
+```
+
+例如改为 `medium` 可调整全局缺省档位。配置启动时读取，不在每次请求时读取文件。省略、`null` 或空值回退 `high`；其他档位须确认所有适用模型均支持，通常可选 `low`、`medium`、`high`。请求明确指定的档位优先于此配置。
+
+- GPT-5 系列推理模型（含 Sol、Terra、Luna、Codex）和 `gpt-6-astra` 在请求未指定强度、值为 `null` 或空字符串时，由网关使用上述配置（默认 **`high`**）。普通 API 上游按实际上游模型名判断；非 GPT、GPT-4/4o、`chat-latest` 及图像/音频模型不自动添加。
+- 此规则同时适用于 Chat Completions 和 Responses，流式与非流式一致。Chat 使用 `reasoning_effort`，订阅 Responses 上游实际发送 `reasoning: {effort: "high"}`；后台执行/账号池排队记录读取这份转发参数，显示“高”，不是只修改显示文字。用户组排队尚未解析请求时，不虚构模型或档位。
+- 调用方明确指定的 `none`、`low`、`medium`、`high`、`xhigh` 等值原样保留，由上游校验模型是否支持；嵌套 `reasoning.effort` 优先于 `reasoning_effort` 和兼容别名 `reasoning-effort`，`summary` 等其他推理字段保留。普通 API 的 GPT 默认值也使用这项配置；非 GPT 仍保留各模型配置的默认强度。
+- 这是本项目的默认策略，不代表上游原生默认值。只在转发前处理请求字段，不增加网络探测、数据库查询或 SSE 缓冲；更高推理强度本身可能增加上游生成耗时和 Token 使用量。
 
 ## 部署前清空数据（不可恢复）
 

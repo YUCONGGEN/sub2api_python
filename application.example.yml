@@ -172,67 +172,67 @@ rose:
       timeout-seconds: ${ROSE_HEALTH_TIMEOUT_SECONDS:5}
     max-tokens-per-request: 100000
     request-timeout-seconds: 180
-  # 模型目录完全配置驱动。新增模型只需复制一个条目，无需修改 Python 代码。
-  models:
-    # 本机已配置 DeepSeek V4 密钥；部署到其他环境时请替换为环境变量引用。
-    - id: deepseek-v4-flash
-      enabled: true
-      provider: DeepSeek
-      endpoint: Chat
-      group: DeepSeek V4
-      upstream-model: deepseek-v4-flash
-      base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com/v1}
-      api-key: ${DEEPSEEK_API_KEY:}
-      temperature: ${DEEPSEEK_TEMPERATURE:0.7}
-      timeout-seconds: 180
-      demo-mode-when-key-missing: false
-      currency: CNY
-      pricing:
-        # DeepSeek 价格按人民币配置，单位为元 / 1M tokens，可用环境变量覆盖。
-        input-cny-per-million: ${DEEPSEEK_V4_FLASH_INPUT_CNY_PER_MILLION:2}
-        output-cny-per-million: ${DEEPSEEK_V4_FLASH_OUTPUT_CNY_PER_MILLION:8}
-        cache-cny-per-million: ${DEEPSEEK_V4_FLASH_CACHE_CNY_PER_MILLION:2}
-        multiplier: 1.0
-      description: DeepSeek V4 Flash，适合高吞吐对话和代码任务。
-    - id: deepseek-v4-pro
-      enabled: true
-      provider: DeepSeek
-      endpoint: Chat
-      group: DeepSeek V4
-      upstream-model: deepseek-v4-pro
-      base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com/v1}
-      api-key: ${DEEPSEEK_API_KEY:}
-      temperature: ${DEEPSEEK_TEMPERATURE:0.7}
-      timeout-seconds: 180
-      demo-mode-when-key-missing: false
-      currency: CNY
-      pricing:
-        # DeepSeek 价格按人民币配置，单位为元 / 1M tokens，可用环境变量覆盖。
-        input-cny-per-million: ${DEEPSEEK_V4_PRO_INPUT_CNY_PER_MILLION:4}
-        output-cny-per-million: ${DEEPSEEK_V4_PRO_OUTPUT_CNY_PER_MILLION:16}
-        cache-cny-per-million: ${DEEPSEEK_V4_PRO_CACHE_CNY_PER_MILLION:4}
-        multiplier: 1.0
-      description: DeepSeek V4 Pro，适合复杂推理和长上下文任务。
-    - id: deepseek-v4-flash-vision-exp
-      enabled: true
-      provider: DeepSeek
-      endpoint: Chat
-      group: DeepSeek V4
-      upstream-model: deepseek-v4-flash-vision-exp
-      base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com/v1}
-      api-key: ${DEEPSEEK_API_KEY:}
-      temperature: ${DEEPSEEK_TEMPERATURE:0.7}
-      timeout-seconds: 180
-      demo-mode-when-key-missing: false
-      supports-image: true
-      currency: CNY
-      pricing:
-        # 视觉实验模型按 DeepSeek V4 Flash 的人民币价格计费，可独立覆盖。
-        input-cny-per-million: ${DEEPSEEK_V4_FLASH_VISION_INPUT_CNY_PER_MILLION:2}
-        output-cny-per-million: ${DEEPSEEK_V4_FLASH_VISION_OUTPUT_CNY_PER_MILLION:8}
-        cache-cny-per-million: ${DEEPSEEK_V4_FLASH_VISION_CACHE_CNY_PER_MILLION:2}
-        multiplier: 1.0
-      description: DeepSeek V4 Flash Vision Experimental，支持图像理解与高吞吐对话。
+  # DeepSeek 模型已停用，以下保留配置为注释；恢复时需取消注释并配置密钥。
+  # OpenAI / Claude 订阅模型由订阅账号池提供，不受此列表影响。
+  models: []
+    # - id: deepseek-v4-flash
+    #   enabled: true
+    #   provider: DeepSeek
+    #   endpoint: Chat
+    #   group: DeepSeek V4
+    #   upstream-model: deepseek-v4-flash
+    #   base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com/v1}
+    #   api-key: ${DEEPSEEK_API_KEY:}
+    #   temperature: ${DEEPSEEK_TEMPERATURE:0.7}
+    #   timeout-seconds: 180
+    #   demo-mode-when-key-missing: false
+    #   currency: CNY
+    #   pricing:
+    #     # DeepSeek 价格按人民币配置，单位为元 / 1M tokens，可用环境变量覆盖。
+    #     input-cny-per-million: ${DEEPSEEK_V4_FLASH_INPUT_CNY_PER_MILLION:2}
+    #     output-cny-per-million: ${DEEPSEEK_V4_FLASH_OUTPUT_CNY_PER_MILLION:8}
+    #     cache-cny-per-million: ${DEEPSEEK_V4_FLASH_CACHE_CNY_PER_MILLION:2}
+    #     multiplier: 1.0
+    #   description: DeepSeek V4 Flash，适合高吞吐对话和代码任务。
+    # - id: deepseek-v4-pro
+    #   enabled: true
+    #   provider: DeepSeek
+    #   endpoint: Chat
+    #   group: DeepSeek V4
+    #   upstream-model: deepseek-v4-pro
+    #   base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com/v1}
+    #   api-key: ${DEEPSEEK_API_KEY:}
+    #   temperature: ${DEEPSEEK_TEMPERATURE:0.7}
+    #   timeout-seconds: 180
+    #   demo-mode-when-key-missing: false
+    #   currency: CNY
+    #   pricing:
+    #     # DeepSeek 价格按人民币配置，单位为元 / 1M tokens，可用环境变量覆盖。
+    #     input-cny-per-million: ${DEEPSEEK_V4_PRO_INPUT_CNY_PER_MILLION:4}
+    #     output-cny-per-million: ${DEEPSEEK_V4_PRO_OUTPUT_CNY_PER_MILLION:16}
+    #     cache-cny-per-million: ${DEEPSEEK_V4_PRO_CACHE_CNY_PER_MILLION:4}
+    #     multiplier: 1.0
+    #   description: DeepSeek V4 Pro，适合复杂推理和长上下文任务。
+    # - id: deepseek-v4-flash-vision-exp
+    #   enabled: true
+    #   provider: DeepSeek
+    #   endpoint: Chat
+    #   group: DeepSeek V4
+    #   upstream-model: deepseek-v4-flash-vision-exp
+    #   base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com/v1}
+    #   api-key: ${DEEPSEEK_API_KEY:}
+    #   temperature: ${DEEPSEEK_TEMPERATURE:0.7}
+    #   timeout-seconds: 180
+    #   demo-mode-when-key-missing: false
+    #   supports-image: true
+    #   currency: CNY
+    #   pricing:
+    #     # 视觉实验模型按 DeepSeek V4 Flash 的人民币价格计费，可独立覆盖。
+    #     input-cny-per-million: ${DEEPSEEK_V4_FLASH_VISION_INPUT_CNY_PER_MILLION:2}
+    #     output-cny-per-million: ${DEEPSEEK_V4_FLASH_VISION_OUTPUT_CNY_PER_MILLION:8}
+    #     cache-cny-per-million: ${DEEPSEEK_V4_FLASH_VISION_CACHE_CNY_PER_MILLION:2}
+    #     multiplier: 1.0
+    #   description: DeepSeek V4 Flash Vision Experimental，支持图像理解与高吞吐对话。
   billing:
     currency: CNY
     # 兑换码前缀由配置统一控制，修改后新生成的兑换码和前端占位提示会同步更新。

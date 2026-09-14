@@ -1355,6 +1355,10 @@ html[data-theme="dark"] .health-bars span.idle{background:#1b303c!important}
 }
 .codex-auth-brand{display:flex;align-items:center;gap:12px;font-size:18px;font-weight:700;letter-spacing:-.035em}
 .codex-auth-brand-cluster{display:flex;align-items:center;gap:18px}
+.codex-auth-links{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.codex-auth-links .codex-auth-docs-link{white-space:nowrap}
+.codex-auth-links svg{width:14px;height:14px}
+.codex-auth-docs-link:focus-visible{outline:2px solid currentColor;outline-offset:3px}
 .codex-auth-docs-link{display:inline-flex;align-items:center;gap:8px;min-height:36px;padding:0 13px;border:1px solid #17172124;border-radius:999px;background:#ffffff35;color:#171721;text-decoration:none;font-size:11px;font-weight:650;backdrop-filter:blur(12px);transition:.2s}
 .codex-auth-docs-link i{display:grid;place-items:center;width:20px;height:20px;border-radius:7px;background:#ffffff9c;font:9px var(--mono);font-style:normal}.codex-auth-docs-link b{font-size:13px;font-weight:400}.codex-auth-docs-link:hover{border-color:#17172142;background:#ffffff69;box-shadow:0 8px 24px #2e2b6617;transform:translateY(-1px)}
 .codex-auth-mark{display:grid;place-items:center;width:38px;height:38px;border:1px solid #0b0b0d24;border-radius:12px;background:#ffffffbf;box-shadow:0 8px 24px #37336a1c;font-size:19px}
@@ -1507,6 +1511,16 @@ html[data-theme="dark"] .codex-auth-footer-left>a{border-color:#ffffff12;backgro
   .codex-auth-snow span{animation:none;opacity:.2}
 }
 
+/* Extra login entrances wrap below the brand without covering the form. */
+@media(max-width:900px){
+  .codex-auth-with-links .codex-auth-header{position:relative;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px}
+  .codex-auth-with-links .codex-auth-brand-cluster{display:contents}
+  .codex-auth-with-links .codex-auth-brand{grid-column:1;grid-row:1}
+  .codex-auth-with-links .codex-auth-header-action{grid-column:2;grid-row:1}
+  .codex-auth-with-links .codex-auth-links{grid-column:1 / -1;grid-row:2;gap:8px}
+  .codex-auth-with-links .codex-auth-main{padding-top:26px;min-height:auto}
+}
+
 /* Profile card ordering: quick links sit beside password settings on desktop. */
 .profile-layout>.preference-panel{grid-column:auto}
 
@@ -1568,3 +1582,11 @@ html[data-theme="dark"] .app-select .app-select-menu small{color:#9bb0bd}
 html[data-theme="dark"] .app-select .app-select-menu button:hover,
 html[data-theme="dark"] .app-select .app-select-menu button:focus{background:#2d4a5b}
 html[data-theme="dark"] .app-select .app-select-menu button.selected{background:#314a41}
+
+/* The group title opens the entire card without intercepting edit/delete. */
+.group-detail-link{color:inherit;text-decoration:none}
+.group-detail-link::after{content:"";position:absolute;inset:0;z-index:1;border-radius:inherit}
+.group-detail-link:focus-visible{outline:none}
+.group-detail-link:focus-visible::after{outline:3px solid #6397b0;outline-offset:-4px}
+.group-detail-link>span{font:16px var(--sans);margin-left:6px;opacity:.65}
+.user-group-card .group-card-actions{position:relative;z-index:2}

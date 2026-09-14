@@ -1,5 +1,5 @@
 <template>
-  <div class="login-page codex-auth">
+  <div class="login-page codex-auth codex-auth-with-links">
     <div class="codex-auth-orb orb-one" aria-hidden="true"></div>
     <div class="codex-auth-orb orb-two" aria-hidden="true"></div>
     <div class="codex-auth-snow" aria-hidden="true"><span></span><span></span><span></span></div>
@@ -10,7 +10,15 @@
           <span class="codex-auth-mark" aria-hidden="true">↗</span>
           <span>{{ appName }}</span>
         </div>
-        <router-link class="codex-auth-docs-link" to="/docs"><i aria-hidden="true">⌘</i><span>配置教程</span><b aria-hidden="true">↗</b></router-link>
+        <nav class="codex-auth-links" aria-label="教程与应用入口">
+          <router-link class="codex-auth-docs-link" to="/docs"><i aria-hidden="true">⌘</i><span>配置教程</span><b aria-hidden="true">↗</b></router-link>
+          <a class="codex-auth-docs-link" href="http://www.yucg.cn:8235" target="_blank" rel="noopener noreferrer" title="YuDesk远程桌面（新窗口打开）">
+            <i aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8m-4-4v4"/></svg></i><span>YuDesk远程桌面</span><b aria-hidden="true">↗</b>
+          </a>
+          <a class="codex-auth-docs-link" href="http://www.yucg.cn:8250" target="_blank" rel="noopener noreferrer" title="WeLink即时办公（新窗口打开）">
+            <i aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11.5a8 8 0 0 1-8 8H4l1.7-3.4A8 8 0 1 1 20 11.5Z"/><path d="M8 10h8m-8 4h5"/></svg></i><span>WeLink即时办公</span><b aria-hidden="true">↗</b>
+          </a>
+        </nav>
       </div>
       <router-link class="codex-auth-header-action" to="/register">注册账户</router-link>
     </header>

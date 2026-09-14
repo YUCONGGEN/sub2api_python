@@ -230,7 +230,7 @@
       <div class="group-list-head"><div><span class="eyebrow">POLICY DIRECTORY</span><strong>已配置分组</strong></div><small>默认组不可删除；删除其他分组时，成员会转入默认组。</small></div>
       <div class="user-group-grid"><article v-for="group in groups" :key="group.id" :class="['user-group-card', { default: group.is_default, editing: editingGroup && editingGroup.id === group.id }]">
         <div class="group-card-accent"></div>
-        <div class="group-card-top"><div class="group-card-mark">{{ String(group.name || '组').slice(0, 1).toUpperCase() }}</div><div class="group-card-identity"><span class="eyebrow">GROUP {{ String(group.id).padStart(2, '0') }}</span><h3>{{ group.name }}</h3></div><span v-if="group.is_default" class="group-default-badge"><i></i>注册默认</span></div>
+        <div class="group-card-top"><div class="group-card-mark">{{ String(group.name || '组').slice(0, 1).toUpperCase() }}</div><div class="group-card-identity"><span class="eyebrow">GROUP {{ String(group.id).padStart(2, '0') }}</span><h3><router-link class="group-detail-link" :to="`/admin/user-groups/${group.id}`" :aria-label="`查看${group.name}的成员和用量`">{{ group.name }} <span aria-hidden="true">↗</span></router-link></h3></div><span v-if="group.is_default" class="group-default-badge"><i></i>注册默认</span></div>
         <p class="group-card-description">{{ group.description || '暂未填写分组说明，可通过编辑补充分组用途。' }}</p>
         <div class="group-policy-stats"><span><small>权重等级</small><b>{{ group.weight }}</b></span><span><small>基础成员</small><b>{{ group.member_count || 0 }}<em> 人</em></b></span><span><small>绑定套餐</small><b>{{ group.plan_count || 0 }}<em> 个</em></b></span><span><small>单人并发</small><b>{{ group.concurrency_limit }}<em> 个任务</em></b></span></div>
         <div class="group-model-summary"><span v-for="model in groupModelChips(group)" :key="model">{{ model }}</span><span v-if="groupExtraModelCount(group)" class="more">+{{ groupExtraModelCount(group) }}</span><span v-if="!groupModelChips(group).length" class="blocked">未开放模型</span></div>
@@ -390,6 +390,7 @@ export default {
     planGroupSelectOptions () { return [{ value: null, label: '不调整用户分组', description: '保持用户当前基础分组' }, ...this.groupOptions.map(group => ({ value: group.id, label: group.name, description: `权重 ${group.weight} · 并发 ${group.concurrency_limit}` }))] }
   },
   created () { this.load(); this.loadGroupOptions(); this.loadModelCatalog() },
+  mounted () { if (this.$route.hash === '#admin-business-groups') this.scrollToBusinessSection('groups') },
   methods: {
     scrollToBusinessSection (section) {
       this.activeAdminSection = 'business'

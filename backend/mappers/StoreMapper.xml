@@ -98,6 +98,21 @@
         FROM user_groups WHERE weight=#{weight} AND (#{exclude_group_id} IS NULL OR id&lt;&gt;#{exclude_group_id}) LIMIT 1
     </select>
     <select id="count_user_groups" resultType="int">SELECT COUNT(*) FROM user_groups</select>
+    <select id="user_group_totals">
+        SELECT (SELECT COUNT(*) FROM users WHERE group_id=#{group_id} AND deleted_at IS NULL) member_count,
+               COUNT(r.id) requests, COALESCE(SUM(r.cost),0) total_cost,
+               COALESCE(SUM(r.total_tokens),0) total_tokens
+        FROM usage_records r JOIN users u ON u.id=r.user_id
+        WHERE u.group_id=#{group_id} AND u.deleted_at IS NULL
+    </select>
+    <select id="user_group_members">
+        SELECT u.id,u.username,u.email,u.role,u.enabled,u.last_login,
+               (SELECT COUNT(*) FROM usage_records r WHERE r.user_id=u.id) requests,
+               (SELECT COALESCE(SUM(r.cost),0) FROM usage_records r WHERE r.user_id=u.id) total_cost,
+               (SELECT COALESCE(SUM(r.total_tokens),0) FROM usage_records r WHERE r.user_id=u.id) total_tokens
+        FROM users u WHERE u.group_id=#{group_id} AND u.deleted_at IS NULL
+        ORDER BY u.id ASC LIMIT #{limit} OFFSET #{offset}
+    </select>
     <select id="list_user_groups">
         SELECT g.id,g.name,g.description,g.weight,g.concurrency_limit,g.allowed_models_json,g.is_default,g.created_at,g.updated_at,
                (SELECT COUNT(*) FROM users u WHERE u.group_id=g.id AND u.deleted_at IS NULL) member_count,

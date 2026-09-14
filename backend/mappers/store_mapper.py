@@ -75,6 +75,12 @@ class StoreMapper:
     def count_user_groups(self) -> int:
         pass
 
+    def user_group_totals(self, group_id: int) -> Mapping[str, Any]:
+        pass
+
+    def user_group_members(self, group_id: int, offset: int = 0, limit: int = 5) -> list[dict]:
+        pass
+
     def list_user_groups(self, offset: int = 0, limit: int = 5) -> list[dict]:
         pass
 

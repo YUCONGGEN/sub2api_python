@@ -108,6 +108,15 @@ class AdminController:
         result = self.store.list_users(keyword, page, page_size)
         return ok({"ok": True, "users": result["items"], "pagination": result})
 
+    @GetMapping("/user-groups/{group_id}")
+    def user_group_detail(self, group_id: int = PathVariable(name="group_id"), authorization: str = RequestHeader(name="Authorization", required=False), page: int = RequestParam(name="page", required=False, default=1), page_size: int = RequestParam(name="page_size", required=False, default=5)):
+        if not self.admin(authorization):
+            return forbidden()
+        detail = self.store.admin_group_detail(group_id, page, page_size)
+        if detail is None:
+            return not_found("分组不存在或已删除")
+        return ok({"ok": True, **detail})
+
     @GetMapping("/user-groups")
     def user_groups(self, authorization: str = RequestHeader(name="Authorization", required=False), page: int = RequestParam(name="page", required=False, default=1), page_size: int = RequestParam(name="page_size", required=False, default=5)):
         if not self.admin(authorization):

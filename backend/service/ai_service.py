@@ -686,10 +686,12 @@ class AiGatewayService:
         demo_value = proxy_cfg.get("demo-mode-when-key-missing", True)
         self.demo_mode = str(demo_value).strip().lower() in {"1", "true", "yes", "on"} if isinstance(demo_value, str) else bool(demo_value)
         self.pricing = billing
-        configured = rose_cfg.get("models", [])
+        configured = rose_cfg.get("models")
         if isinstance(configured, dict):
             configured = [{"id": key, **(value if isinstance(value, dict) else {})} for key, value in configured.items()]
-        if not isinstance(configured, list) or not configured:
+        # An explicitly empty catalog is valid for subscription-only setups.
+        # Only missing/legacy configuration should create the fallback model.
+        if not isinstance(configured, list):
             configured = [{
                 "id": self.model_name,
                 "enabled": True,

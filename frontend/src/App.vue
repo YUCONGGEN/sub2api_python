@@ -22,7 +22,7 @@
         </div>
       </aside>
       <main class="main-content">
-        <header class="topbar"><button class="topbar-menu" type="button" @click="mobileMenuOpen = !mobileMenuOpen">☰</button><div class="crumb"><span>{{ siteName }}</span><b>/</b>{{ pageTitle }}</div><div class="top-actions"><button class="theme-switch" type="button" @click="toggleTheme">主题：{{ theme === 'dark' ? '夜晚' : '白天' }}</button><router-link to="/docs">新手指南 ↗</router-link></div></header>
+        <header class="topbar"><button class="topbar-menu" type="button" @click="mobileMenuOpen = !mobileMenuOpen">☰</button><div class="crumb"><span>{{ siteName }}</span><b>/</b>{{ pageTitle || $route.meta.title }}</div><div class="top-actions"><button class="theme-switch" type="button" @click="toggleTheme">主题：{{ theme === 'dark' ? '夜晚' : '白天' }}</button><router-link to="/docs">新手指南 ↗</router-link></div></header>
         <router-view :user="user" :app-name="siteName" :api-base-url="apiBaseUrl" :recharge-code-placeholder="rechargeCodePlaceholder" :codex-config="codexConfig" :model-options="modelOptions" @refresh-user="refreshUser" />
       </main>
     </template>

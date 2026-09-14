@@ -268,6 +268,20 @@ class StoreService:
         rows = [self._public_group(row) for row in self.mapper.list_user_groups(offset, page_size)]
         return self.page_result(rows, total, page, page_size)
 
+    def admin_group_detail(self, group_id: int, page: int = 1, page_size: int = 5) -> dict[str, Any] | None:
+        group = self.find_user_group(group_id)
+        if not group:
+            return None
+        # Current assigned members' lifetime usage, not historical group attribution.
+        totals = dict(self.mapper.user_group_totals(int(group_id)))
+        total = int(totals.get("member_count") or 0)
+        page, page_size, _, offset = self.page_window(total, page, page_size)
+        fields = ("id", "username", "email", "role", "enabled", "last_login", "requests", "total_cost", "total_tokens")
+        members = [{key: row.get(key) for key in fields}
+                   for row in self.mapper.user_group_members(int(group_id), offset, page_size)]
+        return {"group": group, "totals": totals,
+                "members": self.page_result(members, total, page, page_size)}
+
     @staticmethod
     def _group_values(values: Mapping[str, Any], *, partial: bool = False) -> dict[str, Any]:
         changes: dict[str, Any] = {}

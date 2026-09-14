@@ -114,6 +114,7 @@ export const api = {
   testUpstreamSubscription: id => client.post(`/api/admin/upstream-subscriptions/${id}/test`),
   users: (keyword, params = {}) => client.get('/api/admin/users', { params: { keyword, ...params } }),
   userGroups: (params = {}) => client.get('/api/admin/user-groups', { params }),
+  userGroupDetail: (id, params = {}) => client.get(`/api/admin/user-groups/${encodeURIComponent(id)}`, { params }),
   createUserGroup: body => client.post('/api/admin/user-groups', body),
   updateUserGroup: (id, body) => client.patch(`/api/admin/user-groups/${id}`, body),
   deleteUserGroup: id => client.delete(`/api/admin/user-groups/${id}`),

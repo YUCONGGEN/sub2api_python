@@ -155,5 +155,26 @@ class SubscriptionAdminController:
             return bad(str(exc), 502)
         return ok(result, result.get("message", "连接正常"))
 
+    @GetMapping("/{account_id}/quota")
+    async def account_quota(
+        self,
+        account_id: int = PathVariable(name="account_id"),
+        refresh: str = RequestParam(name="refresh", required=False, default="false"),
+        authorization: str = RequestHeader(name="Authorization", required=False),
+    ):
+        if not self._admin(authorization):
+            return forbidden()
+        account = self.accounts.find_public(account_id)
+        if not account:
+            return not_found("订阅账号不存在")
+        if account.get("provider") != "openai":
+            return bad("只有 OpenAI / Codex 订阅支持用量查询")
+        force = str(refresh or "").strip().lower() in {"1", "true", "yes", "on"}
+        try:
+            quota = await self.gateway.query_account_quota(account_id, force=force)
+        except ValueError as exc:
+            return bad(str(exc), 502)
+        return ok({"ok": True, "quota": quota}, "订阅用量已刷新" if force else "订阅用量查询成功")
+
 
 __all__ = ["SubscriptionAdminController"]

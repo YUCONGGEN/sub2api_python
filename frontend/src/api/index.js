@@ -112,6 +112,7 @@ export const api = {
   exchangeUpstreamSubscription: body => client.post('/api/admin/upstream-subscriptions/oauth/exchange', body),
   refreshUpstreamSubscription: id => client.post(`/api/admin/upstream-subscriptions/${id}/refresh`),
   testUpstreamSubscription: id => client.post(`/api/admin/upstream-subscriptions/${id}/test`),
+  upstreamSubscriptionQuota: (id, refresh = false) => client.get(`/api/admin/upstream-subscriptions/${id}/quota`, { params: { refresh } }),
   users: (keyword, params = {}) => client.get('/api/admin/users', { params: { keyword, ...params } }),
   userGroups: (params = {}) => client.get('/api/admin/user-groups', { params }),
   userGroupDetail: (id, params = {}) => client.get(`/api/admin/user-groups/${encodeURIComponent(id)}`, { params }),

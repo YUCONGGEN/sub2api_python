@@ -376,6 +376,7 @@ class RecordingAccounts:
     def __init__(self):
         self.successes = []
         self.failures = []
+        self.weekly_disables = []
 
     async def acquire(self, provider, model, excluded, preferred_account_id=None):
         return account(3), {"access_token": "token-3"}
@@ -386,9 +387,28 @@ class RecordingAccounts:
     def record_failure(self, row, status, detail, retry_after=None):
         self.failures.append((int(row["id"]), int(status), str(detail)))
 
+    def disable_for_weekly_quota(self, row, remaining_percent, threshold=3.0):
+        if float(remaining_percent) >= float(threshold):
+            return False
+        self.weekly_disables.append((int(row["id"]), float(remaining_percent), float(threshold)))
+        return True
+
     @staticmethod
     def cost(row, input_tokens, output_tokens):
         return 0
+
+
+class QuotaAccounts(RecordingAccounts):
+    async def refresh_account(self, account_id, force=False):
+        row = account(int(account_id))
+        row["account_ref"] = "account-ref-3"
+        return {
+            "account": row,
+            "credentials": {
+                "access_token": "quota-token",
+                "account_id": "account-ref-3",
+            },
+        }
 
 
 class RecordingStore:
@@ -410,6 +430,8 @@ def configured_gateway(accounts, store, client, *, capacity_retries=2):
     gateway.per_account_rpm = 20
     gateway.queue_timeout = 0
     gateway.session_affinity_ttl = 60
+    gateway.quota_cache_ttl = 300
+    gateway.weekly_quota_disable_threshold = 3
     gateway.logger = logging.getLogger("test.subscription_gateway.capacity")
     gateway._client = lambda: client
     return gateway
@@ -421,6 +443,114 @@ def streaming_response(*chunks):
         headers={"content-type": "text/event-stream"},
         stream=AsyncChunks(*chunks),
     )
+
+
+def test_subscription_quota_normalizes_windows_credits_and_uses_cache():
+    usage = {
+        "plan_type": "pro",
+        "rate_limit": {
+            "allowed": True,
+            "limit_reached": False,
+            "primary_window": {
+                "used_percent": 70,
+                "limit_window_seconds": 604800,
+                "reset_after_seconds": 3600,
+            },
+            "secondary_window": {
+                "used_percent": 25,
+                "limit_window_seconds": 18000,
+                "reset_after_seconds": 600,
+            },
+        },
+        "rate_limit_reset_credits": {"available_count": 4},
+    }
+    details = {
+        "available_count": 2,
+        "credits": [
+            {"id": "secret-credit-id", "reset_type": "codex_rate_limits", "status": "available", "expires_at": "2026-10-01T00:00:00Z"},
+            {"id": "used-credit", "reset_type": "codex_rate_limits", "status": "redeemed", "expires_at": "2026-09-01T00:00:00Z"},
+            {"id": "other-credit", "reset_type": "other", "status": "available", "expires_at": "2026-11-01T00:00:00Z"},
+        ],
+    }
+    client = SequenceClient([httpx.Response(200, json=usage), httpx.Response(200, json=details)])
+    gateway = configured_gateway(QuotaAccounts(), RecordingStore(), client)
+
+    first = asyncio.run(gateway.query_account_quota(3))
+    second = asyncio.run(gateway.query_account_quota(3))
+
+    assert first["cached"] is False
+    assert first["plan_type"] == "pro"
+    assert first["short_window"]["label"] == "5 小时"
+    assert first["short_window"]["remaining_percent"] == 75
+    assert first["long_window"]["label"] == "每周"
+    assert first["long_window"]["remaining_percent"] == 30
+    assert first["reset_credits"] == {
+        "available_count": 2,
+        "credits": [{"expires_at": "2026-10-01T00:00:00Z"}],
+    }
+    assert first["account_disabled"] is False
+    assert gateway.accounts.weekly_disables == []
+    assert "secret-credit-id" not in json.dumps(first)
+    assert second["cached"] is True
+    assert client.calls == 2
+    assert [request.url for request in client.requests] == [
+        httpx.URL("https://chatgpt.com/backend-api/wham/usage"),
+        httpx.URL("https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"),
+    ]
+    assert client.requests[0].headers["authorization"] == "Bearer quota-token"
+    assert client.requests[0].headers["chatgpt-account-id"] == "account-ref-3"
+    assert client.requests[0].headers["originator"] == "Codex Desktop"
+
+
+def test_subscription_quota_keeps_usage_when_credit_details_are_unavailable():
+    usage = {
+        "rate_limit": {
+            "allowed": False,
+            "limit_reached": True,
+            "primary_window": {"used_percent": 100, "limit_window_seconds": 18000},
+        },
+        "rate_limit_reset_credits": {"available_count": 1},
+    }
+    client = SequenceClient([
+        httpx.Response(200, json=usage),
+        httpx.Response(401, json={"detail": "not available"}),
+    ])
+    gateway = configured_gateway(QuotaAccounts(), RecordingStore(), client)
+
+    result = asyncio.run(gateway.query_account_quota(3))
+
+    assert result["allowed"] is False
+    assert result["limit_reached"] is True
+    assert result["short_window"]["remaining_percent"] == 0
+    assert result["reset_credits"]["available_count"] == 1
+    assert result["warning"] == "重置次数详情暂不可用（HTTP 401）"
+    assert result["account_disabled"] is False
+    assert gateway.accounts.weekly_disables == []
+
+
+def test_only_low_weekly_quota_disables_subscription_account():
+    usage = {
+        "rate_limit": {
+            "allowed": True,
+            "limit_reached": False,
+            "primary_window": {"used_percent": 100, "limit_window_seconds": 18000},
+            "secondary_window": {"used_percent": 97.5, "limit_window_seconds": 604800},
+        },
+    }
+    client = SequenceClient([
+        httpx.Response(200, json=usage),
+        httpx.Response(404, json={"detail": "not available"}),
+    ])
+    accounts = QuotaAccounts()
+    gateway = configured_gateway(accounts, RecordingStore(), client)
+
+    result = asyncio.run(gateway.query_account_quota(3))
+
+    assert result["short_window"]["remaining_percent"] == 0
+    assert result["long_window"]["remaining_percent"] == 2.5
+    assert result["account_disabled"] is True
+    assert accounts.weekly_disables == [(3, 2.5, 3.0)]
+    assert "等待管理员处理" in result["warning"]
 
 
 def configured_chat_bridge(monkeypatch, client):
@@ -905,7 +1035,7 @@ def test_upstream_request_400_does_not_cool_or_retry_subscription_account():
     assert accounts.successes == []
 
 
-def test_upstream_429_is_reported_and_disables_subscription_account():
+def test_upstream_429_is_reported_without_changing_subscription_account_state():
     rejected = httpx.Response(429, json={
         "error": {"message": "Rate limit reached for this subscription"},
     }, headers={"retry-after": "60"})
@@ -920,7 +1050,8 @@ def test_upstream_429_is_reported_and_disables_subscription_account():
     assert result.status_code == 429
     assert result.headers["x-rose-error-source"] == "upstream_rate_limit"
     assert client.calls == 1
-    assert accounts.failures == [(3, 429, "Rate limit reached for this subscription")]
+    assert accounts.failures == []
+    assert accounts.weekly_disables == []
     assert accounts.successes == []
 
 
@@ -1025,12 +1156,13 @@ def test_currently_overloaded_never_updates_account_failure_state():
     assert repository.find(3) == before
 
 
-def test_upstream_429_permanently_disables_account_even_when_cooldown_is_off():
+def test_upstream_429_never_changes_account_state():
     repository = MemoryRepository([account(3)])
     service = SubscriptionAccountService(
         repository, JsonCipher(), NoopOAuth(), SubscriptionAccountPoolService(),
     )
     service.cooldown_enabled = False
+    before = repository.find(3)
 
     service.record_failure(
         repository.find(3),
@@ -1038,12 +1170,24 @@ def test_upstream_429_permanently_disables_account_even_when_cooldown_is_off():
         "Our servers are currently overloaded. Please try again later.",
     )
 
+    assert repository.find(3) == before
+    assert service.has_route("openai", "gpt-test") is True
+
+
+def test_confirmed_low_weekly_quota_permanently_disables_account():
+    repository = MemoryRepository([account(3)])
+    service = SubscriptionAccountService(
+        repository, JsonCipher(), NoopOAuth(), SubscriptionAccountPoolService(),
+    )
+
+    assert service.disable_for_weekly_quota(repository.find(3), 3.0, 3.0) is False
+    assert repository.find(3)["enabled"] == 1
+    assert service.disable_for_weekly_quota(repository.find(3), 2.99, 3.0) is True
+
     saved = repository.find(3)
     assert saved["enabled"] == 0
     assert saved["status"] == "DISABLED"
-    assert saved["error_count"] == 1
-    assert saved["cooldown_until"] is None
-    assert saved["last_error"] == "Our servers are currently overloaded. Please try again later."
+    assert "每周订阅剩余量 2.99%" in saved["last_error"]
     assert service.has_route("openai", "gpt-test") is False
 
 

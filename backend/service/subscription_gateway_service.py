@@ -23,6 +23,8 @@ from backend.service.user_group_service import user_group_runtime
 
 OPENAI_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses"
 OPENAI_MODELS_URL = "https://chatgpt.com/backend-api/codex/models"
+OPENAI_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
+OPENAI_RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
 CLAUDE_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 CLAUDE_COUNT_TOKENS_URL = "https://api.anthropic.com/v1/messages/count_tokens"
 CLAUDE_MODELS_URL = "https://api.anthropic.com/v1/models"
@@ -74,6 +76,9 @@ class SubscriptionGatewayService:
         self._activity_sequence = 0
         self._queued_activities: dict[int, dict[str, Any]] = {}
         self._active_activities: dict[int, dict[str, Any]] = {}
+        self._quota_cache: dict[int, tuple[float, dict[str, Any]]] = {}
+        self._quota_locks: dict[tuple[Any, int], asyncio.Lock] = {}
+        self._quota_tasks: set[asyncio.Task] = set()
         self.max_queued_requests = 200
         self.codex_client_version = DEFAULT_CODEX_CLIENT_VERSION
         self.gpt_default_reasoning_effort = DEFAULT_GPT_REASONING_EFFORT
@@ -112,6 +117,8 @@ class SubscriptionGatewayService:
         self.queue_timeout = 0.0 if raw_queue_timeout <= 0 else min(3600.0, max(1.0, raw_queue_timeout))
         self.max_queued_requests = max(1, min(10000, int(cfg.get("max-queued-requests", 200) or 200)))
         self.session_affinity_ttl = max(60.0, min(86400.0, float(cfg.get("session-affinity-ttl-seconds", 3600) or 3600)))
+        self.quota_cache_ttl = max(30.0, min(3600.0, float(cfg.get("quota-cache-seconds", 300) or 300)))
+        self.weekly_quota_disable_threshold = max(0.0, min(100.0, float(cfg.get("weekly-quota-disable-threshold-percent", 3) or 0)))
         self.logger.info(
             "订阅网关保护已启用 per_account_concurrency=%s per_account_rpm=%s queue_timeout=%s max_queue=%s capacity_retries=%s session_affinity_ttl=%ss",
             self.per_account_concurrency, self.per_account_rpm,
@@ -130,6 +137,37 @@ class SubscriptionGatewayService:
                 semaphore = asyncio.Semaphore(self.per_account_concurrency)
                 self._account_semaphores[key] = semaphore
             return semaphore
+
+    def _quota_lock(self, account_id: int) -> asyncio.Lock:
+        loop = asyncio.get_running_loop()
+        key = (loop, int(account_id))
+        with self._safety_lock:
+            lock = self._quota_locks.get(key)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._quota_locks[key] = lock
+            return lock
+
+    def _schedule_quota_check(self, account_id: int) -> None:
+        """Check quota after a 429 without delaying the current failover path."""
+        task = asyncio.create_task(self.query_account_quota(int(account_id), force=False))
+        with self._safety_lock:
+            self._quota_tasks.add(task)
+
+        def finished(completed: asyncio.Task) -> None:
+            with self._safety_lock:
+                self._quota_tasks.discard(completed)
+            try:
+                completed.result()
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:
+                self.logger.warning(
+                    "订阅网关429后台用量查询失败 account_id=%s error=%s",
+                    account_id, str(exc)[:300],
+                )
+
+        task.add_done_callback(finished)
 
     def _reserve_rate_slot(self, account_id: int) -> bool:
         now = time.monotonic()
@@ -386,6 +424,11 @@ class SubscriptionGatewayService:
 
     @PreDestroy
     def close(self) -> None:
+        with self._safety_lock:
+            quota_tasks = list(self._quota_tasks)
+            self._quota_tasks.clear()
+        for task in quota_tasks:
+            task.cancel()
         clients = list(self._clients.values())
         self._clients.clear()
         if not clients:
@@ -418,6 +461,20 @@ class SubscriptionGatewayService:
         account_ref = str(credentials.get("account_id") or credentials.get("chatgpt_account_id") or account.get("account_ref") or "").strip()
         if account_ref:
             headers["ChatGPT-Account-Id"] = account_ref
+        return headers
+
+    def _openai_quota_headers(self, credentials: dict[str, Any], account: dict[str, Any]) -> dict[str, str]:
+        headers = self._openai_headers(credentials, account, False)
+        headers.update({
+            "Accept": "application/json",
+            "OpenAI-Beta": "codex-1",
+            "OAI-Language": "zh-CN",
+            "Originator": "Codex Desktop",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-Mode": "no-cors",
+            "Sec-Fetch-Dest": "empty",
+            "Priority": "u=4, i",
+        })
         return headers
 
     @staticmethod
@@ -669,10 +726,10 @@ class SubscriptionGatewayService:
                         last_error_type = "upstream_rate_limit"
                         response_headers["x-rose-error-source"] = last_error_type
                         last_headers = response_headers
-                        self.accounts.record_failure(account, last_status, last_detail, retry_after)
                         self._forget_account(session_key, account_id)
+                        self._schedule_quota_check(account_id)
                         self.logger.warning(
-                            "订阅网关收到上游429并停用账号 provider=%s model=%s account_id=%s",
+                            "订阅网关收到上游429，不改变账号状态 provider=%s model=%s account_id=%s",
                             provider, model, account_id,
                         )
                         continue
@@ -1043,6 +1100,232 @@ class SubscriptionGatewayService:
         if not ok:
             return self._json_error(402, "Insufficient balance", "insufficient_quota")
         return None
+
+    @staticmethod
+    def _quota_float(value: Any, default: float = 0.0) -> float:
+        try:
+            result = float(value)
+        except (TypeError, ValueError):
+            return default
+        return result if math.isfinite(result) else default
+
+    @staticmethod
+    def _quota_int(value: Any, default: int = 0) -> int:
+        try:
+            return int(float(value))
+        except (TypeError, ValueError, OverflowError):
+            return default
+
+    @classmethod
+    def _normalize_quota_window(cls, value: Any) -> dict[str, Any] | None:
+        if not isinstance(value, dict):
+            return None
+        seconds = max(0, cls._quota_int(value.get("limit_window_seconds")))
+        used = min(100.0, max(0.0, cls._quota_float(value.get("used_percent"))))
+        reset_after = max(0, cls._quota_int(value.get("reset_after_seconds")))
+        reset_raw = value.get("reset_at")
+        reset_at = ""
+        if isinstance(reset_raw, str) and reset_raw.strip() and not reset_raw.strip().replace(".", "", 1).isdigit():
+            reset_at = reset_raw.strip()
+        else:
+            timestamp = cls._quota_float(reset_raw)
+            if timestamp > 0:
+                if timestamp > 10_000_000_000:
+                    timestamp /= 1000.0
+                try:
+                    reset_at = datetime.fromtimestamp(timestamp, timezone.utc).isoformat()
+                except (OverflowError, OSError, ValueError):
+                    reset_at = ""
+        if not reset_at and reset_after:
+            reset_at = datetime.fromtimestamp(time.time() + reset_after, timezone.utc).isoformat()
+        if seconds >= 5 * 24 * 3600:
+            label = "每周"
+        elif seconds and seconds <= 6 * 3600:
+            hours = max(1, round(seconds / 3600))
+            label = f"{hours} 小时"
+        elif seconds:
+            hours = max(1, round(seconds / 3600))
+            label = f"{hours} 小时"
+        else:
+            label = "用量窗口"
+        return {
+            "label": label,
+            "used_percent": round(used, 2),
+            "remaining_percent": round(100.0 - used, 2),
+            "limit_window_seconds": seconds,
+            "reset_after_seconds": reset_after,
+            "reset_at": reset_at or None,
+        }
+
+    @classmethod
+    def _credit_snapshot(cls, payload: Any) -> tuple[int | None, list[dict[str, str]], bool]:
+        """Return count, sanitized expiry rows and whether a list was authoritative."""
+        if payload is None:
+            return None, [], False
+        container = payload
+        if isinstance(payload, dict) and isinstance(payload.get("rate_limit_reset_credits"), dict):
+            container = payload["rate_limit_reset_credits"]
+        count: int | None = None
+        records: Any = None
+        list_present = False
+        if isinstance(container, list):
+            records = container
+            list_present = True
+        elif isinstance(container, dict):
+            for key in ("available_count", "availableCount"):
+                if key in container:
+                    parsed = cls._quota_int(container.get(key), -1)
+                    if parsed >= 0:
+                        count = parsed
+                    break
+            for key in ("credits", "rate_limit_reset_credits", "items", "data"):
+                if key in container and isinstance(container.get(key), list):
+                    records = container[key]
+                    list_present = True
+                    break
+        sanitized: list[dict[str, str]] = []
+        available_records = 0
+        if isinstance(records, list):
+            for item in records:
+                if not isinstance(item, dict):
+                    continue
+                reset_type = str(item.get("reset_type") or item.get("resetType") or "").strip()
+                status = str(item.get("status") or "").strip()
+                if reset_type and reset_type.lower() != "codex_rate_limits":
+                    continue
+                if status and status.lower() != "available":
+                    continue
+                available_records += 1
+                expires_at = str(item.get("expires_at") or item.get("expiresAt") or "").strip()
+                if expires_at:
+                    sanitized.append({"expires_at": expires_at})
+        if count is None and list_present:
+            count = available_records
+        return count, sanitized, list_present
+
+    @classmethod
+    def _normalize_quota_payload(cls, usage: Any, details: Any = None) -> dict[str, Any]:
+        if not isinstance(usage, dict):
+            raise ValueError("订阅用量响应格式不正确")
+        raw_limit = usage.get("rate_limit") if isinstance(usage.get("rate_limit"), dict) else {}
+        windows = [
+            cls._normalize_quota_window(raw_limit.get("primary_window")),
+            cls._normalize_quota_window(raw_limit.get("secondary_window")),
+        ]
+        windows = [item for item in windows if item]
+        windows.sort(key=lambda item: int(item.get("limit_window_seconds") or 0))
+        short_window = windows[0] if windows and int(windows[0].get("limit_window_seconds") or 0) < 5 * 24 * 3600 else None
+        long_window = windows[-1] if windows and (len(windows) > 1 or not short_window) else None
+
+        usage_count, usage_credits, _ = cls._credit_snapshot(usage)
+        detail_count, detail_credits, detail_list_present = cls._credit_snapshot(details)
+        available_count = usage_count
+        credits = usage_credits
+        if detail_count is not None:
+            available_count = detail_count
+        if detail_list_present:
+            credits = detail_credits
+
+        return {
+            "plan_type": str(usage.get("plan_type") or "").strip(),
+            "allowed": bool(raw_limit.get("allowed", True)),
+            "limit_reached": bool(raw_limit.get("limit_reached", False)),
+            "short_window": short_window,
+            "long_window": long_window,
+            "reset_credits": {
+                "available_count": available_count,
+                "credits": credits,
+            },
+        }
+
+    async def _quota_request(self, url: str, headers: dict[str, str]) -> tuple[int, bytes]:
+        request = self._client().build_request("GET", url, headers=headers)
+        response: httpx.Response | None = None
+        try:
+            response = await self._client().send(request, stream=False)
+            body = await response.aread()
+            return int(response.status_code), body
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            raise ValueError(f"查询订阅用量失败：{exc}") from exc
+        finally:
+            if response is not None and not response.is_closed:
+                await response.aclose()
+
+    async def query_account_quota(self, account_id: int, force: bool = False) -> dict[str, Any]:
+        account_id = int(account_id)
+        now_mono = time.monotonic()
+        with self._safety_lock:
+            cached = self._quota_cache.get(account_id)
+            if cached and not force and cached[0] > now_mono:
+                return {**cached[1], "cached": True}
+
+        async with self._quota_lock(account_id):
+            now_mono = time.monotonic()
+            with self._safety_lock:
+                cached = self._quota_cache.get(account_id)
+                if cached and not force and cached[0] > now_mono:
+                    return {**cached[1], "cached": True}
+
+            fresh = await self.accounts.refresh_account(account_id, force=False)
+            account = fresh["account"]
+            if str(account.get("provider") or "") != "openai":
+                raise ValueError("只有 OpenAI / Codex 订阅支持用量查询")
+            headers = self._openai_quota_headers(fresh["credentials"], account)
+            status, body = await self._quota_request(OPENAI_USAGE_URL, headers)
+            if status < 200 or status >= 300:
+                detail = self._error_detail(httpx.Response(status), body)
+                raise ValueError(f"订阅用量上游返回 HTTP {status}：{detail}")
+            try:
+                usage = json.loads(body.decode("utf-8"))
+            except (UnicodeDecodeError, ValueError) as exc:
+                raise ValueError("订阅用量响应不是有效 JSON") from exc
+
+            details: Any = None
+            detail_warning = ""
+            try:
+                detail_status, detail_body = await self._quota_request(OPENAI_RESET_CREDITS_URL, headers)
+                if 200 <= detail_status < 300:
+                    try:
+                        details = json.loads(detail_body.decode("utf-8")) if detail_body.strip() else None
+                    except (UnicodeDecodeError, ValueError):
+                        detail_warning = "重置次数详情响应格式不正确"
+                else:
+                    detail_warning = f"重置次数详情暂不可用（HTTP {detail_status}）"
+            except ValueError:
+                detail_warning = "重置次数详情暂不可用"
+
+            result = self._normalize_quota_payload(usage, details)
+            threshold = float(getattr(self, "weekly_quota_disable_threshold", 3.0) or 0)
+            long_window = result.get("long_window") if isinstance(result.get("long_window"), dict) else None
+            weekly_remaining = self._quota_float(long_window.get("remaining_percent"), 100.0) if long_window else None
+            account_disabled = bool(
+                threshold > 0
+                and long_window
+                and self._quota_int(long_window.get("limit_window_seconds")) >= 5 * 24 * 3600
+                and weekly_remaining is not None
+                and self.accounts.disable_for_weekly_quota(account, weekly_remaining, threshold)
+            )
+            result.update({
+                "account_id": account_id,
+                "fetched_at": datetime.now(timezone.utc).isoformat(),
+                "cache_seconds": int(getattr(self, "quota_cache_ttl", 300) or 300),
+                "weekly_disable_threshold_percent": threshold,
+                "account_disabled": account_disabled,
+                "cached": False,
+            })
+            warnings: list[str] = []
+            if account_disabled:
+                warnings.append(f"每周订阅剩余量低于 {threshold:g}%，账号已停用并等待管理员处理")
+            if detail_warning:
+                warnings.append(detail_warning)
+            if warnings:
+                result["warning"] = "；".join(warnings)
+            with self._safety_lock:
+                self._quota_cache[account_id] = (
+                    time.monotonic() + float(getattr(self, "quota_cache_ttl", 300) or 300),
+                    dict(result),
+                )
+            return result
 
     async def test_account(self, account_id: int) -> dict[str, Any]:
         fresh = await self.accounts.refresh_account(account_id, force=False)

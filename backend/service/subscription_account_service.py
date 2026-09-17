@@ -527,17 +527,10 @@ class SubscriptionAccountService:
         code = int(status_code or 0)
         error_count = int(row.get("error_count") or 0) + 1
         if code == 429:
-            # An upstream 429 means this subscription can no longer serve
-            # traffic safely. Disable it persistently instead of applying a
-            # temporary cooldown; an administrator must explicitly re-enable
-            # the account after checking its quota/status.
-            now = utc_now()
-            self.repository.disable_rate_limited(
-                int(row["id"]), error_count=error_count,
-                last_error=str(detail or "HTTP 429")[:1000],
-                last_used_at=now, updated_at=now,
-            )
-            self.pool.forget(int(row["id"]))
+            # A 429 may only describe the short (for example five-hour)
+            # window. It must not persistently disable or cool an account.
+            # Persistent disabling is driven exclusively by an explicit
+            # weekly-quota snapshot below the configured threshold.
             return
         normalized_detail = str(detail or "").strip().lower()
         if any(marker in normalized_detail for marker in NO_COOLDOWN_ERROR_MARKERS):
@@ -566,6 +559,24 @@ class SubscriptionAccountService:
             last_error=str(detail or f"HTTP {code}")[:1000], cooldown_until=cooldown,
             last_used_at=utc_now(), updated_at=utc_now(),
         )
+
+    def disable_for_weekly_quota(self, row: dict[str, Any], remaining_percent: float, threshold: float = 3.0) -> bool:
+        """Persistently disable an account only for a confirmed low weekly quota."""
+        try:
+            remaining = float(remaining_percent)
+            limit = float(threshold)
+        except (TypeError, ValueError):
+            return False
+        if not math.isfinite(remaining) or not math.isfinite(limit) or remaining < 0 or remaining >= limit:
+            return False
+        now = utc_now()
+        detail = f"每周订阅剩余量 {remaining:.2f}% 低于 {limit:.2f}%，已停用并等待管理员处理"
+        self.repository.disable_rate_limited(
+            int(row["id"]), error_count=int(row.get("error_count") or 0),
+            last_error=detail[:1000], last_used_at=now, updated_at=now,
+        )
+        self.pool.forget(int(row["id"]))
+        return True
 
     @staticmethod
     def cost(row: dict[str, Any], input_tokens: int, output_tokens: int) -> float:

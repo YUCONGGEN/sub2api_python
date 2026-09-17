@@ -109,6 +109,24 @@
           <p class="account-summary">{{ providerLabel(account.provider) }} · {{ account.email || '未提供邮箱' }}<br>{{ account.credential_mask }}</p>
           <div class="account-models"><span v-for="model in account.models" :key="model">{{ model }}</span></div>
           <dl class="account-facts"><div><dt>优先级 / 权重</dt><dd>{{ account.priority }} / {{ account.weight }}</dd></div><div><dt>错误次数</dt><dd>{{ account.error_count || 0 }}</dd></div><div><dt>Token 过期</dt><dd>{{ displayTime(account.expires_at) }}</dd></div><div><dt>最近使用</dt><dd>{{ displayTime(account.last_used_at) }}</dd></div></dl>
+          <div v-if="account.provider === 'openai'" class="account-quota">
+            <div class="account-quota-head"><div><small>CODEX SUBSCRIPTION</small><strong>订阅剩余量</strong></div><button type="button" :disabled="quotaState(account).loading" @click="loadAccountQuota(account, true)">{{ quotaState(account).loading ? '查询中…' : '刷新' }}</button></div>
+            <div v-if="quotaState(account).loading && !quotaState(account).quota" class="quota-loading">正在安全查询订阅窗口…</div>
+            <div v-else-if="quotaState(account).error && !quotaState(account).quota" class="quota-error">{{ quotaState(account).error }}</div>
+            <template v-else-if="quotaState(account).quota">
+              <div class="quota-plan"><span>{{ quotaState(account).quota.plan_type || '订阅套餐' }}</span><em :class="quotaState(account).quota.limit_reached ? 'limited' : ''">{{ quotaState(account).quota.limit_reached ? '已到上限' : '可用' }}</em></div>
+              <div class="quota-window-list">
+                <div v-for="item in quotaWindows(quotaState(account).quota)" :key="item.label + item.limit_window_seconds" class="quota-window">
+                  <div><span>{{ item.label }}</span><b>剩余 {{ quotaPercent(item.remaining_percent) }}%</b></div>
+                  <i><u :style="{ width: quotaPercent(item.used_percent) + '%' }"></u></i>
+                  <small>已用 {{ quotaPercent(item.used_percent) }}% · {{ item.reset_at ? displayTime(item.reset_at) + ' 重置' : '重置时间未知' }}</small>
+                </div>
+                <div v-if="!quotaWindows(quotaState(account).quota).length" class="quota-empty">上游暂未返回用量窗口</div>
+              </div>
+              <div class="quota-reset"><span><small>可用重置次数</small><b>{{ resetCreditCount(quotaState(account).quota) }}</b></span><span><small>最近查询</small><b>{{ displayTime(quotaState(account).quota.fetched_at) }}</b></span></div>
+              <p v-if="quotaState(account).quota.warning" class="quota-warning">{{ quotaState(account).quota.warning }}</p>
+            </template>
+          </div>
           <p v-if="account.last_error" class="account-error">{{ account.last_error }}</p>
           <div class="account-actions"><button class="secondary-btn" :disabled="actionId === account.id" @click="testAccount(account)">测试</button><button v-if="account.has_refresh_token" class="secondary-btn" :disabled="actionId === account.id" @click="refreshAccount(account)">刷新 Token</button><button class="secondary-btn" @click="openEdit(account)">编辑</button><button class="secondary-btn" @click="toggleAccount(account)">{{ account.enabled ? '停用' : '启用' }}</button><button class="text-btn danger" @click="removeAccount(account)">删除</button></div>
         </article>
@@ -134,7 +152,7 @@ const defaults = provider => ({ mode: 'oauth', provider, name: '', models: provi
 export default {
   name: 'UpstreamSubscriptions',
   components: { GatewayActivity },
-  data: () => ({ accounts: [], summary: {}, gatewayMetrics: {}, pagination: { page: 1, pages: 1, total: 0 }, error: '', loading: false, busy: false, actionId: null, filter: '', showForm: false, editingId: null, oauthSession: null, gatewayEnabled: false, metricsTimer: null, form: defaults('openai') }),
+  data: () => ({ accounts: [], summary: {}, gatewayMetrics: {}, quotaByAccount: {}, pagination: { page: 1, pages: 1, total: 0 }, error: '', loading: false, busy: false, actionId: null, filter: '', showForm: false, editingId: null, oauthSession: null, gatewayEnabled: false, metricsTimer: null, form: defaults('openai') }),
   watch: { 'form.provider' (next, previous) { if (!this.editingId && !this.oauthSession && next !== previous) this.form.models = defaults(next).models } },
   created () { this.load(); this.metricsTimer = window.setInterval(this.refreshGatewayMetrics, 5000) },
   beforeUnmount () { window.clearInterval(this.metricsTimer) },
@@ -142,11 +160,37 @@ export default {
   methods: {
     providerLabel (provider) { return provider === 'openai' ? 'OpenAI / Codex' : 'Claude / Anthropic' },
     providerCount (provider) { return Number(this.summary[provider] || 0) },
+    quotaState (account) { return this.quotaByAccount[account.id] || { loading: false, quota: null, error: '' } },
+    quotaWindows (quota) { return [quota?.short_window, quota?.long_window].filter(Boolean) },
+    quotaPercent (value) { return Math.min(100, Math.max(0, Number(value || 0))).toFixed(1).replace(/\.0$/, '') },
+    resetCreditCount (quota) { const value = quota?.reset_credits?.available_count; return value === null || value === undefined ? '未提供' : `${Number(value).toLocaleString('zh-CN')} 次` },
+    setQuotaState (accountId, value) { this.quotaByAccount = { ...this.quotaByAccount, [accountId]: value } },
+    async loadAccountQuota (account, refresh = false) {
+      if (account.provider !== 'openai') return
+      const previous = this.quotaState(account)
+      this.setQuotaState(account.id, { ...previous, loading: true, error: '' })
+      try {
+        const data = await api.upstreamSubscriptionQuota(account.id, refresh)
+        const quota = data.quota || null
+        if (quota?.account_disabled) {
+          account.enabled = false
+          account.status = 'DISABLED'
+          account.last_error = quota.warning || '每周订阅剩余量低于阈值，已停用并等待管理员处理'
+        }
+        this.setQuotaState(account.id, { loading: false, quota, error: '' })
+        if (refresh) notify(`${account.name}：订阅用量已刷新`, 'success')
+      } catch (error) {
+        const message = error.message || '订阅用量查询失败'
+        this.setQuotaState(account.id, { loading: false, quota: previous.quota || null, error: message })
+        if (refresh) notify(message, 'error')
+      }
+    },
+    loadAccountQuotas () { this.accounts.filter(account => account.provider === 'openai').forEach(account => this.loadAccountQuota(account, false)) },
     statusClass (account) { return account.enabled ? String(account.status || 'READY').toLowerCase() : 'disabled' },
     statusText (account) { if (!account.enabled) return '已停用'; return ({ READY: '可用', INVALID: '凭据失效', COOLDOWN: '冷却中', DISABLED: '已停用' })[account.status] || account.status },
     displayTime (value) { if (!value) return '—'; const date = new Date(value); return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN') },
     payload () { return { provider: this.form.provider, name: this.form.name, models: this.form.models, priority: this.form.priority, weight: this.form.weight, input_price_cny: this.form.input_price_cny, output_price_cny: this.form.output_price_cny, price_multiplier: this.form.price_multiplier, enabled: this.form.enabled, compliance_confirmed: this.form.compliance_confirmed } },
-    async load () { this.loading = true; this.error = ''; try { const data = await api.upstreamSubscriptions({ provider: this.filter, page: this.pagination.page, page_size: 12 }); this.accounts = data.accounts || []; this.summary = data.summary || {}; this.gatewayMetrics = data.gateway_metrics || {}; this.pagination = data.pagination || this.pagination; this.gatewayEnabled = !!data.gateway_enabled } catch (error) { this.error = error.message || '请检查后端服务后重试'; notify(this.error, 'error') } finally { this.loading = false } },
+    async load () { this.loading = true; this.error = ''; try { const data = await api.upstreamSubscriptions({ provider: this.filter, page: this.pagination.page, page_size: 12 }); this.accounts = data.accounts || []; this.summary = data.summary || {}; this.gatewayMetrics = data.gateway_metrics || {}; this.pagination = data.pagination || this.pagination; this.gatewayEnabled = !!data.gateway_enabled; this.loadAccountQuotas() } catch (error) { this.error = error.message || '请检查后端服务后重试'; notify(this.error, 'error') } finally { this.loading = false } },
     async refreshGatewayMetrics () { try { const data = await api.upstreamGatewayMetrics(); this.gatewayMetrics = data.gateway_metrics || this.gatewayMetrics } catch (error) {} },
     setFilter (provider) { this.filter = provider; this.pagination.page = 1; this.load() },
     changePage (page) { this.pagination.page = page; this.load() },
@@ -274,6 +318,82 @@ export default {
   text-overflow:ellipsis;
   white-space:nowrap;
 }
+.account-quota {
+  display:grid;
+  gap:10px;
+  margin-top:11px;
+  padding:11px;
+  border:1px solid #dce9ef;
+  border-radius:10px;
+  background:#f7fafb;
+}
+.account-quota-head,.quota-plan,.quota-window>div,.quota-reset {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+}
+.account-quota-head>div { display:grid;gap:2px; }
+.account-quota-head small {
+  color:#8299a7;
+  font:8px var(--mono);
+  letter-spacing:.08em;
+}
+.account-quota-head strong { color:#294d65;font-size:12px; }
+.account-quota-head button {
+  padding:4px 7px;
+  border:1px solid #c8dce7;
+  border-radius:6px;
+  background:#fff;
+  color:#52758a;
+  font-size:10px;
+}
+.account-quota-head button:disabled { opacity:.6;cursor:wait; }
+.quota-loading,.quota-error,.quota-empty {
+  color:#78909e;
+  font-size:11px;
+  line-height:1.5;
+}
+.quota-error { color:#a15b57; }
+.quota-plan span { color:#496d82;font:10px var(--mono);text-transform:uppercase; }
+.quota-plan em {
+  padding:3px 7px;
+  border-radius:99px;
+  background:#e4f3e9;
+  color:#3f7759;
+  font:normal 10px var(--sans);
+}
+.quota-plan em.limited { background:#f7e5de;color:#9b594b; }
+.quota-window-list { display:grid;gap:9px; }
+.quota-window { display:grid;gap:5px; }
+.quota-window span,.quota-window b { font-size:10px; }
+.quota-window b { color:#315b72;font-family:var(--mono);font-weight:500; }
+.quota-window i {
+  display:block;
+  height:5px;
+  overflow:hidden;
+  border-radius:99px;
+  background:#dfe9ed;
+}
+.quota-window u {
+  display:block;
+  height:100%;
+  border-radius:inherit;
+  background:linear-gradient(90deg,#4c9eb0,#6478bd);
+  text-decoration:none;
+}
+.quota-window small,.quota-reset small { color:#8297a4;font-size:9px; }
+.quota-reset { padding-top:8px;border-top:1px solid #e1ebef; }
+.quota-reset>span { display:grid;gap:3px;min-width:0; }
+.quota-reset>span:last-child { text-align:right; }
+.quota-reset b {
+  overflow:hidden;
+  color:#355a70;
+  font:500 10px var(--mono);
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.quota-warning { margin:0;color:#8f723d;font-size:10px;line-height:1.5; }
 .account-error { margin:9px 0 0;font-size:12px; }
 .account-actions {
   align-items:center;
@@ -306,6 +426,32 @@ export default {
   border-color:#17191d;
   color:#fff;
 }
+:global(html[data-theme="dark"]) .account-card {
+  border-color:#304b5c;
+  background:#172735;
+  box-shadow:0 8px 22px #050b102f;
+}
+:global(html[data-theme="dark"]) .account-identity h3,
+:global(html[data-theme="dark"]) .account-facts dd { color:#d6e4ec; }
+:global(html[data-theme="dark"]) .account-summary,
+:global(html[data-theme="dark"]) .account-id { color:#93aabb; }
+:global(html[data-theme="dark"]) .account-models { border-color:#2d4657; }
+:global(html[data-theme="dark"]) .account-models span,
+:global(html[data-theme="dark"]) .account-facts div { background:#203442;color:#c5d6df; }
+:global(html[data-theme="dark"]) .account-quota {
+  border-color:#315064;
+  background:#1b2e3b;
+}
+:global(html[data-theme="dark"]) .account-quota-head strong,
+:global(html[data-theme="dark"]) .quota-window b,
+:global(html[data-theme="dark"]) .quota-reset b { color:#cce0ea; }
+:global(html[data-theme="dark"]) .account-quota-head button {
+  border-color:#45677b;
+  background:#233c4c;
+  color:#c1d7e3;
+}
+:global(html[data-theme="dark"]) .quota-window i { background:#294554; }
+:global(html[data-theme="dark"]) .quota-reset { border-color:#2d4959; }
 
 @media(max-width:1240px){.account-list{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:1050px){.account-list{grid-template-columns:repeat(2,minmax(0,1fr))}}

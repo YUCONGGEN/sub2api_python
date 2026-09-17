@@ -79,6 +79,7 @@ class SubscriptionGatewayService:
         self._quota_cache: dict[int, tuple[float, dict[str, Any]]] = {}
         self._quota_locks: dict[tuple[Any, int], asyncio.Lock] = {}
         self._quota_tasks: set[asyncio.Task] = set()
+        self._quota_task_accounts: set[int] = set()
         self.max_queued_requests = 200
         self.codex_client_version = DEFAULT_CODEX_CLIENT_VERSION
         self.gpt_default_reasoning_effort = DEFAULT_GPT_REASONING_EFFORT
@@ -118,7 +119,7 @@ class SubscriptionGatewayService:
         self.max_queued_requests = max(1, min(10000, int(cfg.get("max-queued-requests", 200) or 200)))
         self.session_affinity_ttl = max(60.0, min(86400.0, float(cfg.get("session-affinity-ttl-seconds", 3600) or 3600)))
         self.quota_cache_ttl = max(30.0, min(3600.0, float(cfg.get("quota-cache-seconds", 300) or 300)))
-        self.weekly_quota_disable_threshold = max(0.0, min(100.0, float(cfg.get("weekly-quota-disable-threshold-percent", 3) or 0)))
+        self.weekly_quota_disable_threshold = max(0.0, min(100.0, float(cfg.get("weekly-quota-disable-threshold-percent", 2) or 0)))
         self.logger.info(
             "订阅网关保护已启用 per_account_concurrency=%s per_account_rpm=%s queue_timeout=%s max_queue=%s capacity_retries=%s session_affinity_ttl=%ss",
             self.per_account_concurrency, self.per_account_rpm,
@@ -150,13 +151,19 @@ class SubscriptionGatewayService:
 
     def _schedule_quota_check(self, account_id: int) -> None:
         """Check quota after a 429 without delaying the current failover path."""
-        task = asyncio.create_task(self.query_account_quota(int(account_id), force=False))
+        account_id = int(account_id)
+        with self._safety_lock:
+            if account_id in self._quota_task_accounts:
+                return
+            self._quota_task_accounts.add(account_id)
+        task = asyncio.create_task(self.query_account_quota(account_id, force=True))
         with self._safety_lock:
             self._quota_tasks.add(task)
 
         def finished(completed: asyncio.Task) -> None:
             with self._safety_lock:
                 self._quota_tasks.discard(completed)
+                self._quota_task_accounts.discard(account_id)
             try:
                 completed.result()
             except asyncio.CancelledError:
@@ -427,6 +434,7 @@ class SubscriptionGatewayService:
         with self._safety_lock:
             quota_tasks = list(self._quota_tasks)
             self._quota_tasks.clear()
+            self._quota_task_accounts.clear()
         for task in quota_tasks:
             task.cancel()
         clients = list(self._clients.values())
@@ -1295,7 +1303,7 @@ class SubscriptionGatewayService:
                 detail_warning = "重置次数详情暂不可用"
 
             result = self._normalize_quota_payload(usage, details)
-            threshold = float(getattr(self, "weekly_quota_disable_threshold", 3.0) or 0)
+            threshold = float(getattr(self, "weekly_quota_disable_threshold", 2.0) or 0)
             long_window = result.get("long_window") if isinstance(result.get("long_window"), dict) else None
             weekly_remaining = self._quota_float(long_window.get("remaining_percent"), 100.0) if long_window else None
             account_disabled = bool(

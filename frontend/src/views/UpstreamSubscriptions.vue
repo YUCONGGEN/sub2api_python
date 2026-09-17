@@ -165,7 +165,7 @@ export default {
     quotaPercent (value) { return Math.min(100, Math.max(0, Number(value || 0))).toFixed(1).replace(/\.0$/, '') },
     resetCreditCount (quota) { const value = quota?.reset_credits?.available_count; return value === null || value === undefined ? '未提供' : `${Number(value).toLocaleString('zh-CN')} 次` },
     setQuotaState (accountId, value) { this.quotaByAccount = { ...this.quotaByAccount, [accountId]: value } },
-    async loadAccountQuota (account, refresh = false) {
+    async loadAccountQuota (account, refresh = false, quiet = false) {
       if (account.provider !== 'openai') return
       const previous = this.quotaState(account)
       this.setQuotaState(account.id, { ...previous, loading: true, error: '' })
@@ -178,14 +178,14 @@ export default {
           account.last_error = quota.warning || '每周订阅剩余量低于阈值，已停用并等待管理员处理'
         }
         this.setQuotaState(account.id, { loading: false, quota, error: '' })
-        if (refresh) notify(`${account.name}：订阅用量已刷新`, 'success')
+        if (refresh && !quiet) notify(`${account.name}：订阅用量已刷新`, 'success')
       } catch (error) {
         const message = error.message || '订阅用量查询失败'
         this.setQuotaState(account.id, { loading: false, quota: previous.quota || null, error: message })
-        if (refresh) notify(message, 'error')
+        if (refresh && !quiet) notify(message, 'error')
       }
     },
-    loadAccountQuotas () { this.accounts.filter(account => account.provider === 'openai').forEach(account => this.loadAccountQuota(account, false)) },
+    loadAccountQuotas () { this.accounts.filter(account => account.provider === 'openai').forEach(account => this.loadAccountQuota(account, true, true)) },
     statusClass (account) { return account.enabled ? String(account.status || 'READY').toLowerCase() : 'disabled' },
     statusText (account) { if (!account.enabled) return '已停用'; return ({ READY: '可用', INVALID: '凭据失效', COOLDOWN: '冷却中', DISABLED: '已停用' })[account.status] || account.status },
     displayTime (value) { if (!value) return '—'; const date = new Date(value); return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN') },

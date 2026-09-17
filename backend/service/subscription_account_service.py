@@ -560,7 +560,7 @@ class SubscriptionAccountService:
             last_used_at=utc_now(), updated_at=utc_now(),
         )
 
-    def disable_for_weekly_quota(self, row: dict[str, Any], remaining_percent: float, threshold: float = 3.0) -> bool:
+    def disable_for_weekly_quota(self, row: dict[str, Any], remaining_percent: float, threshold: float = 2.0) -> bool:
         """Persistently disable an account only for a confirmed low weekly quota."""
         try:
             remaining = float(remaining_percent)

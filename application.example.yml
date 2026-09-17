@@ -149,7 +149,7 @@ rose:
     # 管理后台订阅用量缓存；查询不进入正常模型转发链路。
     quota-cache-seconds: ${ROSE_SUBSCRIPTION_QUOTA_CACHE_SECONDS:300}
     # 只看每周窗口；剩余量低于该百分比时停用账号，等待管理员处理。5 小时窗口不参与判断。
-    weekly-quota-disable-threshold-percent: ${ROSE_SUBSCRIPTION_WEEKLY_DISABLE_THRESHOLD_PERCENT:3}
+    weekly-quota-disable-threshold-percent: ${ROSE_SUBSCRIPTION_WEEKLY_DISABLE_THRESHOLD_PERCENT:2}
   proxy:
     enabled: true
     default-model: ${ROSE_PROXY_MODEL:gpt-5.6-sol}

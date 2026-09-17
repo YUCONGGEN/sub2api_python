@@ -387,7 +387,7 @@ class RecordingAccounts:
     def record_failure(self, row, status, detail, retry_after=None):
         self.failures.append((int(row["id"]), int(status), str(detail)))
 
-    def disable_for_weekly_quota(self, row, remaining_percent, threshold=3.0):
+    def disable_for_weekly_quota(self, row, remaining_percent, threshold=2.0):
         if float(remaining_percent) >= float(threshold):
             return False
         self.weekly_disables.append((int(row["id"]), float(remaining_percent), float(threshold)))
@@ -431,7 +431,7 @@ def configured_gateway(accounts, store, client, *, capacity_retries=2):
     gateway.queue_timeout = 0
     gateway.session_affinity_ttl = 60
     gateway.quota_cache_ttl = 300
-    gateway.weekly_quota_disable_threshold = 3
+    gateway.weekly_quota_disable_threshold = 2
     gateway.logger = logging.getLogger("test.subscription_gateway.capacity")
     gateway._client = lambda: client
     return gateway
@@ -534,7 +534,7 @@ def test_only_low_weekly_quota_disables_subscription_account():
             "allowed": True,
             "limit_reached": False,
             "primary_window": {"used_percent": 100, "limit_window_seconds": 18000},
-            "secondary_window": {"used_percent": 97.5, "limit_window_seconds": 604800},
+            "secondary_window": {"used_percent": 98.5, "limit_window_seconds": 604800},
         },
     }
     client = SequenceClient([
@@ -547,9 +547,9 @@ def test_only_low_weekly_quota_disables_subscription_account():
     result = asyncio.run(gateway.query_account_quota(3))
 
     assert result["short_window"]["remaining_percent"] == 0
-    assert result["long_window"]["remaining_percent"] == 2.5
+    assert result["long_window"]["remaining_percent"] == 1.5
     assert result["account_disabled"] is True
-    assert accounts.weekly_disables == [(3, 2.5, 3.0)]
+    assert accounts.weekly_disables == [(3, 1.5, 2.0)]
     assert "等待管理员处理" in result["warning"]
 
 
@@ -1180,14 +1180,14 @@ def test_confirmed_low_weekly_quota_permanently_disables_account():
         repository, JsonCipher(), NoopOAuth(), SubscriptionAccountPoolService(),
     )
 
-    assert service.disable_for_weekly_quota(repository.find(3), 3.0, 3.0) is False
+    assert service.disable_for_weekly_quota(repository.find(3), 2.0, 2.0) is False
     assert repository.find(3)["enabled"] == 1
-    assert service.disable_for_weekly_quota(repository.find(3), 2.99, 3.0) is True
+    assert service.disable_for_weekly_quota(repository.find(3), 1.99, 2.0) is True
 
     saved = repository.find(3)
     assert saved["enabled"] == 0
     assert saved["status"] == "DISABLED"
-    assert "每周订阅剩余量 2.99%" in saved["last_error"]
+    assert "每周订阅剩余量 1.99%" in saved["last_error"]
     assert service.has_route("openai", "gpt-test") is False
 
 

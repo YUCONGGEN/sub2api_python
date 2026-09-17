@@ -1280,6 +1280,13 @@ class SubscriptionGatewayService:
                 raise ValueError("只有 OpenAI / Codex 订阅支持用量查询")
             headers = self._openai_quota_headers(fresh["credentials"], account)
             status, body = await self._quota_request(OPENAI_USAGE_URL, headers)
+            if status == 401 and str(fresh["credentials"].get("refresh_token") or "").strip():
+                # Quota reads are allowed to refresh an expired OAuth token,
+                # but retry at most once and never touch gateway failure state.
+                fresh = await self.accounts.refresh_account(account_id, force=True)
+                account = fresh["account"]
+                headers = self._openai_quota_headers(fresh["credentials"], account)
+                status, body = await self._quota_request(OPENAI_USAGE_URL, headers)
             if status < 200 or status >= 300:
                 detail = self._error_detail(httpx.Response(status), body)
                 raise ValueError(f"订阅用量上游返回 HTTP {status}：{detail}")

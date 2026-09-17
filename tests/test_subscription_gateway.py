@@ -411,6 +411,19 @@ class QuotaAccounts(RecordingAccounts):
         }
 
 
+class RefreshingQuotaAccounts(QuotaAccounts):
+    def __init__(self):
+        super().__init__()
+        self.refresh_calls = []
+
+    async def refresh_account(self, account_id, force=False):
+        self.refresh_calls.append(bool(force))
+        result = await super().refresh_account(account_id, force=force)
+        result["credentials"]["refresh_token"] = "refresh-token"
+        result["credentials"]["access_token"] = "fresh-token" if force else "expired-token"
+        return result
+
+
 class RecordingStore:
     def __init__(self):
         self.charges = []
@@ -526,6 +539,32 @@ def test_subscription_quota_keeps_usage_when_credit_details_are_unavailable():
     assert result["warning"] == "重置次数详情暂不可用（HTTP 401）"
     assert result["account_disabled"] is False
     assert gateway.accounts.weekly_disables == []
+
+
+def test_subscription_quota_refreshes_expired_oauth_token_once():
+    usage = {
+        "plan_type": "plus",
+        "rate_limit": {
+            "allowed": True,
+            "limit_reached": False,
+            "primary_window": {"used_percent": 8, "limit_window_seconds": 604800},
+        },
+    }
+    accounts = RefreshingQuotaAccounts()
+    client = SequenceClient([
+        httpx.Response(401, json={"detail": "token expired"}),
+        httpx.Response(200, json=usage),
+        httpx.Response(200, json={"available_count": 0}),
+    ])
+    gateway = configured_gateway(accounts, RecordingStore(), client)
+
+    result = asyncio.run(gateway.query_account_quota(3, force=True))
+
+    assert result["long_window"]["remaining_percent"] == 92
+    assert accounts.refresh_calls == [False, True]
+    assert [request.headers["authorization"] for request in client.requests] == [
+        "Bearer expired-token", "Bearer fresh-token", "Bearer fresh-token",
+    ]
 
 
 def test_only_low_weekly_quota_disables_subscription_account():

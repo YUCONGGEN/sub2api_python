@@ -665,6 +665,17 @@ class SubscriptionGatewayService:
                     retry_after = self._retry_after(response)
                     response_headers = self._safe_response_headers(response)
                     await response.aclose()
+                    if last_status == 429:
+                        last_error_type = "upstream_rate_limit"
+                        response_headers["x-rose-error-source"] = last_error_type
+                        last_headers = response_headers
+                        self.accounts.record_failure(account, last_status, last_detail, retry_after)
+                        self._forget_account(session_key, account_id)
+                        self.logger.warning(
+                            "订阅网关收到上游429并停用账号 provider=%s model=%s account_id=%s",
+                            provider, model, account_id,
+                        )
+                        continue
                     if self._is_capacity_error(last_detail):
                         with self._safety_lock:
                             self._upstream_capacity_failures += 1

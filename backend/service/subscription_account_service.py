@@ -524,17 +524,30 @@ class SubscriptionAccountService:
         )
 
     def record_failure(self, row: dict[str, Any], status_code: int | None, detail: str, retry_after: float | None = None) -> None:
+        code = int(status_code or 0)
+        error_count = int(row.get("error_count") or 0) + 1
+        if code == 429:
+            # An upstream 429 means this subscription can no longer serve
+            # traffic safely. Disable it persistently instead of applying a
+            # temporary cooldown; an administrator must explicitly re-enable
+            # the account after checking its quota/status.
+            now = utc_now()
+            self.repository.disable_rate_limited(
+                int(row["id"]), error_count=error_count,
+                last_error=str(detail or "HTTP 429")[:1000],
+                last_used_at=now, updated_at=now,
+            )
+            self.pool.forget(int(row["id"]))
+            return
         normalized_detail = str(detail or "").strip().lower()
         if any(marker in normalized_detail for marker in NO_COOLDOWN_ERROR_MARKERS):
             return
-        code = int(status_code or 0)
         # Request validation failures are caused by the caller's payload and
         # say nothing about account health.  Only authentication, timeout,
         # rate-limit and server-side failures are eligible to penalize an
         # upstream account.
         if 400 <= code < 500 and code not in {401, 403, 408, 429}:
             return
-        error_count = int(row.get("error_count") or 0) + 1
         if code in {401, 403}:
             status = "INVALID"
             cooldown = None

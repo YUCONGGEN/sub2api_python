@@ -34,6 +34,9 @@ class SubscriptionMapper:
     def mark_account_result(self, account_id: int, status: str, error_count: int, last_error: str, cooldown_until: str | None, last_used_at: str | None, updated_at: str) -> int:
         pass
 
+    def disable_rate_limited_account(self, account_id: int, error_count: int, last_error: str, last_used_at: str, updated_at: str) -> int:
+        pass
+
     def delete_account(self, account_id: int) -> int:
         pass
 

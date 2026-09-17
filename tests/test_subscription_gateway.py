@@ -39,6 +39,14 @@ class MemoryRepository:
     def mark_result(self, account_id, **changes):
         self.rows[int(account_id)].update(changes)
 
+    def disable_rate_limited(self, account_id, **changes):
+        self.rows[int(account_id)].update({
+            **changes,
+            "enabled": 0,
+            "status": "DISABLED",
+            "cooldown_until": None,
+        })
+
 
 class JsonCipher:
     @staticmethod
@@ -897,6 +905,25 @@ def test_upstream_request_400_does_not_cool_or_retry_subscription_account():
     assert accounts.successes == []
 
 
+def test_upstream_429_is_reported_and_disables_subscription_account():
+    rejected = httpx.Response(429, json={
+        "error": {"message": "Rate limit reached for this subscription"},
+    }, headers={"retry-after": "60"})
+    client = SequenceClient([rejected])
+    accounts = RecordingAccounts()
+    gateway = configured_gateway(accounts, RecordingStore(), client, capacity_retries=0)
+
+    result = asyncio.run(gateway._proxy(
+        "openai", "gpt-test", {"model": "gpt-test", "input": "hello"}, 9, {},
+    ))
+
+    assert result.status_code == 429
+    assert result.headers["x-rose-error-source"] == "upstream_rate_limit"
+    assert client.calls == 1
+    assert accounts.failures == [(3, 429, "Rate limit reached for this subscription")]
+    assert accounts.successes == []
+
+
 def test_capacity_failure_before_output_is_retried_without_leaking_failed_stream():
     capacity = streaming_response(
         b'data: {"type":"response.created"}\n\n',
@@ -996,6 +1023,28 @@ def test_currently_overloaded_never_updates_account_failure_state():
     )
 
     assert repository.find(3) == before
+
+
+def test_upstream_429_permanently_disables_account_even_when_cooldown_is_off():
+    repository = MemoryRepository([account(3)])
+    service = SubscriptionAccountService(
+        repository, JsonCipher(), NoopOAuth(), SubscriptionAccountPoolService(),
+    )
+    service.cooldown_enabled = False
+
+    service.record_failure(
+        repository.find(3),
+        429,
+        "Our servers are currently overloaded. Please try again later.",
+    )
+
+    saved = repository.find(3)
+    assert saved["enabled"] == 0
+    assert saved["status"] == "DISABLED"
+    assert saved["error_count"] == 1
+    assert saved["cooldown_until"] is None
+    assert saved["last_error"] == "Our servers are currently overloaded. Please try again later."
+    assert service.has_route("openai", "gpt-test") is False
 
 
 def test_client_request_error_never_updates_account_failure_state():

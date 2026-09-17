@@ -68,5 +68,12 @@
             cooldown_until = #{cooldown_until}, last_used_at = #{last_used_at}, updated_at = #{updated_at}
         WHERE id = #{account_id}
     </update>
+    <update id="disable_rate_limited_account">
+        UPDATE upstream_subscription_accounts
+        SET enabled = 0, status = 'DISABLED', error_count = #{error_count},
+            last_error = #{last_error}, cooldown_until = NULL,
+            last_used_at = #{last_used_at}, updated_at = #{updated_at}
+        WHERE id = #{account_id}
+    </update>
     <delete id="delete_account">DELETE FROM upstream_subscription_accounts WHERE id = #{account_id}</delete>
 </mapper>

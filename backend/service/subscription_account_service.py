@@ -75,7 +75,6 @@ class SubscriptionAccountService:
         cfg = get_config().get("rose", {}).get("subscription-gateway", {})
         self.cooldown_enabled = as_bool(cfg.get("account-cooldown-enabled"), True)
         self.user_contributions_enabled = as_bool(cfg.get("user-contributions-enabled"), True)
-        self.config_request_default_use_proxy = as_bool(cfg.get("config-request-default-use-proxy"), False)
         self.logger.info("订阅账号临时冷却 enabled=%s", self.cooldown_enabled)
 
     def _is_cooling(self, row: dict[str, Any], now: datetime | None = None) -> bool:
@@ -366,7 +365,9 @@ class SubscriptionAccountService:
             "base_url": base_url,
             "api_key_encrypted": self.cipher.encrypt({"api_key": api_key}),
             "model_id": model_id,
-            "use_proxy": 1 if as_bool(body.get("use_proxy"), getattr(self, "config_request_default_use_proxy", False)) else 0,
+            # Proxy routing belongs to this exact URL/API Key/Model ID tuple.
+            # It is intentionally not inherited from a global request default.
+            "use_proxy": 1 if as_bool(body.get("use_proxy"), False) else 0,
             "status": "PENDING",
             "admin_note": "",
             "created_at": now,

@@ -115,8 +115,6 @@ rose:
   subscription-gateway:
     # 允许普通用户贡献自己的订阅账号及提交第三方 URL/API Key/Model ID 申请。
     user-contributions-enabled: ${ROSE_SUBSCRIPTION_USER_CONTRIBUTIONS_ENABLED:true}
-    # 第三方配置申请默认直连；设为 true 时新申请默认勾选走服务器代理，用户仍可逐条切换。
-    config-request-default-use-proxy: ${ROSE_SUBSCRIPTION_CONFIG_REQUEST_DEFAULT_USE_PROXY:false}
     # 仅管理员可接入自己有权使用的 Claude/OpenAI 订阅账号。OAuth 凭据在数据库中
     # 使用独立密钥加密；生产环境必须设置为随机值，修改后旧凭据需要重新授权。
     enabled: ${ROSE_SUBSCRIPTION_GATEWAY_ENABLED:true}
@@ -182,6 +180,8 @@ rose:
     request-timeout-seconds: 180
   # DeepSeek 模型已停用，以下保留配置为注释；恢复时需取消注释并配置密钥。
   # OpenAI / Claude 订阅模型由订阅账号池提供，不受此列表影响。
+  # 每个 URL/API Key/Model ID 可在自己的模型条目内单独设置 trust-env；
+  # false 表示直连，true 表示读取服务器代理环境变量，未配置时继承 proxy.transport.trust-env。
   models: []
     # - id: deepseek-v4-flash
     #   enabled: true

@@ -55,7 +55,6 @@ def make_service(repository=None):
     service.repository = repository or RequestRepository()
     service.cipher = JsonCipher()
     service.user_contributions_enabled = True
-    service.config_request_default_use_proxy = False
     service.cooldown_enabled = True
     return service
 

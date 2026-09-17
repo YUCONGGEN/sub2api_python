@@ -99,7 +99,6 @@
           :codex-config="codexConfig"
           :model-options="modelOptions"
           :subscription-contributions-enabled="subscriptionContributionsEnabled"
-          :subscription-config-request-default-use-proxy="subscriptionConfigRequestDefaultUseProxy"
           @refresh-user="refreshUser"
         />
       </main>
@@ -129,7 +128,6 @@ export default {
     codexConfig: null,
     modelOptions: [],
     subscriptionContributionsEnabled: false,
-    subscriptionConfigRequestDefaultUseProxy: false,
     theme: "light",
     mobileMenuOpen: false,
     healthTimer: null,
@@ -201,8 +199,6 @@ export default {
         if (Array.isArray(data.models)) this.modelOptions = data.models;
         this.subscriptionContributionsEnabled =
           data.subscription_contributions_enabled === true;
-        this.subscriptionConfigRequestDefaultUseProxy =
-          data.subscription_config_request_default_use_proxy === true;
         this.updateTitle();
       } catch (e) {}
     },

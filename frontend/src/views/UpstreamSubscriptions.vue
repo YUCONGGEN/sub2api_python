@@ -172,16 +172,11 @@ const defaults = provider => ({ mode: 'oauth', provider, name: '', models: provi
 export default {
   name: 'UpstreamSubscriptions',
   components: { GatewayActivity },
-  props: { user: { type: Object, default: null }, subscriptionContributionsEnabled: { type: Boolean, default: false }, subscriptionConfigRequestDefaultUseProxy: { type: Boolean, default: false } },
+  props: { user: { type: Object, default: null }, subscriptionContributionsEnabled: { type: Boolean, default: false } },
   data: () => ({ accounts: [], summary: {}, gatewayMetrics: {}, quotaByAccount: {}, pagination: { page: 1, pages: 1, total: 0 }, error: '', loading: false, busy: false, actionId: null, filter: '', showForm: false, editingId: null, oauthSession: null, gatewayEnabled: false, metricsTimer: null, configRequests: [], requestLoading: false, requestBusy: false, requestForm: { url: '', api_key: '', model_id: '', use_proxy: false }, form: defaults('openai') }),
   computed: { isAdmin () { return String(this.user?.role || '').toUpperCase() === 'ADMIN' } },
-  watch: {
-    'form.provider' (next, previous) { if (!this.editingId && !this.oauthSession && next !== previous) this.form.models = defaults(next).models },
-    subscriptionConfigRequestDefaultUseProxy (value) {
-      if (!this.requestForm.url && !this.requestForm.api_key && !this.requestForm.model_id) this.requestForm.use_proxy = value
-    }
-  },
-  created () { this.requestForm.use_proxy = this.subscriptionConfigRequestDefaultUseProxy; this.load(); this.loadConfigRequests(); if (this.isAdmin) this.metricsTimer = window.setInterval(this.refreshGatewayMetrics, 5000) },
+  watch: { 'form.provider' (next, previous) { if (!this.editingId && !this.oauthSession && next !== previous) this.form.models = defaults(next).models } },
+  created () { this.load(); this.loadConfigRequests(); if (this.isAdmin) this.metricsTimer = window.setInterval(this.refreshGatewayMetrics, 5000) },
   beforeUnmount () { window.clearInterval(this.metricsTimer) },
   beforeDestroy () { window.clearInterval(this.metricsTimer) },
   methods: {
@@ -221,7 +216,7 @@ export default {
     async refreshGatewayMetrics () { if (!this.isAdmin) return; try { const data = await api.upstreamGatewayMetrics(); this.gatewayMetrics = data.gateway_metrics || this.gatewayMetrics } catch (error) {} },
     requestStatus (status) { return ({ PENDING: '待处理', ACCEPTED: '已处理', REJECTED: '已拒绝' })[status] || status },
     async loadConfigRequests () { this.requestLoading = true; try { const data = await api.upstreamConfigRequests({ page: 1, page_size: 50 }); const rows = data.requests || []; this.configRequests = this.isAdmin ? await Promise.all(rows.map(async item => { try { const secret = await api.revealUpstreamConfigRequest(item.id); return { ...item, api_key: secret.request.api_key } } catch (error) { return item } })) : rows } catch (error) { notify(error.message || '配置申请加载失败', 'error') } finally { this.requestLoading = false } },
-    async submitConfigRequest () { if (!this.requestForm.url || !this.requestForm.api_key || !this.requestForm.model_id) return notify('请完整填写 URL、API Key 和模型 ID', 'error'); this.requestBusy = true; try { const data = await api.createUpstreamConfigRequest(this.requestForm); notify(data.message || '配置申请已发送', 'success'); this.requestForm = { url: '', api_key: '', model_id: '', use_proxy: this.subscriptionConfigRequestDefaultUseProxy }; await this.loadConfigRequests() } catch (error) { notify(error.message, 'error') } finally { this.requestBusy = false } },
+    async submitConfigRequest () { if (!this.requestForm.url || !this.requestForm.api_key || !this.requestForm.model_id) return notify('请完整填写 URL、API Key 和模型 ID', 'error'); this.requestBusy = true; try { const data = await api.createUpstreamConfigRequest(this.requestForm); notify(data.message || '配置申请已发送', 'success'); this.requestForm = { url: '', api_key: '', model_id: '', use_proxy: false }; await this.loadConfigRequests() } catch (error) { notify(error.message, 'error') } finally { this.requestBusy = false } },
     async copyText (value) { if (navigator.clipboard?.writeText) { try { await navigator.clipboard.writeText(value); return } catch (error) {} } const textarea = document.createElement('textarea'); textarea.value = value; textarea.setAttribute('readonly', ''); textarea.style.position = 'fixed'; textarea.style.opacity = '0'; document.body.appendChild(textarea); textarea.select(); const copied = document.execCommand('copy'); document.body.removeChild(textarea); if (!copied) throw new Error('浏览器拒绝复制，请手动选择配置内容') },
     async copyConfigRequest (item) { try { const request = item.api_key ? { url: item.base_url, api_key: item.api_key, model_id: item.model_id, use_proxy: !!item.use_proxy } : (await api.revealUpstreamConfigRequest(item.id)).request; const value = `- id: ${request.model_id}\n  enabled: true\n  provider: OpenAI\n  endpoint: Chat\n  upstream-model: ${request.model_id}\n  base-url: ${request.url}\n  api-key: ${request.api_key}\n  trust-env: ${request.use_proxy ? 'true' : 'false'}`; await this.copyText(value); notify('可粘贴到 rose.models 的 YAML 配置已复制', 'success') } catch (error) { notify(error.message || '复制失败', 'error') } },
     async setRequestStatus (item, status) { try { await api.updateUpstreamConfigRequest(item.id, { status }); await this.loadConfigRequests(); notify('申请状态已更新', 'success') } catch (error) { notify(error.message, 'error') } },

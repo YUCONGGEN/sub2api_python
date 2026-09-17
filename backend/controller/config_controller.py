@@ -51,7 +51,6 @@ class ConfigController:
         models = cfg.get("models", [])
         subscription_gateway = cfg.get("subscription-gateway", {}) if isinstance(cfg.get("subscription-gateway"), dict) else {}
         contributions_enabled = str(subscription_gateway.get("user-contributions-enabled", True)).strip().lower() in {"1", "true", "yes", "on"}
-        config_request_default_use_proxy = str(subscription_gateway.get("config-request-default-use-proxy", False)).strip().lower() in {"1", "true", "yes", "on"}
         if isinstance(models, dict):
             models = [{"id": key, **(value if isinstance(value, dict) else {})} for key, value in models.items()]
         model_options = []
@@ -71,7 +70,6 @@ class ConfigController:
             "recharge_code_prefix": prefix,
             "recharge_code_placeholder": f"输入 {prefix}-XXXX-XXXX-XXXX",
             "subscription_contributions_enabled": contributions_enabled,
-            "subscription_config_request_default_use_proxy": config_request_default_use_proxy,
             # Public metadata only. The bearer token is intentionally omitted.
             "codex": {
                 "model": codex.get("model") or "gpt-5.6-sol",

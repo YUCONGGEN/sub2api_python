@@ -5,6 +5,7 @@ import json
 import math
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from springbootai import Autowired, PostConstruct, Service, Slf4j, Transactional, get_config
 
@@ -73,6 +74,8 @@ class SubscriptionAccountService:
     def init(self) -> None:
         cfg = get_config().get("rose", {}).get("subscription-gateway", {})
         self.cooldown_enabled = as_bool(cfg.get("account-cooldown-enabled"), True)
+        self.user_contributions_enabled = as_bool(cfg.get("user-contributions-enabled"), True)
+        self.config_request_default_use_proxy = as_bool(cfg.get("config-request-default-use-proxy"), False)
         self.logger.info("订阅账号临时冷却 enabled=%s", self.cooldown_enabled)
 
     def _is_cooling(self, row: dict[str, Any], now: datetime | None = None) -> bool:
@@ -234,8 +237,46 @@ class SubscriptionAccountService:
         row = self.repository.find(account_id)
         return self._public(row) if row else None
 
+    @staticmethod
+    def _is_admin(user: dict[str, Any] | None) -> bool:
+        return bool(user and str(user.get("role") or "").upper() == "ADMIN")
+
+    def contributions_available(self, user: dict[str, Any] | None) -> bool:
+        return self._is_admin(user) or bool(getattr(self, "user_contributions_enabled", True))
+
+    def can_manage(self, user: dict[str, Any] | None, row: dict[str, Any] | None) -> bool:
+        if not user or not row:
+            return False
+        if self._is_admin(user):
+            return True
+        return int(row.get("owner_user_id") or 0) == int(user.get("id") or 0)
+
+    def manageable_row(self, user: dict[str, Any], account_id: int) -> dict[str, Any] | None:
+        row = self.repository.find(account_id)
+        return row if self.can_manage(user, row) else None
+
+    def _visible_to(self, row: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+        data = self._public(row)
+        owner_id = int(data.get("owner_user_id") or 0)
+        own = owner_id > 0 and owner_id == int(user.get("id") or 0)
+        can_manage = self.can_manage(user, row)
+        data["can_manage"] = can_manage
+        data["is_own"] = own
+        data["owner_label"] = "我贡献的" if own else (f"用户 #{owner_id}" if owner_id and self._is_admin(user) else ("用户贡献" if owner_id else "管理员账号"))
+        if not can_manage:
+            for key in ("email", "account_ref", "credential_error", "has_access_token", "has_refresh_token", "plan_type", "expires_at", "last_error"):
+                data.pop(key, None)
+            data["credential_mask"] = "凭据已加密"
+        return data
+
+    def list_page_for_user(self, user: dict[str, Any], provider: str = "", page: int = 1, page_size: int = 20) -> dict[str, Any]:
+        provider = self.normalize_provider(provider) if str(provider or "").strip() else ""
+        result = self.repository.list_page(provider, page, page_size)
+        result["items"] = [self._visible_to(row, user) for row in result["items"]]
+        return result
+
     @Transactional()
-    def create(self, body: dict[str, Any], credentials: dict[str, Any] | None = None) -> dict[str, Any]:
+    def create(self, body: dict[str, Any], credentials: dict[str, Any] | None = None, owner_user_id: int | None = None) -> dict[str, Any]:
         provider = self.normalize_provider(body.get("provider"))
         if not body.get("compliance_confirmed"):
             raise ValueError("请确认你有权使用该订阅账号，并遵守上游服务条款")
@@ -262,6 +303,7 @@ class SubscriptionAccountService:
         account_ref = str(credentials.get("account_id") or credentials.get("chatgpt_account_id") or credentials.get("organization_id") or body.get("account_ref") or "").strip()[:255]
         now = utc_now()
         account = {
+            "owner_user_id": int(owner_user_id) if owner_user_id else None,
             "provider": provider,
             "name": name,
             "auth_type": auth_type,
@@ -286,6 +328,78 @@ class SubscriptionAccountService:
             "updated_at": now,
         }
         return self._public(self.repository.create(account))
+
+    @staticmethod
+    def _normalize_request_url(value: Any) -> str:
+        raw = str(value or "").strip()
+        if not raw or len(raw) > 1000:
+            raise ValueError("URL 不能为空且不能超过 1000 个字符")
+        parsed = urlsplit(raw)
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password:
+            raise ValueError("URL 必须是有效的 HTTP/HTTPS 地址，且不能包含账号密码")
+        return urlunsplit((parsed.scheme.lower(), parsed.netloc, parsed.path.rstrip("/"), parsed.query, ""))
+
+    def _public_config_request(self, row: dict[str, Any]) -> dict[str, Any]:
+        data = dict(row)
+        encrypted = str(data.pop("api_key_encrypted", "") or "")
+        try:
+            secret = str(self.cipher.decrypt(encrypted).get("api_key") or "")
+        except (ValueError, AttributeError):
+            secret = ""
+        data["api_key_mask"] = (secret[:7] + "••••" + secret[-4:]) if len(secret) > 12 else ("••••••••" if secret else "未提供")
+        return data
+
+    @Transactional()
+    def create_config_request(self, user_id: int, body: dict[str, Any]) -> dict[str, Any]:
+        if not bool(getattr(self, "user_contributions_enabled", True)):
+            raise ValueError("用户贡献功能当前已关闭")
+        base_url = self._normalize_request_url(body.get("url") or body.get("base_url"))
+        api_key = str(body.get("api_key") or "").strip()
+        model_id = str(body.get("model_id") or "").strip()
+        if not api_key or len(api_key) > 8192:
+            raise ValueError("API Key 不能为空且不能超过 8192 个字符")
+        if not model_id or len(model_id) > 200:
+            raise ValueError("Model ID 不能为空且不能超过 200 个字符")
+        now = utc_now()
+        row = self.repository.create_config_request({
+            "user_id": int(user_id),
+            "base_url": base_url,
+            "api_key_encrypted": self.cipher.encrypt({"api_key": api_key}),
+            "model_id": model_id,
+            "use_proxy": 1 if as_bool(body.get("use_proxy"), getattr(self, "config_request_default_use_proxy", False)) else 0,
+            "status": "PENDING",
+            "admin_note": "",
+            "created_at": now,
+            "updated_at": now,
+        })
+        return self._public_config_request(row)
+
+    def list_config_requests(self, user: dict[str, Any], status: str = "", page: int = 1, page_size: int = 20) -> dict[str, Any]:
+        normalized = str(status or "").strip().upper()
+        if normalized and normalized not in {"PENDING", "ACCEPTED", "REJECTED"}:
+            raise ValueError("申请状态不正确")
+        owner_filter = 0 if self._is_admin(user) else int(user["id"])
+        result = self.repository.list_config_requests(owner_filter, normalized, page, page_size)
+        result["items"] = [self._public_config_request(row) for row in result["items"]]
+        return result
+
+    def config_request_secret(self, request_id: int) -> dict[str, Any] | None:
+        row = self.repository.find_config_request(request_id)
+        if not row:
+            return None
+        credentials = self.cipher.decrypt(str(row.get("api_key_encrypted") or ""))
+        return {"id": int(row["id"]), "url": row["base_url"], "api_key": str(credentials.get("api_key") or ""), "model_id": row["model_id"], "use_proxy": bool(row.get("use_proxy"))}
+
+    @Transactional()
+    def update_config_request(self, request_id: int, body: dict[str, Any]) -> dict[str, Any] | None:
+        status = str(body.get("status") or "").strip().upper()
+        if status not in {"PENDING", "ACCEPTED", "REJECTED"}:
+            raise ValueError("status 只能是 PENDING、ACCEPTED 或 REJECTED")
+        note = str(body.get("admin_note") or "").strip()
+        if len(note) > 1000:
+            raise ValueError("管理员备注不能超过 1000 个字符")
+        row = self.repository.update_config_request(request_id, status, note, utc_now())
+        return self._public_config_request(row) if row else None
 
     @Transactional()
     def update(self, account_id: int, body: dict[str, Any]) -> dict[str, Any] | None:

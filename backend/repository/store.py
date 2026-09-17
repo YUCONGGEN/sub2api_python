@@ -49,6 +49,7 @@ class StoreRepository:
                 self._ensure_sqlite_user_groups(conn)
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_users_group ON users(group_id, deleted_at)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_subscription_plans_group ON subscription_plans(group_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_upstream_subscription_owner ON upstream_subscription_accounts(owner_user_id, created_at DESC)")
                 self._migrate_sqlite_api_keys(conn)
                 conn.execute(
                     "CREATE UNIQUE INDEX IF NOT EXISTS idx_api_key_hash "
@@ -158,6 +159,8 @@ class StoreRepository:
         self._ensure_column(conn, "api_keys", "api_key_hash", "TEXT")
         self._ensure_column(conn, "api_keys", "key_prefix", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column(conn, "api_keys", "key_last4", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column(conn, "upstream_subscription_accounts", "owner_user_id", "INTEGER")
+        self._ensure_column(conn, "upstream_config_requests", "use_proxy", "INTEGER NOT NULL DEFAULT 0")
         for column, definition in {
             "billing_source": "TEXT NOT NULL DEFAULT 'WALLET'",
             "free_cost": "REAL NOT NULL DEFAULT 0",
@@ -220,6 +223,12 @@ class StoreRepository:
                 "key_prefix": "VARCHAR(32) NOT NULL DEFAULT ''",
                 "key_last4": "VARCHAR(8) NOT NULL DEFAULT ''",
             },
+            "upstream_subscription_accounts": {
+                "owner_user_id": "BIGINT",
+            },
+            "upstream_config_requests": {
+                "use_proxy": "TINYINT NOT NULL DEFAULT 0",
+            },
         }
         for table, columns in additions.items():
             cursor.execute(f"SHOW COLUMNS FROM {table}")
@@ -236,6 +245,9 @@ class StoreRepository:
         cursor.execute("SHOW INDEX FROM subscription_plans WHERE Key_name='idx_subscription_plans_group'")
         if not cursor.fetchone():
             cursor.execute("CREATE INDEX idx_subscription_plans_group ON subscription_plans(group_id)")
+        cursor.execute("SHOW INDEX FROM upstream_subscription_accounts WHERE Key_name='idx_upstream_subscription_owner'")
+        if not cursor.fetchone():
+            cursor.execute("CREATE INDEX idx_upstream_subscription_owner ON upstream_subscription_accounts(owner_user_id, created_at)")
 
     @staticmethod
     def _ensure_sqlite_user_groups(conn: sqlite3.Connection) -> None:

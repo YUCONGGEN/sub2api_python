@@ -94,7 +94,7 @@ def test_oauth_authorization_uses_pkce_and_binds_state_to_admin():
     assert query["code_challenge"] == [expected]
     with pytest.raises(ValueError, match="state"):
         oauth._consume_session(generated["session_id"], "openai", 17, "wrong-state")
-    with pytest.raises(ValueError, match="管理员"):
+    with pytest.raises(ValueError, match="当前用户"):
         oauth._consume_session(generated["session_id"], "openai", 18, query["state"][0])
 
 

@@ -170,6 +170,7 @@ CREATE TABLE IF NOT EXISTS user_sessions (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS upstream_subscription_accounts (
   id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  owner_user_id BIGINT,
   provider VARCHAR(20) NOT NULL,
   name VARCHAR(120) NOT NULL,
   auth_type VARCHAR(30) NOT NULL DEFAULT 'oauth',
@@ -193,5 +194,20 @@ CREATE TABLE IF NOT EXISTS upstream_subscription_accounts (
   created_at VARCHAR(40) NOT NULL,
   updated_at VARCHAR(40) NOT NULL,
   KEY idx_upstream_subscription_provider (provider, enabled, priority),
-  KEY idx_upstream_subscription_cooldown (provider, cooldown_until)
+  KEY idx_upstream_subscription_cooldown (provider, cooldown_until),
+  KEY idx_upstream_subscription_owner (owner_user_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS upstream_config_requests (
+  id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  user_id BIGINT NOT NULL,
+  base_url VARCHAR(1000) NOT NULL,
+  api_key_encrypted LONGTEXT NOT NULL,
+  model_id VARCHAR(200) NOT NULL,
+  use_proxy TINYINT NOT NULL DEFAULT 0,
+  status VARCHAR(30) NOT NULL DEFAULT 'PENDING',
+  admin_note VARCHAR(1000) NOT NULL DEFAULT '',
+  created_at VARCHAR(40) NOT NULL,
+  updated_at VARCHAR(40) NOT NULL,
+  KEY idx_upstream_config_request_user (user_id, created_at),
+  KEY idx_upstream_config_request_status (status, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -8,6 +8,7 @@ from springbootai.orm import Column, CreateTime, Entity, Id, Index
     indexes=[
         Index("idx_upstream_subscription_provider", ["provider", "enabled", "priority"]),
         Index("idx_upstream_subscription_cooldown", ["provider", "cooldown_until"]),
+        Index("idx_upstream_subscription_owner", ["owner_user_id", "created_at"]),
     ],
     comment="Claude/OpenAI subscription accounts managed by the gateway",
 )
@@ -16,6 +17,7 @@ class UpstreamSubscriptionAccount:
     """Metadata only; OAuth credentials are encrypted before persistence."""
 
     id: int = Id()
+    owner_user_id: int = Column(nullable=True)
     provider: str = Column(nullable=False, length=20)
     name: str = Column(nullable=False, length=120)
     auth_type: str = Column(nullable=False, length=30, default="oauth")

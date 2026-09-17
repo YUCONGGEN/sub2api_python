@@ -40,5 +40,20 @@ class SubscriptionMapper:
     def delete_account(self, account_id: int) -> int:
         pass
 
+    def count_config_requests(self, user_id: int = 0, status: str = "") -> int:
+        pass
+
+    def list_config_requests(self, user_id: int = 0, status: str = "", offset: int = 0, limit: int = 20) -> list[dict]:
+        pass
+
+    def find_config_request(self, request_id: int) -> Mapping[str, Any] | None:
+        pass
+
+    def insert_config_request(self, request: Mapping[str, Any]) -> int:
+        pass
+
+    def update_config_request(self, request_id: int, status: str, admin_note: str, updated_at: str) -> int:
+        pass
+
 
 __all__ = ["SubscriptionMapper"]

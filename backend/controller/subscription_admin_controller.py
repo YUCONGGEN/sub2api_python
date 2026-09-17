@@ -64,14 +64,16 @@ class SubscriptionAdminController:
         return ok({"ok": True, "gateway_metrics": self.gateway.metrics(include_users=True)})
 
     @PostMapping("")
-    def create_account(self, body: dict = RequestBody(), authorization: str = RequestHeader(name="Authorization", required=False)):
-        if not self._admin(authorization):
+    async def create_account(self, body: dict = RequestBody(), authorization: str = RequestHeader(name="Authorization", required=False)):
+        admin = self._admin(authorization)
+        if not admin:
             return forbidden()
         try:
-            account = self.accounts.create(body)
+            validated = await self.gateway.validate_candidate(body)
+            account = self.accounts.create(body, validated["credentials"], owner_user_id=int(admin["id"]))
         except ValueError as exc:
-            return bad(str(exc))
-        return ok({"ok": True, "account": account}, "订阅账号已加密保存")
+            return bad(str(exc), 502 if "连通性" in str(exc) else 400)
+        return ok({"ok": True, "account": account, "model_count": validated["model_count"]}, "连通性验证通过，订阅账号已加密保存")
 
     @PatchMapping("/{account_id}")
     def update_account(
@@ -124,12 +126,14 @@ class SubscriptionAdminController:
                 state=str(body.get("state") or ""),
                 admin_id=int(admin["id"]),
             )
-            account = self.accounts.create({**body, "auth_type": "oauth"}, credentials)
+            prepared = {**body, "auth_type": "oauth"}
+            validated = await self.gateway.validate_candidate(prepared, credentials)
+            account = self.accounts.create(prepared, validated["credentials"], owner_user_id=int(admin["id"]))
         except ValueError as exc:
             return bad(str(exc))
         except Exception as exc:
             return bad(f"OAuth 请求失败：{exc}", 502)
-        return ok({"ok": True, "account": account}, "OAuth 授权完成，凭据已加密保存")
+        return ok({"ok": True, "account": account, "model_count": validated["model_count"]}, "OAuth 与连通性验证通过，凭据已加密保存")
 
     @PostMapping("/{account_id}/refresh")
     async def refresh_account(self, account_id: int = PathVariable(name="account_id"), authorization: str = RequestHeader(name="Authorization", required=False)):

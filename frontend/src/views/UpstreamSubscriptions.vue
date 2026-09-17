@@ -2,20 +2,20 @@
   <section class="page subscription-page">
     <div class="page-head">
       <div>
-        <div class="eyebrow">ADMIN / SUBSCRIPTION GATEWAY</div>
-        <h1>Claude / OpenAI 订阅账号</h1>
-        <p>接入你有权使用的订阅账号，自动刷新 OAuth Token，并通过标准 Messages / Responses API 调度。</p>
+        <div class="eyebrow">SHARED SUBSCRIPTION POOL</div>
+        <h1>共享订阅账号池</h1>
+        <p>{{ isAdmin ? '管理全部共享订阅账号与用户提交的配置申请。' : '可查看全部共享账号；你只能维护自己添加的账号，凭据与运行状态不会向其他用户公开。' }}</p>
       </div>
       <button class="primary-action" type="button" @click="openCreate">添加订阅账号</button>
     </div>
 
-    <div class="metric-grid gateway-metrics">
+    <div v-if="isAdmin" class="metric-grid gateway-metrics">
       <div class="metric-card"><span>账号总数</span><strong>{{ summary.total || 0 }}</strong><small>全部分页与供应商</small></div>
       <div class="metric-card"><span>OpenAI</span><strong>{{ providerCount('openai') }}</strong><small>Responses / Codex</small></div>
       <div class="metric-card"><span>Claude</span><strong>{{ providerCount('claude') }}</strong><small>Anthropic Messages</small></div>
       <div class="metric-card" :class="{ highlight: gatewayEnabled }"><span>网关状态</span><strong>{{ gatewayEnabled ? '已启用' : '已停用' }}</strong><small>凭据全程加密保存</small></div>
     </div>
-    <div class="gateway-strip gateway-capacity" aria-label="订阅账号池实时容量">
+    <div v-if="isAdmin" class="gateway-strip gateway-capacity" aria-label="订阅账号池实时容量">
       <span><small>正在执行</small><b>{{ gatewayMetrics.active_requests || 0 }}</b></span>
       <span><small>排队请求</small><b>{{ gatewayMetrics.queue_waiting || 0 }} / {{ gatewayMetrics.queue_limit || 0 }}</b></span>
       <span><small>RPM 使用</small><b>{{ gatewayMetrics.rpm_used || 0 }} / {{ gatewayMetrics.rpm_capacity || 0 }}</b></span>
@@ -24,7 +24,7 @@
       <span><small>上游容量不足</small><b>{{ gatewayMetrics.upstream_capacity_failures || 0 }}</b></span>
       <span><small>排队拒绝</small><b>{{ gatewayMetrics.queue_rejected || 0 }}</b></span>
     </div>
-    <GatewayActivity :gateway="gatewayMetrics" />
+    <GatewayActivity v-if="isAdmin" :gateway="gatewayMetrics" />
 
     <section v-if="showForm" class="panel account-editor">
       <div class="panel-head">
@@ -41,11 +41,11 @@
         <label><span>供应商</span><select v-model="form.provider" :disabled="!!editingId || !!oauthSession"><option value="openai">OpenAI / Codex</option><option value="claude">Claude / Anthropic</option></select></label>
         <label><span>显示名称</span><input v-model.trim="form.name" maxlength="120" placeholder="例如：我的 ChatGPT Pro" /></label>
         <label class="span-2"><span>可调度模型（逗号分隔）</span><textarea v-model="form.models" rows="3" placeholder="gpt-5.4, gpt-5.4-mini"></textarea></label>
-        <label><span>优先级</span><input v-model.number="form.priority" type="number" min="-1000" max="1000" /></label>
-        <label><span>调度权重</span><input v-model.number="form.weight" type="number" min="1" max="100" /></label>
-        <label><span>输入价（¥/百万 Token）</span><input v-model.number="form.input_price_cny" type="number" min="0" step="0.01" /></label>
-        <label><span>输出价（¥/百万 Token）</span><input v-model.number="form.output_price_cny" type="number" min="0" step="0.01" /></label>
-        <label><span>价格倍率</span><input v-model.number="form.price_multiplier" type="number" min="0" step="0.01" /></label>
+        <label v-if="isAdmin"><span>优先级</span><input v-model.number="form.priority" type="number" min="-1000" max="1000" /></label>
+        <label v-if="isAdmin"><span>调度权重</span><input v-model.number="form.weight" type="number" min="1" max="100" /></label>
+        <label v-if="isAdmin"><span>输入价（¥/百万 Token）</span><input v-model.number="form.input_price_cny" type="number" min="0" step="0.01" /></label>
+        <label v-if="isAdmin"><span>输出价（¥/百万 Token）</span><input v-model.number="form.output_price_cny" type="number" min="0" step="0.01" /></label>
+        <label v-if="isAdmin"><span>价格倍率</span><input v-model.number="form.price_multiplier" type="number" min="0" step="0.01" /></label>
         <label class="check-line"><input v-model="form.enabled" type="checkbox" /><span>启用此账号</span></label>
       </div>
 
@@ -79,7 +79,7 @@
 
       <div class="editor-actions">
         <button v-if="editingId" class="primary-action" :disabled="busy" @click="saveEdit">{{ busy ? '保存中…' : '保存修改' }}</button>
-        <button v-else-if="form.mode === 'manual'" class="primary-action" :disabled="busy" @click="saveManual">{{ busy ? '保存中…' : '加密保存 Token' }}</button>
+        <button v-else-if="form.mode === 'manual'" class="primary-action" :disabled="busy" @click="saveManual">{{ busy ? '正在验证连通性…' : '验证并加入共享池' }}</button>
         <button v-else-if="!oauthSession" class="primary-action" :disabled="busy" @click="startOAuth">{{ busy ? '生成中…' : '生成 OAuth 授权链接' }}</button>
         <button v-else class="primary-action" :disabled="busy || !form.callback_value" @click="finishOAuth">{{ busy ? '交换 Token 中…' : '完成授权并保存' }}</button>
         <button class="secondary-action" type="button" @click="closeForm">取消</button>
@@ -106,10 +106,10 @@
             </div>
             <span class="status-chip" :class="statusClass(account)">{{ statusText(account) }}</span>
           </div>
-          <p class="account-summary">{{ providerLabel(account.provider) }} · {{ account.email || '未提供邮箱' }}<br>{{ account.credential_mask }}</p>
+          <p class="account-summary">{{ providerLabel(account.provider) }} · {{ account.owner_label || '系统账号' }}<br>{{ account.can_manage ? (account.email || '未提供邮箱') + ' · ' + account.credential_mask : '凭据仅账号所有者和管理员可见' }}</p>
           <div class="account-models"><span v-for="model in account.models" :key="model">{{ model }}</span></div>
-          <dl class="account-facts"><div><dt>优先级 / 权重</dt><dd>{{ account.priority }} / {{ account.weight }}</dd></div><div><dt>错误次数</dt><dd>{{ account.error_count || 0 }}</dd></div><div><dt>Token 过期</dt><dd>{{ displayTime(account.expires_at) }}</dd></div><div><dt>最近使用</dt><dd>{{ displayTime(account.last_used_at) }}</dd></div></dl>
-          <div v-if="account.provider === 'openai'" class="account-quota">
+          <dl v-if="account.can_manage" class="account-facts"><div v-if="isAdmin"><dt>优先级 / 权重</dt><dd>{{ account.priority }} / {{ account.weight }}</dd></div><div><dt>错误次数</dt><dd>{{ account.error_count || 0 }}</dd></div><div><dt>Token 过期</dt><dd>{{ displayTime(account.expires_at) }}</dd></div><div><dt>最近使用</dt><dd>{{ displayTime(account.last_used_at) }}</dd></div></dl>
+          <div v-if="account.provider === 'openai' && account.can_manage" class="account-quota">
             <div class="account-quota-head"><div><small>CODEX SUBSCRIPTION</small><strong>订阅剩余量</strong></div><button type="button" :disabled="quotaState(account).loading" @click="loadAccountQuota(account, true)">{{ quotaState(account).loading ? '查询中…' : '刷新' }}</button></div>
             <div v-if="quotaState(account).loading && !quotaState(account).quota" class="quota-loading">正在安全查询订阅窗口…</div>
             <div v-else-if="quotaState(account).error && !quotaState(account).quota" class="quota-error">{{ quotaState(account).error }}</div>
@@ -127,11 +127,31 @@
               <p v-if="quotaState(account).quota.warning" class="quota-warning">{{ quotaState(account).quota.warning }}</p>
             </template>
           </div>
-          <p v-if="account.last_error" class="account-error">{{ account.last_error }}</p>
-          <div class="account-actions"><button class="secondary-btn" :disabled="actionId === account.id" @click="testAccount(account)">测试</button><button v-if="account.has_refresh_token" class="secondary-btn" :disabled="actionId === account.id" @click="refreshAccount(account)">刷新 Token</button><button class="secondary-btn" @click="openEdit(account)">编辑</button><button class="secondary-btn" @click="toggleAccount(account)">{{ account.enabled ? '停用' : '启用' }}</button><button class="text-btn danger" @click="removeAccount(account)">删除</button></div>
+          <p v-if="account.can_manage && account.last_error" class="account-error">{{ account.last_error }}</p>
+          <div v-if="account.can_manage" class="account-actions"><button class="secondary-btn" :disabled="actionId === account.id" @click="testAccount(account)">测试</button><button v-if="account.has_refresh_token" class="secondary-btn" :disabled="actionId === account.id" @click="refreshAccount(account)">刷新 Token</button><button class="secondary-btn" @click="openEdit(account)">编辑</button><button class="secondary-btn" @click="toggleAccount(account)">{{ account.enabled ? '停用' : '启用' }}</button><button class="text-btn danger" @click="removeAccount(account)">删除</button></div>
         </article>
       </div>
       <div class="pagination" v-if="pagination.pages > 1"><button class="secondary-btn" :disabled="loading || pagination.page <= 1" @click="changePage(pagination.page - 1)">上一页</button><span>第 {{ pagination.page }} / {{ pagination.pages }} 页，共 {{ pagination.total }} 个账号</span><button class="secondary-btn" :disabled="loading || pagination.page >= pagination.pages" @click="changePage(pagination.page + 1)">下一页</button></div>
+    </section>
+
+    <section class="panel config-requests">
+      <div class="panel-head"><div><span class="eyebrow">UPSTREAM CONFIG REQUEST</span><h2>上游配置申请</h2><p>提交 URL、API Key 和模型 ID 给管理员，API Key 会加密保存且列表中只显示掩码。</p></div></div>
+      <div class="request-compose">
+        <input v-model.trim="requestForm.url" type="url" placeholder="https://api.example.com/v1" />
+        <input v-model.trim="requestForm.api_key" type="password" autocomplete="off" placeholder="API Key" />
+        <input v-model.trim="requestForm.model_id" placeholder="model-id" />
+        <label class="proxy-choice"><input v-model="requestForm.use_proxy" type="checkbox" /><span>走服务器代理</span></label>
+        <button class="primary-action" :disabled="requestBusy" @click="submitConfigRequest">{{ requestBusy ? '发送中…' : '发送给管理员' }}</button>
+      </div>
+      <div v-if="requestLoading" class="empty">正在加载申请…</div>
+      <div v-else-if="!configRequests.length" class="empty">暂无配置申请</div>
+      <div v-else class="request-list">
+        <article v-for="item in configRequests" :key="item.id">
+          <div><strong>{{ item.model_id }}</strong><small v-if="isAdmin">用户 #{{ item.user_id }}</small><small>{{ item.base_url }}</small></div>
+          <code>{{ item.api_key_mask }}</code><span class="proxy-badge">{{ item.use_proxy ? '走代理' : '直连' }} · trust-env {{ item.use_proxy ? 'true' : 'false' }}</span><span :class="['request-status', String(item.status).toLowerCase()]">{{ requestStatus(item.status) }}</span>
+          <div v-if="isAdmin" class="request-actions"><button @click="copyConfigRequest(item)">复制配置</button><button @click="setRequestStatus(item, 'ACCEPTED')">已处理</button><button @click="setRequestStatus(item, 'REJECTED')">拒绝</button></div>
+        </article>
+      </div>
     </section>
 
     <section class="panel endpoint-help">
@@ -152,9 +172,16 @@ const defaults = provider => ({ mode: 'oauth', provider, name: '', models: provi
 export default {
   name: 'UpstreamSubscriptions',
   components: { GatewayActivity },
-  data: () => ({ accounts: [], summary: {}, gatewayMetrics: {}, quotaByAccount: {}, pagination: { page: 1, pages: 1, total: 0 }, error: '', loading: false, busy: false, actionId: null, filter: '', showForm: false, editingId: null, oauthSession: null, gatewayEnabled: false, metricsTimer: null, form: defaults('openai') }),
-  watch: { 'form.provider' (next, previous) { if (!this.editingId && !this.oauthSession && next !== previous) this.form.models = defaults(next).models } },
-  created () { this.load(); this.metricsTimer = window.setInterval(this.refreshGatewayMetrics, 5000) },
+  props: { user: { type: Object, default: null }, subscriptionContributionsEnabled: { type: Boolean, default: false }, subscriptionConfigRequestDefaultUseProxy: { type: Boolean, default: false } },
+  data: () => ({ accounts: [], summary: {}, gatewayMetrics: {}, quotaByAccount: {}, pagination: { page: 1, pages: 1, total: 0 }, error: '', loading: false, busy: false, actionId: null, filter: '', showForm: false, editingId: null, oauthSession: null, gatewayEnabled: false, metricsTimer: null, configRequests: [], requestLoading: false, requestBusy: false, requestForm: { url: '', api_key: '', model_id: '', use_proxy: false }, form: defaults('openai') }),
+  computed: { isAdmin () { return String(this.user?.role || '').toUpperCase() === 'ADMIN' } },
+  watch: {
+    'form.provider' (next, previous) { if (!this.editingId && !this.oauthSession && next !== previous) this.form.models = defaults(next).models },
+    subscriptionConfigRequestDefaultUseProxy (value) {
+      if (!this.requestForm.url && !this.requestForm.api_key && !this.requestForm.model_id) this.requestForm.use_proxy = value
+    }
+  },
+  created () { this.requestForm.use_proxy = this.subscriptionConfigRequestDefaultUseProxy; this.load(); this.loadConfigRequests(); if (this.isAdmin) this.metricsTimer = window.setInterval(this.refreshGatewayMetrics, 5000) },
   beforeUnmount () { window.clearInterval(this.metricsTimer) },
   beforeDestroy () { window.clearInterval(this.metricsTimer) },
   methods: {
@@ -185,13 +212,18 @@ export default {
         if (refresh && !quiet) notify(message, 'error')
       }
     },
-    loadAccountQuotas () { this.accounts.filter(account => account.provider === 'openai').forEach(account => this.loadAccountQuota(account, true, true)) },
+    loadAccountQuotas () { this.accounts.filter(account => account.provider === 'openai' && account.can_manage).forEach(account => this.loadAccountQuota(account, true, true)) },
     statusClass (account) { return account.enabled ? String(account.status || 'READY').toLowerCase() : 'disabled' },
     statusText (account) { if (!account.enabled) return '已停用'; return ({ READY: '可用', INVALID: '凭据失效', COOLDOWN: '冷却中', DISABLED: '已停用' })[account.status] || account.status },
     displayTime (value) { if (!value) return '—'; const date = new Date(value); return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN') },
     payload () { return { provider: this.form.provider, name: this.form.name, models: this.form.models, priority: this.form.priority, weight: this.form.weight, input_price_cny: this.form.input_price_cny, output_price_cny: this.form.output_price_cny, price_multiplier: this.form.price_multiplier, enabled: this.form.enabled, compliance_confirmed: this.form.compliance_confirmed } },
     async load () { this.loading = true; this.error = ''; try { const data = await api.upstreamSubscriptions({ provider: this.filter, page: this.pagination.page, page_size: 12 }); this.accounts = data.accounts || []; this.summary = data.summary || {}; this.gatewayMetrics = data.gateway_metrics || {}; this.pagination = data.pagination || this.pagination; this.gatewayEnabled = !!data.gateway_enabled; this.loadAccountQuotas() } catch (error) { this.error = error.message || '请检查后端服务后重试'; notify(this.error, 'error') } finally { this.loading = false } },
-    async refreshGatewayMetrics () { try { const data = await api.upstreamGatewayMetrics(); this.gatewayMetrics = data.gateway_metrics || this.gatewayMetrics } catch (error) {} },
+    async refreshGatewayMetrics () { if (!this.isAdmin) return; try { const data = await api.upstreamGatewayMetrics(); this.gatewayMetrics = data.gateway_metrics || this.gatewayMetrics } catch (error) {} },
+    requestStatus (status) { return ({ PENDING: '待处理', ACCEPTED: '已处理', REJECTED: '已拒绝' })[status] || status },
+    async loadConfigRequests () { this.requestLoading = true; try { const data = await api.upstreamConfigRequests({ page: 1, page_size: 50 }); this.configRequests = data.requests || [] } catch (error) { notify(error.message || '配置申请加载失败', 'error') } finally { this.requestLoading = false } },
+    async submitConfigRequest () { if (!this.requestForm.url || !this.requestForm.api_key || !this.requestForm.model_id) return notify('请完整填写 URL、API Key 和模型 ID', 'error'); this.requestBusy = true; try { const data = await api.createUpstreamConfigRequest(this.requestForm); notify(data.message || '配置申请已发送', 'success'); this.requestForm = { url: '', api_key: '', model_id: '', use_proxy: this.subscriptionConfigRequestDefaultUseProxy }; await this.loadConfigRequests() } catch (error) { notify(error.message, 'error') } finally { this.requestBusy = false } },
+    async copyConfigRequest (item) { try { const data = await api.revealUpstreamConfigRequest(item.id); const value = `- id: ${data.request.model_id}\n  enabled: true\n  provider: OpenAI\n  endpoint: Chat\n  upstream-model: ${data.request.model_id}\n  base-url: ${data.request.url}\n  api-key: ${data.request.api_key}\n  trust-env: ${data.request.use_proxy ? 'true' : 'false'}`; await navigator.clipboard.writeText(value); notify('可粘贴到 rose.models 的 YAML 配置已复制', 'success') } catch (error) { notify(error.message || '复制失败', 'error') } },
+    async setRequestStatus (item, status) { try { await api.updateUpstreamConfigRequest(item.id, { status }); await this.loadConfigRequests(); notify('申请状态已更新', 'success') } catch (error) { notify(error.message, 'error') } },
     setFilter (provider) { this.filter = provider; this.pagination.page = 1; this.load() },
     changePage (page) { this.pagination.page = page; this.load() },
     openCreate () { this.editingId = null; this.oauthSession = null; this.form = defaults('openai'); this.showForm = true; this.$nextTick(() => document.querySelector('.account-editor')?.scrollIntoView({ behavior: 'smooth' })) },
@@ -211,6 +243,7 @@ export default {
 
 <style scoped>
 .subscription-page{display:grid;gap:22px}.primary-action,.secondary-action,.text-action,.mode-tabs button,.provider-filter button,.account-actions button{border:1px solid var(--line,#d9dde5);background:var(--panel,#fff);color:inherit;border-radius:10px;padding:10px 15px;cursor:pointer}.primary-action{background:#17191d;color:#fff;border-color:#17191d;font-weight:700}.secondary-action{background:transparent}.text-action{padding:7px 11px}.primary-action:disabled,.account-actions button:disabled{opacity:.55;cursor:wait}.gateway-metrics{margin:0}.account-editor{display:grid;gap:18px}.mode-tabs,.provider-filter{display:flex;gap:8px;flex-wrap:wrap}.mode-tabs button.active,.provider-filter button.active{background:#17191d;color:#fff}.form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px}.form-grid label{display:grid;gap:7px}.form-grid label>span{font-size:13px;color:var(--muted,#6c7280);font-weight:600}.form-grid label>small{color:var(--muted,#6c7280);font-size:12px;line-height:1.5}.form-grid input,.form-grid select,.form-grid textarea,.oauth-step textarea{width:100%;box-sizing:border-box;border:1px solid var(--line,#d9dde5);border-radius:10px;background:var(--panel,#fff);color:inherit;padding:11px 12px;font:inherit}.span-2{grid-column:1/-1}.check-line{display:flex!important;align-items:center;grid-template-columns:auto 1fr!important}.check-line input,.compliance-check input{width:16px}.token-grid{padding-top:5px}.credential-update{border:1px solid var(--line,#d9dde5);border-radius:12px;padding:12px 14px}.credential-update summary{cursor:pointer;font-weight:700;margin-bottom:12px}.compliance-check{display:flex;gap:10px;align-items:flex-start;padding:14px;border:1px solid #e5c772;background:#fff9e7;color:#5b4810;border-radius:10px}.oauth-step{display:grid;gap:10px;padding:16px;border-radius:12px;background:#f1f5ff;border:1px solid #cbd8ff}.oauth-step p{margin:0;color:#566078}.oauth-step a{font-weight:700;color:#315cc8}.editor-actions{display:flex;gap:10px;flex-wrap:wrap}.account-list{display:grid;gap:14px}.account-card{display:grid;gap:14px;border:1px solid var(--line,#d9dde5);border-radius:14px;padding:17px}.account-main{display:flex;align-items:center;gap:12px}.provider-mark{display:grid;place-items:center;width:42px;height:42px;border-radius:12px;font-weight:900;background:#e7f1ff;color:#1856a7}.provider-mark.claude{background:#fff0e7;color:#9b4f1f}.account-title{display:flex;align-items:center;gap:9px;flex-wrap:wrap}.account-main p{margin:4px 0 0;color:var(--muted,#6c7280);font-size:13px}.status-chip{font-size:11px;border-radius:99px;padding:4px 8px;background:#e9f7ee;color:#247143}.status-chip.invalid{background:#ffe7e7;color:#a12626}.status-chip.cooldown{background:#fff3d4;color:#876211}.status-chip.disabled{background:#eceef2;color:#666}.account-models{display:flex;gap:7px;flex-wrap:wrap}.account-models span{font-size:12px;background:var(--soft,#f4f5f7);border-radius:7px;padding:5px 8px}.account-facts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:0}.account-facts div{display:grid;gap:3px}.account-facts dt{font-size:11px;color:var(--muted,#6c7280)}.account-facts dd{margin:0;font-size:13px;font-weight:650}.account-error{margin:0;padding:9px 11px;background:#fff1f1;color:#8d2929;border-radius:8px;font-size:12px;word-break:break-word}.account-actions{display:flex;gap:8px;flex-wrap:wrap}.account-actions button{padding:7px 10px;font-size:12px}.account-actions .danger{color:#b32828;border-color:#e9b8b8}.endpoint-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px}.endpoint-grid>div{display:grid;gap:8px;padding:16px;border:1px solid var(--line,#d9dde5);border-radius:12px}.endpoint-grid code{display:block;word-break:break-all;background:#17191d;color:#eaf0ff;border-radius:7px;padding:8px 10px}.endpoint-grid p{margin:0;color:var(--muted,#6c7280);line-height:1.55}.safety-note{margin:14px 0 0;padding:11px 13px;border-radius:9px;background:#fff9e7;border:1px solid #e5c772;color:#5b4810;font-size:13px;line-height:1.55}@media(max-width:850px){.form-grid,.endpoint-grid{grid-template-columns:1fr}.span-2{grid-column:auto}.account-facts{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:560px){.account-facts{grid-template-columns:1fr}.page-head{align-items:flex-start}.page-head>.primary-action{width:100%}}
+.config-requests{display:grid;gap:18px}.config-requests .panel-head p{margin:6px 0 0;color:var(--muted,#6c7280)}.request-compose{display:grid;grid-template-columns:1.4fr 1fr .8fr auto auto;gap:10px}.request-compose input{min-width:0;border:1px solid var(--line,#d9dde5);border-radius:10px;background:var(--panel,#fff);color:inherit;padding:11px 12px;font:inherit}.proxy-choice{display:flex;align-items:center;gap:7px;padding:0 5px;white-space:nowrap}.proxy-choice input{width:16px}.request-list{display:grid;gap:9px}.request-list article{display:grid;grid-template-columns:minmax(220px,1fr) minmax(120px,.45fr) auto auto auto;align-items:center;gap:12px;padding:13px;border:1px solid var(--line,#d9dde5);border-radius:11px}.request-list article>div:first-child{display:grid;gap:3px}.request-list small{color:var(--muted,#6c7280);word-break:break-all}.request-list code{word-break:break-all}.proxy-badge{font-size:12px;color:var(--muted,#6c7280);white-space:nowrap}.request-status{padding:5px 8px;border-radius:99px;background:#fff3d4;color:#876211;font-size:12px}.request-status.accepted{background:#e9f7ee;color:#247143}.request-status.rejected{background:#ffe7e7;color:#a12626}.request-actions{display:flex;gap:6px;flex-wrap:wrap}.request-actions button{border:1px solid var(--line,#d9dde5);border-radius:8px;background:transparent;color:inherit;padding:6px 9px;cursor:pointer}@media(max-width:1100px){.request-compose,.request-list article{grid-template-columns:1fr 1fr}}@media(max-width:620px){.request-compose,.request-list article{grid-template-columns:1fr}}
 /* Account pool cards follow the compact visual language used by plan management. */
 .account-list {
   grid-template-columns:repeat(4,minmax(0,1fr));

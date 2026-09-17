@@ -110,7 +110,7 @@ class SubscriptionOAuthService:
             if not session or time.time() - float(session.get("created_at", 0)) >= 1800:
                 raise ValueError("OAuth 会话不存在或已过期，请重新生成授权链接")
             if session.get("provider") != provider or int(session.get("admin_id", 0)) != int(admin_id):
-                raise ValueError("OAuth 会话与当前管理员或供应商不匹配")
+                raise ValueError("OAuth 会话与当前用户或供应商不匹配")
             if not state or not secrets.compare_digest(str(state), str(session.get("state") or "")):
                 raise ValueError("OAuth state 校验失败")
             return dict(session)

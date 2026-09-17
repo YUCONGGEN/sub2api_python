@@ -1,0 +1,121 @@
+import base64
+import json
+
+from backend.controller.subscription_controller import SubscriptionController
+from backend.service.subscription_account_service import SubscriptionAccountService
+
+
+class JsonCipher:
+    @staticmethod
+    def encrypt(value):
+        return "encrypted:" + base64.urlsafe_b64encode(json.dumps(value).encode()).decode()
+
+    @staticmethod
+    def decrypt(value):
+        return json.loads(base64.urlsafe_b64decode(value.removeprefix("encrypted:")).decode())
+
+
+class RequestRepository:
+    def __init__(self):
+        self.requests = {}
+
+    def create_config_request(self, request):
+        row = dict(request)
+        row["id"] = len(self.requests) + 1
+        request["id"] = row["id"]
+        self.requests[row["id"]] = row
+        return dict(row)
+
+    def find_config_request(self, request_id):
+        row = self.requests.get(int(request_id))
+        return dict(row) if row else None
+
+
+def account_row(owner_user_id):
+    return {
+        "id": 9,
+        "owner_user_id": owner_user_id,
+        "provider": "openai",
+        "name": "共享账号",
+        "auth_type": "oauth",
+        "email": "owner@example.com",
+        "account_ref": "account-secret",
+        "credentials_encrypted": JsonCipher.encrypt({"access_token": "top-secret"}),
+        "models_json": '["gpt-test"]',
+        "enabled": 1,
+        "priority": 0,
+        "weight": 1,
+        "status": "READY",
+        "last_error": "private upstream detail",
+    }
+
+
+def make_service(repository=None):
+    service = SubscriptionAccountService.__new__(SubscriptionAccountService)
+    service.repository = repository or RequestRepository()
+    service.cipher = JsonCipher()
+    service.user_contributions_enabled = True
+    service.config_request_default_use_proxy = False
+    service.cooldown_enabled = True
+    return service
+
+
+def test_other_users_see_shared_account_without_private_fields():
+    service = make_service()
+    visible = service._visible_to(account_row(12), {"id": 27, "role": "USER"})
+
+    assert visible["can_manage"] is False
+    assert visible["owner_label"] == "用户贡献"
+    assert visible["credential_mask"] == "凭据已加密"
+    assert "email" not in visible
+    assert "account_ref" not in visible
+    assert "last_error" not in visible
+
+
+def test_owner_and_admin_can_manage_but_other_user_cannot():
+    service = make_service()
+    row = account_row(12)
+
+    assert service.can_manage({"id": 12, "role": "USER"}, row)
+    assert service.can_manage({"id": 99, "role": "ADMIN"}, row)
+    assert not service.can_manage({"id": 13, "role": "USER"}, row)
+
+
+def test_config_request_encrypts_key_and_defaults_to_direct_connection():
+    repository = RequestRepository()
+    service = make_service(repository)
+    result = service.create_config_request(12, {
+        "url": "https://api.example.com/v1/",
+        "api_key": "sk-a-very-secret-value",
+        "model_id": "model-a",
+    })
+
+    stored = repository.requests[1]
+    assert "sk-a-very-secret-value" not in result["api_key_mask"]
+    assert "sk-a-very-secret-value" not in stored["api_key_encrypted"]
+    assert stored["use_proxy"] == 0
+    assert service.config_request_secret(1)["use_proxy"] is False
+
+
+def test_config_request_can_explicitly_use_proxy():
+    service = make_service()
+    result = service.create_config_request(12, {
+        "url": "https://api.example.com/v1",
+        "api_key": "sk-a-very-secret-value",
+        "model_id": "model-a",
+        "use_proxy": True,
+    })
+
+    assert result["use_proxy"] == 1
+    assert service.config_request_secret(1)["use_proxy"] is True
+
+
+def test_runtime_gateway_metrics_are_admin_only():
+    controller = SubscriptionController.__new__(SubscriptionController)
+    controller.auth = type("Auth", (), {"user_from_authorization": lambda self, token: {"id": 7, "role": "USER"}})()
+    controller.gateway = type("Gateway", (), {"metrics": lambda self, include_users=False: {"active_requests": 4}})()
+
+    denied = controller.gateway_metrics("Bearer user-token")
+
+    assert denied.code == 403
+    assert denied.data is None

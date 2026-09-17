@@ -1342,6 +1342,48 @@ class SubscriptionGatewayService:
                 )
             return result
 
+    async def validate_candidate(self, body: dict[str, Any], supplied: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Verify credentials before persistence so broken accounts never enter the pool."""
+        provider = self.accounts.normalize_provider(body.get("provider"))
+        credentials = self.accounts.normalize_imported_credentials(
+            provider, body, dict(supplied or body.get("credentials") or {}),
+        )
+        if not str(credentials.get("access_token") or "").strip():
+            raise ValueError("access_token 不能为空")
+        account = {
+            "account_ref": str(
+                credentials.get("account_id") or credentials.get("chatgpt_account_id")
+                or credentials.get("organization_id") or body.get("account_ref") or ""
+            ).strip(),
+        }
+        if provider == "openai":
+            url = f"{OPENAI_MODELS_URL}?client_version={self.codex_client_version}"
+            headers = self._openai_headers(credentials, account, False)
+        else:
+            url = CLAUDE_MODELS_URL
+            headers = self._claude_headers(credentials, {}, False)
+        request = self._client().build_request("GET", url, headers=headers)
+        response: httpx.Response | None = None
+        try:
+            response = await self._client().send(request, stream=False)
+            body_bytes = await response.aread()
+            if response.status_code < 200 or response.status_code >= 300:
+                detail = self._error_detail(response, body_bytes)
+                raise ValueError(f"账号连通性验证失败（HTTP {response.status_code}）：{detail}")
+            model_count = 0
+            try:
+                payload = json.loads(body_bytes.decode("utf-8")) if body_bytes else {}
+                models = payload.get("data") if isinstance(payload, dict) else None
+                model_count = len(models) if isinstance(models, list) else 0
+            except (UnicodeDecodeError, ValueError):
+                model_count = 0
+            return {"provider": provider, "credentials": credentials, "model_count": model_count}
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            raise ValueError(f"账号连通性验证失败：{exc}") from exc
+        finally:
+            if response is not None and not response.is_closed:
+                await response.aclose()
+
     async def test_account(self, account_id: int) -> dict[str, Any]:
         fresh = await self.accounts.refresh_account(account_id, force=False)
         account = fresh["account"]

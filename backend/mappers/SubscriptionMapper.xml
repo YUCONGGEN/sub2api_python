@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <mapper namespace="backend.mappers.subscription_mapper.SubscriptionMapper">
-    <sql id="AccountColumns">id, provider, name, auth_type, email, account_ref, credentials_encrypted, models_json, enabled, priority, weight, input_price_cny, output_price_cny, price_multiplier, status, error_count, last_error, expires_at, cooldown_until, last_used_at, compliance_confirmed_at, created_at, updated_at</sql>
+    <sql id="AccountColumns">id, owner_user_id, provider, name, auth_type, email, account_ref, credentials_encrypted, models_json, enabled, priority, weight, input_price_cny, output_price_cny, price_multiplier, status, error_count, last_error, expires_at, cooldown_until, last_used_at, compliance_confirmed_at, created_at, updated_at</sql>
+    <sql id="RequestColumns">id, user_id, base_url, api_key_encrypted, model_id, use_proxy, status, admin_note, created_at, updated_at</sql>
 
     <select id="count_accounts" resultType="int">
         SELECT COUNT(*) FROM upstream_subscription_accounts
@@ -21,12 +22,12 @@
     </select>
     <insert id="insert_account" useGeneratedKeys="true" keyProperty="account.id">
         INSERT INTO upstream_subscription_accounts(
-          provider,name,auth_type,email,account_ref,credentials_encrypted,models_json,
+          owner_user_id,provider,name,auth_type,email,account_ref,credentials_encrypted,models_json,
           enabled,priority,weight,input_price_cny,output_price_cny,price_multiplier,
           status,error_count,last_error,expires_at,cooldown_until,last_used_at,
           compliance_confirmed_at,created_at,updated_at
         ) VALUES(
-          #{account.provider},#{account.name},#{account.auth_type},#{account.email},#{account.account_ref},#{account.credentials_encrypted},#{account.models_json},
+          #{account.owner_user_id},#{account.provider},#{account.name},#{account.auth_type},#{account.email},#{account.account_ref},#{account.credentials_encrypted},#{account.models_json},
           #{account.enabled},#{account.priority},#{account.weight},#{account.input_price_cny},#{account.output_price_cny},#{account.price_multiplier},
           #{account.status},#{account.error_count},#{account.last_error},#{account.expires_at},#{account.cooldown_until},#{account.last_used_at},
           #{account.compliance_confirmed_at},#{account.created_at},#{account.updated_at}
@@ -76,4 +77,28 @@
         WHERE id = #{account_id}
     </update>
     <delete id="delete_account">DELETE FROM upstream_subscription_accounts WHERE id = #{account_id}</delete>
+
+    <select id="count_config_requests" resultType="int">
+        SELECT COUNT(*) FROM upstream_config_requests
+        WHERE (#{user_id} IS NULL OR #{user_id} = 0 OR user_id = #{user_id})
+          AND (#{status} IS NULL OR #{status} = '' OR status = #{status})
+    </select>
+    <select id="list_config_requests">
+        SELECT <include refid="RequestColumns"/> FROM upstream_config_requests
+        WHERE (#{user_id} IS NULL OR #{user_id} = 0 OR user_id = #{user_id})
+          AND (#{status} IS NULL OR #{status} = '' OR status = #{status})
+        ORDER BY id DESC LIMIT #{limit} OFFSET #{offset}
+    </select>
+    <select id="find_config_request">
+        SELECT <include refid="RequestColumns"/> FROM upstream_config_requests WHERE id = #{request_id} LIMIT 1
+    </select>
+    <insert id="insert_config_request" useGeneratedKeys="true" keyProperty="request.id">
+        INSERT INTO upstream_config_requests(user_id,base_url,api_key_encrypted,model_id,use_proxy,status,admin_note,created_at,updated_at)
+        VALUES(#{request.user_id},#{request.base_url},#{request.api_key_encrypted},#{request.model_id},#{request.use_proxy},#{request.status},#{request.admin_note},#{request.created_at},#{request.updated_at})
+    </insert>
+    <update id="update_config_request">
+        UPDATE upstream_config_requests
+        SET status=#{status}, admin_note=#{admin_note}, updated_at=#{updated_at}
+        WHERE id=#{request_id}
+    </update>
 </mapper>

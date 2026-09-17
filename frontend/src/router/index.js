@@ -13,6 +13,7 @@ const router = new Router({ mode: 'history', routes: [
   { path: '/admin', component: () => import('../views/Admin.vue'), meta: { admin: true } },
   { path: '/admin/user-groups/:id', component: () => import('../views/AdminGroup.vue'), props: true, meta: { admin: true, title: '分组详情' } },
   { path: '/admin/upstream-subscriptions', component: () => import('../views/UpstreamSubscriptions.vue'), meta: { admin: true } },
+  { path: '/subscriptions', component: () => import('../views/UpstreamSubscriptions.vue') },
   { path: '/admin/users/:id', component: () => import('../views/AdminUser.vue'), props: true, meta: { admin: true } },
   { path: '/docs', component: () => import('../views/Docs.vue'), meta: { public: true } },
   { path: '/keys', component: () => import('../views/Keys.vue') },

@@ -113,6 +113,10 @@ rose:
     # 管理员初始余额为 0；充值和兑换码到账后才增加余额。
     initial-balance: ${ROSE_INITIAL_BALANCE:0}
   subscription-gateway:
+    # 允许普通用户贡献自己的订阅账号及提交第三方 URL/API Key/Model ID 申请。
+    user-contributions-enabled: ${ROSE_SUBSCRIPTION_USER_CONTRIBUTIONS_ENABLED:true}
+    # 第三方配置申请默认直连；设为 true 时新申请默认勾选走服务器代理，用户仍可逐条切换。
+    config-request-default-use-proxy: ${ROSE_SUBSCRIPTION_CONFIG_REQUEST_DEFAULT_USE_PROXY:false}
     # 仅管理员可接入自己有权使用的 Claude/OpenAI 订阅账号。OAuth 凭据在数据库中
     # 使用独立密钥加密；生产环境必须设置为随机值，修改后旧凭据需要重新授权。
     enabled: ${ROSE_SUBSCRIPTION_GATEWAY_ENABLED:true}

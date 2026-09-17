@@ -68,5 +68,26 @@ class SubscriptionRepository:
     def delete(self, account_id: int) -> bool:
         return bool(self.mapper.delete_account(int(account_id)))
 
+    def list_config_requests(self, user_id: int, status: str, page: int, page_size: int) -> dict[str, Any]:
+        page = max(1, int(page))
+        page_size = max(1, min(100, int(page_size)))
+        total = int(self.mapper.count_config_requests(int(user_id), str(status or "")) or 0)
+        pages = max(1, (total + page_size - 1) // page_size)
+        page = min(page, pages)
+        rows = self.mapper.list_config_requests(int(user_id), str(status or ""), (page - 1) * page_size, page_size)
+        return {"items": [dict(row) for row in rows], "total": total, "page": page, "page_size": page_size, "pages": pages}
+
+    def find_config_request(self, request_id: int) -> dict[str, Any] | None:
+        return self._row(self.mapper.find_config_request(int(request_id)))
+
+    def create_config_request(self, request: dict[str, Any]) -> dict[str, Any]:
+        self.mapper.insert_config_request(request)
+        return self.find_config_request(int(request["id"])) or request
+
+    def update_config_request(self, request_id: int, status: str, admin_note: str, updated_at: str) -> dict[str, Any] | None:
+        if not self.mapper.update_config_request(int(request_id), str(status), str(admin_note), str(updated_at)):
+            return None
+        return self.find_config_request(int(request_id))
+
 
 __all__ = ["SubscriptionRepository"]

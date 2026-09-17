@@ -224,6 +224,7 @@ CREATE TABLE IF NOT EXISTS user_sessions (
 );
 CREATE TABLE IF NOT EXISTS upstream_subscription_accounts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  owner_user_id INTEGER,
   provider TEXT NOT NULL,
   name TEXT NOT NULL,
   auth_type TEXT NOT NULL DEFAULT 'oauth',
@@ -247,6 +248,18 @@ CREATE TABLE IF NOT EXISTS upstream_subscription_accounts (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS upstream_config_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  base_url TEXT NOT NULL,
+  api_key_encrypted TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  use_proxy INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'PENDING',
+  admin_note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_usage_user_created ON usage_records(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_usage_model_created ON usage_records(model, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_conversation_user_created ON conversation_records(user_id, created_at DESC);
@@ -265,6 +278,8 @@ CREATE INDEX IF NOT EXISTS idx_usage_allocations_entitlement ON usage_allocation
 CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_upstream_subscription_provider ON upstream_subscription_accounts(provider, enabled, priority DESC);
 CREATE INDEX IF NOT EXISTS idx_upstream_subscription_cooldown ON upstream_subscription_accounts(provider, cooldown_until);
+CREATE INDEX IF NOT EXISTS idx_upstream_config_request_user ON upstream_config_requests(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_upstream_config_request_status ON upstream_config_requests(status, created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_pending_payment_amount
   ON payment_orders(provider, payment_amount)
   WHERE status = 'PENDING' AND payment_amount IS NOT NULL;

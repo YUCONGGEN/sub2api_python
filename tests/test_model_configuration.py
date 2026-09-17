@@ -76,3 +76,12 @@ def test_example_config_has_no_regular_api_models():
     assert config["rose"]["models"] == []
     for model in ("deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp"):
         assert f"    # - id: {model}\n" in text
+
+
+def test_group_editor_uses_complete_monitoring_catalog_but_model_plaza_stays_filtered():
+    root = Path(__file__).resolve().parents[1]
+    admin = (root / "frontend/src/views/Admin.vue").read_text(encoding="utf-8")
+    plaza = (root / "frontend/src/views/Models.vue").read_text(encoding="utf-8")
+    assert "api.monitoring({ page, page_size: 12 })" in admin
+    assert "api.models({ page, page_size: 12 })" not in admin
+    assert "api.models({" in plaza

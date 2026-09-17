@@ -455,32 +455,32 @@ export default {
   border-color:#17191d;
   color:#fff;
 }
-:global(html[data-theme="dark"]) .account-card {
+:global(html[data-theme="dark"] .account-card) {
   border-color:#304b5c;
   background:#172735;
   box-shadow:0 8px 22px #050b102f;
 }
-:global(html[data-theme="dark"]) .account-identity h3,
-:global(html[data-theme="dark"]) .account-facts dd { color:#d6e4ec; }
-:global(html[data-theme="dark"]) .account-summary,
-:global(html[data-theme="dark"]) .account-id { color:#93aabb; }
-:global(html[data-theme="dark"]) .account-models { border-color:#2d4657; }
-:global(html[data-theme="dark"]) .account-models span,
-:global(html[data-theme="dark"]) .account-facts div { background:#203442;color:#c5d6df; }
-:global(html[data-theme="dark"]) .account-quota {
+:global(html[data-theme="dark"] .account-identity h3),
+:global(html[data-theme="dark"] .account-facts dd) { color:#d6e4ec; }
+:global(html[data-theme="dark"] .account-summary),
+:global(html[data-theme="dark"] .account-id) { color:#93aabb; }
+:global(html[data-theme="dark"] .account-models) { border-color:#2d4657; }
+:global(html[data-theme="dark"] .account-models span),
+:global(html[data-theme="dark"] .account-facts div) { background:#203442;color:#c5d6df; }
+:global(html[data-theme="dark"] .account-quota) {
   border-color:#315064;
   background:#1b2e3b;
 }
-:global(html[data-theme="dark"]) .account-quota-head strong,
-:global(html[data-theme="dark"]) .quota-window b,
-:global(html[data-theme="dark"]) .quota-reset b { color:#cce0ea; }
-:global(html[data-theme="dark"]) .account-quota-head button {
+:global(html[data-theme="dark"] .account-quota-head strong),
+:global(html[data-theme="dark"] .quota-window b),
+:global(html[data-theme="dark"] .quota-reset b) { color:#cce0ea; }
+:global(html[data-theme="dark"] .account-quota-head button) {
   border-color:#45677b;
   background:#233c4c;
   color:#c1d7e3;
 }
-:global(html[data-theme="dark"]) .quota-window i { background:#294554; }
-:global(html[data-theme="dark"]) .quota-reset { border-color:#2d4959; }
+:global(html[data-theme="dark"] .quota-window i) { background:#294554; }
+:global(html[data-theme="dark"] .quota-reset) { border-color:#2d4959; }
 
 @media(max-width:1240px){.account-list{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:1050px){.account-list{grid-template-columns:repeat(2,minmax(0,1fr))}}

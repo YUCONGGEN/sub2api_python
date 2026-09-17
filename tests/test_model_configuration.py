@@ -49,6 +49,16 @@ def test_nonempty_catalog_is_unchanged(monkeypatch, models):
     assert gateway.model_spec("custom-model")["provider"] == "Custom"
 
 
+def test_per_model_use_proxy_is_friendly_and_legacy_compatible():
+    gateway = ai_service.AiGatewayService(None)
+    gateway._transport = {"trust-env": True}
+
+    assert gateway._model_uses_proxy({"use-proxy": False}) is False
+    assert gateway._model_uses_proxy({"use-proxy": "true"}) is True
+    assert gateway._model_uses_proxy({"trust-env": False}) is False
+    assert gateway._model_uses_proxy({}) is True
+
+
 def test_empty_api_catalog_keeps_subscription_models(monkeypatch):
     gateway = init_gateway(monkeypatch, {"models": []})
     subscriptions = [

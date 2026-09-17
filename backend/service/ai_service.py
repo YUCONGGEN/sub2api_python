@@ -750,7 +750,7 @@ class AiGatewayService:
                     keepalive_expiry=float(spec.get("keepalive-expiry-seconds", self._transport["keepalive-expiry-seconds"])),
                     connect_timeout=float(spec.get("connect-timeout-seconds", self._transport["connect-timeout-seconds"])),
                     pool_timeout=float(spec.get("pool-timeout-seconds", self._transport["pool-timeout-seconds"])),
-                    trust_env=self._as_bool(spec.get("trust-env", self._transport["trust-env"]), self._transport["trust-env"]),
+                    trust_env=self._model_uses_proxy(spec),
                     max_retries=int(spec.get("max-retries", self._transport["max-retries"])),
                     retry_delay_ms=int(spec.get("retry-delay-ms", self._transport["retry-delay-ms"])),
                 )
@@ -812,6 +812,13 @@ class AiGatewayService:
         if isinstance(value, str):
             return value.strip().lower() in {"1", "true", "yes", "on"}
         return bool(value) if value is not None else default
+
+    def _model_uses_proxy(self, spec: dict[str, Any]) -> bool:
+        """Resolve the friendly per-model switch while accepting legacy configs."""
+        default = bool(self._transport.get("trust-env", False))
+        if "use-proxy" in spec:
+            return self._as_bool(spec.get("use-proxy"), default)
+        return self._as_bool(spec.get("trust-env"), default)
 
     def model_spec(self, model_id: str | None) -> dict[str, Any]:
         selected = str(model_id or self.model_name)

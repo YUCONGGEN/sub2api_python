@@ -138,7 +138,7 @@
       <div class="panel-head"><div><span class="eyebrow">UPSTREAM CONFIG REQUEST</span><h2>上游配置申请</h2><p>提交 URL、API Key 和模型 ID 给管理员，API Key 会加密保存且列表中只显示掩码。</p></div></div>
       <div class="request-compose">
         <input v-model.trim="requestForm.url" type="url" placeholder="https://api.example.com/v1" />
-        <input v-model.trim="requestForm.api_key" type="password" autocomplete="off" placeholder="API Key" />
+        <input v-model.trim="requestForm.api_key" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="API Key（输入内容可见）" />
         <input v-model.trim="requestForm.model_id" placeholder="model-id" />
         <label class="proxy-choice"><input v-model="requestForm.use_proxy" type="checkbox" /><span>走服务器代理</span></label>
         <button class="primary-action" :disabled="requestBusy" @click="submitConfigRequest">{{ requestBusy ? '发送中…' : '发送给管理员' }}</button>

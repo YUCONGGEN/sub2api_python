@@ -99,8 +99,11 @@ def test_monitoring_can_be_disabled_from_yaml(monkeypatch):
         "Bearer user", page=1, page_size=12
     )
 
-    assert response.code == 404
+    assert response.code == 200
     assert response.message == "模型监控已关闭"
+    assert response.data["enabled"] is False
+    assert response.data["models"] == []
+    assert response.data["summary"]["overall_status"] == "监控已关闭"
 
 
 class EmptyAnalyticsMapper:

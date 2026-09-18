@@ -8,7 +8,7 @@ from backend.service.ai_service import AiGatewayService
 from backend.service.auth_service import AuthService
 from backend.service.observability_service import ObservabilityService
 from backend.service.subscription_gateway_service import SubscriptionGatewayService
-from backend.common.response import as_bool, not_found, ok, unauthorized
+from backend.common.response import as_bool, ok, unauthorized
 
 
 @RestController
@@ -33,7 +33,24 @@ class MonitorController:
     def overview(self, authorization: str = RequestHeader(name="Authorization", required=False), page: int = RequestParam(name="page", required=False, default=1), page_size: int = RequestParam(name="page_size", required=False, default=12)):
         monitoring = get_config().get("rose", {}).get("monitoring", {}) or {}
         if not as_bool(monitoring.get("enabled"), default=True):
-            return not_found("模型监控已关闭")
+            return ok({
+                "ok": True,
+                "enabled": False,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "models": [],
+                "pagination": {"page": 1, "page_size": 0, "total": 0, "pages": 1},
+                "summary": {
+                    "total": 0,
+                    "available": 0,
+                    "requests_24h": 0,
+                    "tokens_24h": 0,
+                    "cost_24h": 0,
+                    "overall_status": "监控已关闭",
+                    "p95_latency_ms": 0,
+                    "rate_limited_24h": 0,
+                    "gateway": {},
+                },
+            }, "模型监控已关闭")
         user = self.auth.user_from_authorization(authorization)
         if not user:
             return unauthorized()

@@ -948,6 +948,21 @@ class StoreService:
             self.mapper.disable_plan_subscription_auto_renew(int(plan_id))
         return changed
 
+    @Transactional()
+    def permanently_delete_subscription_plan(self, plan_id: int) -> bool:
+        plan_id = int(plan_id)
+        if not self.mapper.find_subscription_plan(plan_id):
+            return False
+        subscription_count = int(self.mapper.count_subscriptions_for_plan(plan_id) or 0)
+        if subscription_count:
+            raise ValueError(
+                f"该套餐已有 {subscription_count} 条用户订阅记录，不能永久删除；请改为停用套餐"
+            )
+        deleted = bool(self.mapper.permanently_delete_subscription_plan(plan_id))
+        if not deleted and int(self.mapper.count_subscriptions_for_plan(plan_id) or 0):
+            raise ValueError("该套餐刚产生用户订阅，不能永久删除；请改为停用套餐")
+        return deleted
+
     @staticmethod
     def _entitlement_active(row: Mapping[str, Any], now: datetime, kind: str) -> bool:
         """Return whether an entitlement can actually pay for a request now."""

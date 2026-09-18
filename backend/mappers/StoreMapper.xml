@@ -231,14 +231,16 @@
     </select>
     <select id="list_subscription_plans">
         SELECT p.id,p.name,p.description,p.price,p.duration_days,p.daily_amount,p.daily_tokens,p.group_id,p.enabled,p.created_at,p.updated_at,
-               g.name group_name,g.weight group_weight
+               g.name group_name,g.weight group_weight,
+               (SELECT COUNT(*) FROM user_subscriptions s WHERE s.plan_id=p.id) subscription_count
         FROM subscription_plans p LEFT JOIN user_groups g ON g.id=p.group_id
         WHERE (#{enabled_only} = 0 OR p.enabled = 1)
         ORDER BY p.enabled DESC,p.id DESC LIMIT #{limit} OFFSET #{offset}
     </select>
     <select id="find_subscription_plan">
         SELECT p.id,p.name,p.description,p.price,p.duration_days,p.daily_amount,p.daily_tokens,p.group_id,p.enabled,p.created_at,p.updated_at,
-               g.name group_name,g.weight group_weight
+               g.name group_name,g.weight group_weight,
+               (SELECT COUNT(*) FROM user_subscriptions s WHERE s.plan_id=p.id) subscription_count
         FROM subscription_plans p LEFT JOIN user_groups g ON g.id=p.group_id WHERE p.id = #{plan_id}
     </select>
     <insert id="insert_subscription_plan" useGeneratedKeys="true" keyProperty="plan.id">
@@ -262,6 +264,12 @@
         WHERE id = #{plan_id}
     </update>
     <delete id="delete_subscription_plan">UPDATE subscription_plans SET enabled=0,updated_at=#{updated_at} WHERE id = #{plan_id}</delete>
+    <select id="count_subscriptions_for_plan" resultType="int">SELECT COUNT(*) FROM user_subscriptions WHERE plan_id=#{plan_id}</select>
+    <delete id="permanently_delete_subscription_plan">
+        DELETE FROM subscription_plans
+        WHERE id=#{plan_id}
+          AND NOT EXISTS (SELECT 1 FROM user_subscriptions WHERE plan_id=#{plan_id})
+    </delete>
     <update id="disable_plan_subscription_auto_renew">
         UPDATE user_subscriptions SET auto_renew = 0
         WHERE plan_id = #{plan_id} AND status = 'ACTIVE' AND auto_renew = 1

@@ -101,6 +101,16 @@ class AdminController:
         deleted = self.store.delete_subscription_plan(plan_id)
         return ok({"ok": True}, "套餐已停用，历史订阅继续保留") if deleted else not_found("套餐不存在")
 
+    @DeleteMapping("/subscription-plans/{plan_id}/permanent")
+    def permanently_delete_subscription_plan(self, plan_id: int, authorization: str = RequestHeader(name="Authorization", required=False)):
+        if not self.admin(authorization):
+            return forbidden()
+        try:
+            deleted = self.store.permanently_delete_subscription_plan(plan_id)
+        except ValueError as exc:
+            return bad(str(exc), 409)
+        return ok({"ok": True}, "套餐已永久删除") if deleted else not_found("套餐不存在")
+
     @GetMapping("/users")
     def users(self, authorization: str = RequestHeader(name="Authorization", required=False), keyword: str = RequestParam(name="keyword", required=False, default=""), page: int = RequestParam(name="page", required=False, default=1), page_size: int = RequestParam(name="page_size", required=False, default=5)):
         if not self.admin(authorization):

@@ -106,6 +106,7 @@ export const api = {
   createSubscriptionPlan: body => client.post('/api/admin/subscription-plans', body),
   updateSubscriptionPlan: (id, body) => client.patch(`/api/admin/subscription-plans/${id}`, body),
   deleteSubscriptionPlan: id => client.delete(`/api/admin/subscription-plans/${id}`),
+  permanentlyDeleteSubscriptionPlan: id => client.delete(`/api/admin/subscription-plans/${id}/permanent`),
   upstreamSubscriptions: params => client.get('/api/upstream-subscriptions', { params }),
   upstreamGatewayMetrics: () => client.get('/api/upstream-subscriptions/gateway-metrics'),
   createUpstreamSubscription: body => client.post('/api/upstream-subscriptions', body),

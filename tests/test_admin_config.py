@@ -123,6 +123,10 @@ def test_yaml_editor_keeps_whitespace_overlay_visible_and_scrollable_in_dark_mod
     source = Path("frontend/src/components/AdminConfigEditor.vue").read_text(encoding="utf-8")
 
     assert "overscroll-behavior:contain" in source
+    assert "grid-template-rows:minmax(0,1fr)" in source
+    assert "min-height:0;height:100%;overflow:hidden" in source
+    assert "min-height:320px;resize:vertical" in source
+    assert "拖动编辑区右下角可调整高度" in source
     assert "scrollbar-gutter:stable" in source
     assert "scrollbar-color:#5e8194 #132633" in source
     assert '@wheel="handleEditorWheel"' in source

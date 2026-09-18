@@ -9,6 +9,7 @@
          queries intentionally expose metadata and usage counters, never
          prompts, completions, raw JSON, or image data. -->
     <sql id="ConversationColumns">id, user_id, request_id, protocol, model, prompt_tokens, completion_tokens, total_tokens, cost, status, created_at, completed_at, latency_ms</sql>
+    <sql id="ModelMappingColumns">id,name,source_model,source_effort,target_model,target_effort,enabled,created_at,updated_at</sql>
 
     <select id="find_user">SELECT <include refid="UserColumns"/> FROM users WHERE id = #{user_id} AND deleted_at IS NULL</select>
     <select id="find_user_by_username">SELECT <include refid="UserColumns"/> FROM users WHERE LOWER(username) = LOWER(#{username}) AND deleted_at IS NULL LIMIT 1</select>
@@ -120,6 +121,47 @@
         FROM user_groups g
         ORDER BY g.weight DESC,g.is_default DESC,g.id ASC LIMIT #{limit} OFFSET #{offset}
     </select>
+    <select id="list_model_mappings">
+        SELECT <include refid="ModelMappingColumns"/> FROM model_mappings
+        ORDER BY enabled DESC,source_model ASC,source_effort ASC,id ASC
+    </select>
+    <select id="find_model_mapping">
+        SELECT <include refid="ModelMappingColumns"/> FROM model_mappings WHERE id=#{mapping_id} LIMIT 1
+    </select>
+    <select id="find_model_mapping_by_source">
+        SELECT <include refid="ModelMappingColumns"/> FROM model_mappings
+        WHERE LOWER(source_model)=LOWER(#{source_model}) AND source_effort=#{source_effort}
+          AND (#{exclude_mapping_id} IS NULL OR id&lt;&gt;#{exclude_mapping_id}) LIMIT 1
+    </select>
+    <insert id="insert_model_mapping" useGeneratedKeys="true" keyProperty="mapping.id">
+        INSERT INTO model_mappings(name,source_model,source_effort,target_model,target_effort,enabled,created_at,updated_at)
+        VALUES(#{mapping.name},#{mapping.source_model},#{mapping.source_effort},#{mapping.target_model},#{mapping.target_effort},#{mapping.enabled},#{mapping.created_at},#{mapping.updated_at})
+    </insert>
+    <update id="update_model_mapping">
+        UPDATE model_mappings
+        <set>
+            <if test="changes.name != null">name=#{changes.name},</if>
+            <if test="changes.source_model != null">source_model=#{changes.source_model},</if>
+            <if test="changes.source_effort != null">source_effort=#{changes.source_effort},</if>
+            <if test="changes.target_model != null">target_model=#{changes.target_model},</if>
+            <if test="changes.target_effort != null">target_effort=#{changes.target_effort},</if>
+            <if test="changes.enabled != null">enabled=#{changes.enabled},</if>
+            updated_at=#{changes.updated_at}
+        </set>
+        WHERE id=#{mapping_id}
+    </update>
+    <delete id="delete_model_mapping">DELETE FROM model_mappings WHERE id=#{mapping_id}</delete>
+    <select id="list_group_model_mappings">
+        SELECT m.<include refid="ModelMappingColumns"/>
+        FROM user_group_model_mappings gm JOIN model_mappings m ON m.id=gm.mapping_id
+        WHERE gm.group_id=#{group_id}
+        ORDER BY m.enabled DESC,m.source_model ASC,m.source_effort ASC,m.id ASC
+    </select>
+    <delete id="delete_group_model_mappings">DELETE FROM user_group_model_mappings WHERE group_id=#{group_id}</delete>
+    <insert id="insert_group_model_mapping">
+        INSERT INTO user_group_model_mappings(group_id,mapping_id) VALUES(#{group_id},#{mapping_id})
+    </insert>
+    <delete id="delete_model_mapping_assignments">DELETE FROM user_group_model_mappings WHERE mapping_id=#{mapping_id}</delete>
     <insert id="insert_user_group" useGeneratedKeys="true" keyProperty="group.id">
         INSERT INTO user_groups(name,description,weight,concurrency_limit,allowed_models_json,is_default,created_at,updated_at)
         VALUES(#{group.name},#{group.description},#{group.weight},#{group.concurrency_limit},#{group.allowed_models_json},#{group.is_default},#{group.created_at},#{group.updated_at})

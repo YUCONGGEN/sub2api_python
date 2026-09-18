@@ -49,6 +49,7 @@ class StoreRepository:
                 self._ensure_sqlite_user_groups(conn)
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_users_group ON users(group_id, deleted_at)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_subscription_plans_group ON subscription_plans(group_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_group_mapping_mapping ON user_group_model_mappings(mapping_id)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_upstream_subscription_owner ON upstream_subscription_accounts(owner_user_id, created_at DESC)")
                 self._migrate_sqlite_api_keys(conn)
                 conn.execute(

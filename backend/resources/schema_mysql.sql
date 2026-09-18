@@ -11,6 +11,26 @@ CREATE TABLE IF NOT EXISTS user_groups (
   updated_at VARCHAR(40) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE TABLE IF NOT EXISTS model_mappings (
+  id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(120) NOT NULL,
+  source_model VARCHAR(160) NOT NULL,
+  source_effort VARCHAR(20) NOT NULL DEFAULT '',
+  target_model VARCHAR(160) NOT NULL,
+  target_effort VARCHAR(20) NOT NULL,
+  enabled TINYINT NOT NULL DEFAULT 1,
+  created_at VARCHAR(40) NOT NULL,
+  updated_at VARCHAR(40) NOT NULL,
+  UNIQUE KEY uq_model_mapping_source (source_model, source_effort)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS user_group_model_mappings (
+  group_id BIGINT NOT NULL,
+  mapping_id BIGINT NOT NULL,
+  PRIMARY KEY(group_id, mapping_id),
+  KEY idx_group_mapping_mapping (mapping_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS users (
   id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
   username VARCHAR(64) NOT NULL UNIQUE,

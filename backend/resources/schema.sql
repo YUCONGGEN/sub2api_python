@@ -12,6 +12,25 @@ CREATE TABLE IF NOT EXISTS user_groups (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS model_mappings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  source_model TEXT NOT NULL,
+  source_effort TEXT NOT NULL DEFAULT '',
+  target_model TEXT NOT NULL,
+  target_effort TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(source_model, source_effort)
+);
+
+CREATE TABLE IF NOT EXISTS user_group_model_mappings (
+  group_id INTEGER NOT NULL,
+  mapping_id INTEGER NOT NULL,
+  PRIMARY KEY(group_id, mapping_id)
+);
+
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   username TEXT NOT NULL UNIQUE,

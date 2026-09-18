@@ -92,6 +92,7 @@ async def openai_chat(request: Request):
     model_error = _model_permission_error(request, user, str(payload.get("model") or service.model_name))
     if model_error is not None:
         return model_error
+    payload, _ = _group_service(request).apply_model_mapping(user, payload)
     subscription_response = await maybe_proxy_openai_chat_subscription(request, payload, user)
     if subscription_response is not None:
         return subscription_response
@@ -404,6 +405,7 @@ async def openai_responses(request: Request):
     model_error = _model_permission_error(request, user, str(payload.get("model") or service.model_name))
     if model_error is not None:
         return model_error
+    payload, _ = _group_service(request).apply_model_mapping(user, payload)
     subscription_response = await maybe_proxy_openai_subscription(request, payload, user)
     if subscription_response is not None:
         return subscription_response

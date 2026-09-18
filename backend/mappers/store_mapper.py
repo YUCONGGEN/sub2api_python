@@ -84,6 +84,36 @@ class StoreMapper:
     def list_user_groups(self, offset: int = 0, limit: int = 5) -> list[dict]:
         pass
 
+    def list_model_mappings(self) -> list[dict]:
+        pass
+
+    def find_model_mapping(self, mapping_id: int) -> Mapping[str, Any] | None:
+        pass
+
+    def find_model_mapping_by_source(self, source_model: str, source_effort: str, exclude_mapping_id: int | None = None) -> Mapping[str, Any] | None:
+        pass
+
+    def insert_model_mapping(self, mapping: Mapping[str, Any]) -> int:
+        pass
+
+    def update_model_mapping(self, mapping_id: int, changes: Mapping[str, Any]) -> int:
+        pass
+
+    def delete_model_mapping(self, mapping_id: int) -> int:
+        pass
+
+    def list_group_model_mappings(self, group_id: int) -> list[dict]:
+        pass
+
+    def delete_group_model_mappings(self, group_id: int) -> int:
+        pass
+
+    def insert_group_model_mapping(self, group_id: int, mapping_id: int) -> int:
+        pass
+
+    def delete_model_mapping_assignments(self, mapping_id: int) -> int:
+        pass
+
     def insert_user_group(self, group: Mapping[str, Any]) -> int:
         pass
 

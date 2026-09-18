@@ -35,6 +35,10 @@ class StoreService:
     def __init__(self, repository: StoreRepository):
         self.repository = repository
         self.mapper = repository.mapper
+        # Group mappings change only through the admin service. Cache the
+        # small rule lists so authenticated proxy requests do not add a SQL
+        # query to the hot forwarding path.
+        self._group_mapping_cache: dict[int, list[dict[str, Any]]] = {}
     @staticmethod
     def hash_password(password: str) -> str:
         return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
@@ -133,6 +137,22 @@ class StoreService:
             data["member_count"] = int(data.get("member_count") or 0)
         if "plan_count" in data:
             data["plan_count"] = int(data.get("plan_count") or 0)
+        group_id = int(data.get("id") or 0)
+        mapping_loader = getattr(self.mapper, "list_group_model_mappings", None)
+        cache = getattr(self, "_group_mapping_cache", {})
+        if group_id and group_id not in cache:
+            cache[group_id] = [dict(item) for item in (mapping_loader(group_id) if mapping_loader else [])]
+            self._group_mapping_cache = cache
+        mapping_rows = cache.get(group_id, [])
+        data["model_mappings"] = [self._public_model_mapping(item) for item in (mapping_rows or [])]
+        data["model_mapping_ids"] = [int(item["id"]) for item in data["model_mappings"]]
+        return data
+
+    @staticmethod
+    def _public_model_mapping(row: Mapping[str, Any]) -> dict[str, Any]:
+        data = dict(row)
+        data["id"] = int(data.get("id") or 0)
+        data["enabled"] = bool(data.get("enabled"))
         return data
 
     def _with_group(self, row: Mapping[str, Any] | None) -> dict[str, Any] | None:
@@ -166,6 +186,7 @@ class StoreService:
                 "group_weight": effective_group["weight"],
                 "group_concurrency_limit": effective_group["concurrency_limit"],
                 "group_allowed_models": effective_group["allowed_models"],
+                "group_model_mappings": effective_group["model_mappings"],
                 "group_source": source,
                 "group_source_plan_id": source_plan.get("plan_id") if source_plan else None,
                 "group_source_plan_name": source_plan.get("plan_name") if source_plan else None,
@@ -181,7 +202,7 @@ class StoreService:
                 ],
             })
         else:
-            data.update({"assigned_group_id": None, "assigned_group_name": "未分组", "effective_group_id": None, "group_name": "未分组", "group_weight": 0, "group_concurrency_limit": 1, "group_allowed_models": [], "group_source": "ASSIGNED", "group_upgrade_candidates": []})
+            data.update({"assigned_group_id": None, "assigned_group_name": "未分组", "effective_group_id": None, "group_name": "未分组", "group_weight": 0, "group_concurrency_limit": 1, "group_allowed_models": [], "group_model_mappings": [], "group_source": "ASSIGNED", "group_upgrade_candidates": []})
         return data
 
     # ------------------------------------------------------------------ users
@@ -283,6 +304,20 @@ class StoreService:
                 "members": self.page_result(members, total, page, page_size)}
 
     @staticmethod
+    def _normalize_mapping_ids(value: Any) -> list[int]:
+        if not isinstance(value, (list, tuple, set)):
+            return []
+        result: list[int] = []
+        for item in value:
+            try:
+                mapping_id = int(item)
+            except (TypeError, ValueError):
+                raise ValueError("模型映射编号必须是整数")
+            if mapping_id > 0 and mapping_id not in result:
+                result.append(mapping_id)
+        return result
+
+    @staticmethod
     def _group_values(values: Mapping[str, Any], *, partial: bool = False) -> dict[str, Any]:
         changes: dict[str, Any] = {}
         if not partial or "name" in values:
@@ -313,17 +348,33 @@ class StoreService:
             changes["allowed_models_json"] = json.dumps(models, ensure_ascii=False, separators=(",", ":"))
         if not partial or "is_default" in values:
             changes["is_default"] = 1 if bool(values.get("is_default")) else 0
+        if not partial or "model_mapping_ids" in values:
+            changes["model_mapping_ids"] = StoreService._normalize_mapping_ids(values.get("model_mapping_ids", []))
         return changes
+
+    def _validate_mapping_ids(self, mapping_ids: list[int]) -> None:
+        for mapping_id in mapping_ids:
+            if not self.mapper.find_model_mapping(int(mapping_id)):
+                raise ValueError(f"模型映射 #{mapping_id} 不存在")
+
+    def _replace_group_model_mappings(self, group_id: int, mapping_ids: list[int]) -> None:
+        self.mapper.delete_group_model_mappings(int(group_id))
+        for mapping_id in mapping_ids:
+            self.mapper.insert_group_model_mapping(int(group_id), int(mapping_id))
+        self._group_mapping_cache.pop(int(group_id), None)
 
     @Transactional()
     def create_user_group(self, values: Mapping[str, Any]) -> dict[str, Any]:
         group = self._group_values(values)
+        mapping_ids = group.pop("model_mapping_ids", [])
+        self._validate_mapping_ids(mapping_ids)
         if self.mapper.find_user_group_by_weight(int(group["weight"]), None):
             raise ValueError("分组权重已被使用，请设置不同的权重")
         now = utc_now()
         group.update({"created_at": now, "updated_at": now})
         self.mapper.insert_user_group(group)
         group_id = int(group.get("id") or 0)
+        self._replace_group_model_mappings(group_id, mapping_ids)
         if group.get("is_default"):
             self.mapper.clear_default_user_groups(group_id, now)
         return self.find_user_group(group_id) or self._public_group(group)
@@ -336,6 +387,9 @@ class StoreService:
         changes = self._group_values(values, partial=True)
         if not changes:
             return self._public_group(existing)
+        mapping_ids = changes.pop("model_mapping_ids", None)
+        if mapping_ids is not None:
+            self._validate_mapping_ids(mapping_ids)
         if existing.get("is_default") and changes.get("is_default") == 0:
             raise ValueError("默认用户组不能直接取消默认，请将其他组设为默认")
         if "weight" in changes and self.mapper.find_user_group_by_weight(int(changes["weight"]), int(group_id)):
@@ -344,6 +398,8 @@ class StoreService:
         if changes.get("is_default"):
             self.mapper.clear_default_user_groups(int(group_id), changes["updated_at"])
         self.mapper.update_user_group(int(group_id), changes)
+        if mapping_ids is not None:
+            self._replace_group_model_mappings(int(group_id), mapping_ids)
         return self.find_user_group(int(group_id))
 
     @Transactional()
@@ -358,7 +414,83 @@ class StoreService:
             raise ValueError("系统缺少默认用户组")
         self.mapper.assign_users_to_group(int(group_id), int(default_group["id"]))
         self.mapper.clear_subscription_plan_group(int(group_id), utc_now())
+        self.mapper.delete_group_model_mappings(int(group_id))
+        self._group_mapping_cache.pop(int(group_id), None)
         return bool(self.mapper.delete_user_group(int(group_id)))
+
+    # ---------------------------------------------------------- model mappings
+    @staticmethod
+    def _model_mapping_values(values: Mapping[str, Any], *, partial: bool = False) -> dict[str, Any]:
+        efforts = {"", "*", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+        changes: dict[str, Any] = {}
+        if not partial or "name" in values:
+            name = str(values.get("name") or "").strip()
+            if not 2 <= len(name) <= 120:
+                raise ValueError("映射名称需为 2-120 个字符")
+            changes["name"] = name
+        if not partial or "source_model" in values:
+            model = str(values.get("source_model") or "").strip()
+            if not model or len(model) > 160:
+                raise ValueError("请求模型不能为空且不能超过 160 个字符")
+            changes["source_model"] = model
+        if not partial or "source_effort" in values:
+            effort = str(values.get("source_effort") or "").strip().lower()
+            if effort not in efforts:
+                raise ValueError("请求推理强度无效")
+            changes["source_effort"] = effort
+        if not partial or "target_model" in values:
+            model = str(values.get("target_model") or "").strip()
+            if not model or len(model) > 160:
+                raise ValueError("目标模型不能为空且不能超过 160 个字符")
+            changes["target_model"] = model
+        if not partial or "target_effort" in values:
+            effort = str(values.get("target_effort") or "").strip().lower()
+            if not effort or effort == "*" or effort not in efforts:
+                raise ValueError("目标推理强度无效")
+            changes["target_effort"] = effort
+        if not partial or "enabled" in values:
+            changes["enabled"] = 1 if bool(values.get("enabled", True)) else 0
+        return changes
+
+    def list_model_mappings(self) -> list[dict[str, Any]]:
+        return [self._public_model_mapping(row) for row in self.mapper.list_model_mappings()]
+
+    @Transactional()
+    def create_model_mapping(self, values: Mapping[str, Any]) -> dict[str, Any]:
+        mapping = self._model_mapping_values(values)
+        if self.mapper.find_model_mapping_by_source(mapping["source_model"], mapping["source_effort"], None):
+            raise ValueError("相同请求模型和推理强度的映射已存在")
+        now = utc_now()
+        mapping.update({"created_at": now, "updated_at": now})
+        self.mapper.insert_model_mapping(mapping)
+        self._group_mapping_cache.clear()
+        return self._public_model_mapping(self.mapper.find_model_mapping(int(mapping.get("id") or 0)) or mapping)
+
+    @Transactional()
+    def update_model_mapping(self, mapping_id: int, values: Mapping[str, Any]) -> dict[str, Any] | None:
+        existing = self.mapper.find_model_mapping(int(mapping_id))
+        if not existing:
+            return None
+        changes = self._model_mapping_values(values, partial=True)
+        source_model = changes.get("source_model", existing.get("source_model"))
+        source_effort = changes.get("source_effort", existing.get("source_effort"))
+        if self.mapper.find_model_mapping_by_source(source_model, source_effort, int(mapping_id)):
+            raise ValueError("相同请求模型和推理强度的映射已存在")
+        if not changes:
+            return self._public_model_mapping(existing)
+        changes["updated_at"] = utc_now()
+        self.mapper.update_model_mapping(int(mapping_id), changes)
+        self._group_mapping_cache.clear()
+        return self._public_model_mapping(self.mapper.find_model_mapping(int(mapping_id)))
+
+    @Transactional()
+    def delete_model_mapping(self, mapping_id: int) -> bool:
+        if not self.mapper.find_model_mapping(int(mapping_id)):
+            return False
+        self.mapper.delete_model_mapping_assignments(int(mapping_id))
+        deleted = bool(self.mapper.delete_model_mapping(int(mapping_id)))
+        self._group_mapping_cache.clear()
+        return deleted
 
     def admin_user_detail(self, user_id: int, order_page: int = 1, page_size: int = 5) -> dict[str, Any] | None:
         user = self.find_user(user_id)

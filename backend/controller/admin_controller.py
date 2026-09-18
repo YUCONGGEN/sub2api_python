@@ -158,6 +158,40 @@ class AdminController:
             return bad(str(exc), 409)
         return ok({"ok": True}, "用户组已删除，原成员已转入默认组") if deleted else not_found("用户组不存在")
 
+    @GetMapping("/model-mappings")
+    def model_mappings(self, authorization: str = RequestHeader(name="Authorization", required=False)):
+        if not self.admin(authorization):
+            return forbidden()
+        return ok({"ok": True, "mappings": self.store.list_model_mappings()})
+
+    @PostMapping("/model-mappings")
+    def create_model_mapping(self, body: dict = RequestBody(), authorization: str = RequestHeader(name="Authorization", required=False)):
+        if not self.admin(authorization):
+            return forbidden()
+        try:
+            mapping = self.store.create_model_mapping(body)
+        except (TypeError, ValueError) as exc:
+            return bad(str(exc) or "模型映射参数不正确")
+        except Exception:
+            return bad("模型映射创建失败", 409)
+        return ok({"ok": True, "mapping": mapping}, "模型映射已创建")
+
+    @PatchMapping("/model-mappings/{mapping_id}")
+    def update_model_mapping(self, mapping_id: int = PathVariable(name="mapping_id"), body: dict = RequestBody(), authorization: str = RequestHeader(name="Authorization", required=False)):
+        if not self.admin(authorization):
+            return forbidden()
+        try:
+            mapping = self.store.update_model_mapping(mapping_id, body)
+        except (TypeError, ValueError) as exc:
+            return bad(str(exc) or "模型映射参数不正确")
+        return ok({"ok": True, "mapping": mapping}, "模型映射已更新") if mapping else not_found("模型映射不存在")
+
+    @DeleteMapping("/model-mappings/{mapping_id}")
+    def delete_model_mapping(self, mapping_id: int = PathVariable(name="mapping_id"), authorization: str = RequestHeader(name="Authorization", required=False)):
+        if not self.admin(authorization):
+            return forbidden()
+        return ok({"ok": True}, "模型映射已删除") if self.store.delete_model_mapping(mapping_id) else not_found("模型映射不存在")
+
     @PostMapping("/users")
     def create_user(self, body: dict = RequestBody(), authorization: str = RequestHeader(name="Authorization", required=False)):
         """Create an account and reveal its first API key exactly once."""

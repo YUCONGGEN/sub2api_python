@@ -11,6 +11,8 @@ from typing import Any, Mapping
 
 from springbootai import Service
 
+from backend.common.reasoning import requested_reasoning_effort
+
 
 _runtime: "UserGroupService | None" = None
 
@@ -74,6 +76,40 @@ class UserGroupService:
 
     def filter_catalog(self, user: Mapping[str, Any], catalog: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [item for item in catalog if self.model_allowed(user, str(item.get("id") or ""))]
+
+    @staticmethod
+    def apply_model_mapping(user: Mapping[str, Any], payload: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        """Apply the effective group's first exact/wildcard request mapping.
+
+        Permission checks intentionally happen before this method, against the
+        client-facing model. Billing and upstream selection then use the mapped
+        model because it is the model actually called.
+        """
+        outgoing = dict(payload)
+        source_model = str(payload.get("model") or "").strip()
+        raw_effort = requested_reasoning_effort(dict(payload))
+        source_effort = "" if raw_effort is None else str(raw_effort).strip().lower()
+        mappings = user.get("group_model_mappings")
+        if not source_model or not isinstance(mappings, list):
+            return outgoing, None
+        candidates = [
+            item for item in mappings
+            if isinstance(item, Mapping)
+            and bool(item.get("enabled"))
+            and str(item.get("source_model") or "").strip().lower() == source_model.lower()
+            and str(item.get("source_effort") or "").strip().lower() in {source_effort, "*"}
+        ]
+        if not candidates:
+            return outgoing, None
+        candidates.sort(key=lambda item: 0 if str(item.get("source_effort") or "").strip().lower() == source_effort else 1)
+        mapping = dict(candidates[0])
+        outgoing["model"] = str(mapping.get("target_model") or source_model).strip()
+        target_effort = str(mapping.get("target_effort") or "").strip().lower()
+        reasoning = outgoing.get("reasoning")
+        outgoing["reasoning"] = {**(reasoning if isinstance(reasoning, dict) else {}), "effort": target_effort}
+        outgoing.pop("reasoning_effort", None)
+        outgoing.pop("reasoning-effort", None)
+        return outgoing, mapping
 
     async def acquire(self, user: Mapping[str, Any]) -> UserConcurrencyLease:
         user_id = int(user["id"])

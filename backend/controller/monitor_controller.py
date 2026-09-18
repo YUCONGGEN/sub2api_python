@@ -1,13 +1,14 @@
 from collections import deque
 from datetime import datetime, timedelta, timezone
 
+from springbootai import get_config
 from springbootai.annotations import Autowired, GetMapping, RequestHeader, RequestMapping, RestController, RequestParam
 
 from backend.service.ai_service import AiGatewayService
 from backend.service.auth_service import AuthService
 from backend.service.observability_service import ObservabilityService
 from backend.service.subscription_gateway_service import SubscriptionGatewayService
-from backend.common.response import ok, unauthorized
+from backend.common.response import as_bool, not_found, ok, unauthorized
 
 
 @RestController
@@ -30,6 +31,9 @@ class MonitorController:
 
     @GetMapping("")
     def overview(self, authorization: str = RequestHeader(name="Authorization", required=False), page: int = RequestParam(name="page", required=False, default=1), page_size: int = RequestParam(name="page_size", required=False, default=12)):
+        monitoring = get_config().get("rose", {}).get("monitoring", {}) or {}
+        if not as_bool(monitoring.get("enabled"), default=True):
+            return not_found("模型监控已关闭")
         user = self.auth.user_from_authorization(authorization)
         if not user:
             return unauthorized()

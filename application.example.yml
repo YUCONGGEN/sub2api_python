@@ -83,6 +83,9 @@ database:
 rose:
   application:
     name: ${ROSE_APPLICATION_NAME:大模型接口管理}
+  monitoring:
+    # 设为 false 后关闭 /api/monitoring，前端也会停止轮询并隐藏模型监控入口。
+    enabled: ${ROSE_MONITORING_ENABLED:true}
   admin-config:
     # 管理员可在前端读取和修改项目固定的 application.yml。保存时会校验 YAML、
     # 检查并发修改并生成 application.yml.bak；普通用户无法访问对应接口。

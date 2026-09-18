@@ -50,7 +50,9 @@ class ConfigController:
         rose_provider = providers.get("rose", {}) if isinstance(providers.get("rose"), dict) else {}
         models = cfg.get("models", [])
         subscription_gateway = cfg.get("subscription-gateway", {}) if isinstance(cfg.get("subscription-gateway"), dict) else {}
+        monitoring = cfg.get("monitoring", {}) if isinstance(cfg.get("monitoring"), dict) else {}
         contributions_enabled = str(subscription_gateway.get("user-contributions-enabled", True)).strip().lower() in {"1", "true", "yes", "on"}
+        monitoring_enabled = str(monitoring.get("enabled", True)).strip().lower() in {"1", "true", "yes", "on"}
         if isinstance(models, dict):
             models = [{"id": key, **(value if isinstance(value, dict) else {})} for key, value in models.items()]
         model_options = []
@@ -70,6 +72,7 @@ class ConfigController:
             "recharge_code_prefix": prefix,
             "recharge_code_placeholder": f"输入 {prefix}-XXXX-XXXX-XXXX",
             "subscription_contributions_enabled": contributions_enabled,
+            "monitoring_enabled": monitoring_enabled,
             # Public metadata only. The bearer token is intentionally omitted.
             "codex": {
                 "model": codex.get("model") or "gpt-5.6-sol",

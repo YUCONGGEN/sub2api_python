@@ -35,7 +35,7 @@
           <router-link to="/docs"
             ><span class="nav-index">04</span>配置教程</router-link
           >
-          <router-link to="/monitoring"
+          <router-link v-if="monitoringEnabled" to="/monitoring"
             ><span class="nav-index">05</span>模型监控</router-link
           >
           <router-link to="/keys"
@@ -58,6 +58,7 @@
         </nav>
         <div class="sidebar-bottom">
           <router-link
+            v-if="monitoringEnabled"
             to="/monitoring"
             :class="['status-dot', systemStatus.level]"
             ><i></i>{{ systemStatus.text }}</router-link
@@ -128,6 +129,7 @@ export default {
     codexConfig: null,
     modelOptions: [],
     subscriptionContributionsEnabled: false,
+    monitoringEnabled: true,
     theme: "light",
     mobileMenuOpen: false,
     healthTimer: null,
@@ -174,11 +176,14 @@ export default {
     },
   },
   created() {
-    this.loadConfig();
+    this.loadConfig().then(() => {
+      if (this.monitoringEnabled) this.loadSystemStatus();
+    });
     this.loadUser();
     this.loadTheme();
-    this.loadSystemStatus();
-    this.healthTimer = window.setInterval(this.loadSystemStatus, 60000);
+    this.healthTimer = window.setInterval(() => {
+      if (this.monitoringEnabled) this.loadSystemStatus();
+    }, 60000);
     this.updateTitle();
     window.addEventListener("rose:auth-expired", this.handleAuthExpired);
   },
@@ -199,6 +204,11 @@ export default {
         if (Array.isArray(data.models)) this.modelOptions = data.models;
         this.subscriptionContributionsEnabled =
           data.subscription_contributions_enabled === true;
+        this.monitoringEnabled = data.monitoring_enabled !== false;
+        if (!this.monitoringEnabled) {
+          this.systemStatus = { text: "监控已关闭", level: "checking" };
+          if (this.$route.path === "/monitoring") this.$router.replace("/dashboard");
+        }
         this.updateTitle();
       } catch (e) {}
     },

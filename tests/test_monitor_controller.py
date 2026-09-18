@@ -1,6 +1,7 @@
 from backend.controller.monitor_controller import MonitorController
 from backend.common.time_utils import business_date_keys, business_day_start_utc
 from backend.service.observability_service import ObservabilityService
+import backend.controller.monitor_controller as monitor_module
 
 
 class FakeStore:
@@ -89,6 +90,17 @@ def test_monitoring_only_exposes_current_gateway_usernames_to_admins():
     admin = MonitorController(FakeAdminAuth(), FakeGateway(), admin_gateway).overview("Bearer admin", page=1, page_size=12).data
     assert admin_gateway.include_users is True
     assert admin["summary"]["gateway"]["active_users"][0]["username"] == "admin"
+
+
+def test_monitoring_can_be_disabled_from_yaml(monkeypatch):
+    monkeypatch.setattr(monitor_module, "get_config", lambda: {"rose": {"monitoring": {"enabled": False}}})
+
+    response = MonitorController(FakeAuth(), FakeGateway(), FakeSubscriptionGateway()).overview(
+        "Bearer user", page=1, page_size=12
+    )
+
+    assert response.code == 404
+    assert response.message == "模型监控已关闭"
 
 
 class EmptyAnalyticsMapper:

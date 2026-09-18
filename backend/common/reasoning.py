@@ -5,13 +5,14 @@ from typing import Any
 
 
 DEFAULT_GPT_REASONING_EFFORT = "high"
+VALID_REASONING_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"})
 
 
 def configured_gpt_reasoning_effort(config: dict[str, Any]) -> str:
     """Read once at startup; never parse YAML in the request/stream path."""
     raw = config.get("rose", {}).get("proxy", {}).get("default-gpt-reasoning-effort")
     effort = str(raw or DEFAULT_GPT_REASONING_EFFORT).strip().lower() or DEFAULT_GPT_REASONING_EFFORT
-    if effort not in {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}:
+    if effort not in VALID_REASONING_EFFORTS:
         raise ValueError("rose.proxy.default-gpt-reasoning-effort 不是有效推理档位，例如 low、medium、high")
     return effort
 
@@ -46,6 +47,25 @@ def requested_reasoning_effort(payload: dict[str, Any]) -> Any:
         if value is not None and not (isinstance(value, str) and not value.strip()):
             return value
     return None
+
+
+def validated_reasoning_effort(payload: dict[str, Any]) -> str | None:
+    """Validate an explicitly supplied effort at the subscription boundary.
+
+    Generic API-key upstreams retain their existing provider-driven validation.
+    Subscription transports are stricter because an invalid value would be
+    retried against shared accounts even though the request itself is bad.
+    """
+    effort = requested_reasoning_effort(payload)
+    if effort is None:
+        return None
+    if not isinstance(effort, str):
+        raise ValueError("reasoning effort 必须是字符串")
+    normalized = effort.strip().lower()
+    if normalized not in VALID_REASONING_EFFORTS:
+        allowed = ", ".join(sorted(VALID_REASONING_EFFORTS))
+        raise ValueError(f"reasoning effort 必须是以下值之一：{allowed}")
+    return normalized
 
 
 def with_responses_reasoning(payload: dict[str, Any], default_effort: str = DEFAULT_GPT_REASONING_EFFORT) -> dict[str, Any]:

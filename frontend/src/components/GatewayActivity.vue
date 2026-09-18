@@ -43,7 +43,7 @@ export default {
   beforeUnmount () { window.clearInterval(this.timer) },
   beforeDestroy () { window.clearInterval(this.timer) },
   methods: {
-    providerLabel (provider) { return provider === 'openai' ? 'OpenAI' : provider === 'claude' ? 'Claude' : provider || '未知上游' },
+    providerLabel (provider) { return ({ openai: 'OpenAI', claude: 'Claude', grok: 'Grok', kimi: 'Kimi', zhipu: '智谱 GLM', minimax: 'MiniMax' })[provider] || provider || '未知上游' },
     reasoningLabel (effort) {
       const labels = { none: '无', minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '很高', max: '最高', ultra: '超高' }
       const value = String(effort || '').trim().toLowerCase()

@@ -9,16 +9,12 @@ from urllib.parse import urlsplit, urlunsplit
 
 from springbootai import Autowired, PostConstruct, Service, Slf4j, Transactional, get_config
 
+from backend.common.subscription_providers import DEFAULT_MODELS, SUBSCRIPTION_PROVIDERS, provider_label
 from backend.repository.subscription_repository import SubscriptionRepository
 from backend.service.credential_cipher_service import CredentialCipherService
 from backend.service.subscription_account_pool_service import SubscriptionAccountPoolService
 from backend.service.subscription_oauth_service import SubscriptionOAuthService
 
-
-DEFAULT_MODELS = {
-    "openai": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"],
-    "claude": ["claude-opus-5", "claude-sonnet-5", "claude-fable-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
-}
 
 NO_COOLDOWN_ERROR_MARKERS = (
     "currently overloaded",
@@ -86,8 +82,8 @@ class SubscriptionAccountService:
     @staticmethod
     def normalize_provider(value: Any) -> str:
         provider = str(value or "").strip().lower()
-        if provider not in {"openai", "claude"}:
-            raise ValueError("provider 只能是 openai 或 claude")
+        if provider not in SUBSCRIPTION_PROVIDERS:
+            raise ValueError("provider 不受支持")
         return provider
 
     @staticmethod
@@ -342,8 +338,8 @@ class SubscriptionAccountService:
         if not name or len(name) > 120:
             raise ValueError("账号名称不能为空且不能超过 120 个字符")
         auth_type = str(body.get("auth_type") or "oauth").strip().lower().replace("-", "_")
-        if auth_type not in {"oauth", "setup_token", "imported_token"}:
-            raise ValueError("auth_type 只能是 oauth、setup_token 或 imported_token")
+        if auth_type not in {"oauth", "setup_token", "imported_token", "api_key"}:
+            raise ValueError("auth_type 只能是 oauth、setup_token、imported_token 或 api_key")
         credentials = self.normalize_imported_credentials(
             provider, body, dict(credentials or body.get("credentials") or {}),
         )
@@ -667,7 +663,7 @@ class SubscriptionAccountService:
 
     def catalog(self) -> list[dict[str, Any]]:
         routes: dict[tuple[str, str], list[dict[str, Any]]] = {}
-        for provider in ("openai", "claude"):
+        for provider in SUBSCRIPTION_PROVIDERS:
             for row in self.repository.list_provider(provider):
                 public = self._public(row)
                 for model in public.get("models") or []:
@@ -695,8 +691,12 @@ class SubscriptionAccountService:
             model_pricing = self.pricing_for_model(sample, model)
             result.append({
                         "id": str(model),
-                        "provider": "OpenAI Subscription" if provider == "openai" else "Claude Subscription",
-                        "endpoint": "Responses" if provider == "openai" else "Messages",
+                        "provider": provider_label(provider) + " Subscription",
+                        "endpoint": {
+                            "responses": "Responses",
+                            "anthropic": "Messages",
+                            "chat": "Chat Completions",
+                        }.get(str(SUBSCRIPTION_PROVIDERS[provider]["protocol"]), "Chat Completions"),
                         "group": "Subscription Gateway",
                         "pricing": {
                             "input-cny-per-million": model_pricing["input_price_cny"],

@@ -12,7 +12,7 @@
     <div v-if="isAdmin" class="metric-grid gateway-metrics">
       <div class="metric-card"><span>账号总数</span><strong>{{ summary.total || 0 }}</strong><small>全部分页与供应商</small></div>
       <div class="metric-card"><span>OpenAI</span><strong>{{ providerCount('openai') }}</strong><small>Responses / Codex</small></div>
-      <div class="metric-card"><span>Claude</span><strong>{{ providerCount('claude') }}</strong><small>Anthropic Messages</small></div>
+      <div class="metric-card"><span>其他供应商</span><strong>{{ otherProviderCount }}</strong><small>Claude / Grok / Kimi / GLM / MiniMax</small></div>
       <div class="metric-card" :class="{ highlight: gatewayEnabled }"><span>网关状态</span><strong>{{ gatewayEnabled ? '已启用' : '已停用' }}</strong><small>凭据全程加密保存</small></div>
     </div>
     <div v-if="isAdmin" class="gateway-strip gateway-capacity" aria-label="订阅账号池实时容量">
@@ -33,12 +33,12 @@
       </div>
 
       <div class="mode-tabs" v-if="!editingId">
-        <button :class="{ active: form.mode === 'oauth' }" @click="form.mode = 'oauth'">OAuth 授权</button>
-        <button :class="{ active: form.mode === 'manual' }" @click="form.mode = 'manual'">导入 Token</button>
+        <button v-if="oauthSupported(form.provider)" :class="{ active: form.mode === 'oauth' }" @click="form.mode = 'oauth'">OAuth 授权</button>
+        <button :class="{ active: form.mode === 'manual' }" @click="form.mode = 'manual'">导入 Token / API Key</button>
       </div>
 
       <div class="form-grid">
-        <label><span>供应商</span><select v-model="form.provider" :disabled="!!editingId || !!oauthSession"><option value="openai">OpenAI / Codex</option><option value="claude">Claude / Anthropic</option></select></label>
+        <label><span>供应商</span><select v-model="form.provider" :disabled="!!editingId || !!oauthSession"><option v-for="item in providers" :key="item.id" :value="item.id">{{ item.label }}</option></select></label>
         <label><span>显示名称</span><input v-model.trim="form.name" maxlength="120" placeholder="例如：我的 ChatGPT Pro" /></label>
         <label class="span-2"><span>可调度模型（逗号分隔）</span><textarea v-model="form.models" rows="3" placeholder="gpt-5.4, gpt-5.4-mini"></textarea></label>
         <label v-if="isAdmin"><span>优先级</span><input v-model.number="form.priority" type="number" min="-1000" max="1000" /></label>
@@ -51,7 +51,7 @@
 
       <template v-if="!editingId && form.mode === 'manual'">
         <div class="form-grid token-grid">
-          <label class="span-2"><span>Access Token / Codex auth.json</span><textarea v-model.trim="form.access_token" rows="5" autocomplete="off" placeholder="可粘贴 Codex auth.json，或其中 tokens.access_token；不要粘贴浏览器 Session Token"></textarea><small>完整 auth.json 会自动提取 access_token、refresh_token 与账号 ID；凭据由服务端加密保存。</small></label>
+          <label class="span-2"><span>{{ form.provider === 'openai' ? 'Access Token / Codex auth.json' : 'Access Token / API Key' }}</span><textarea v-model.trim="form.access_token" rows="5" autocomplete="off" :placeholder="form.provider === 'openai' ? '可粘贴 Codex auth.json，或其中 tokens.access_token；不要粘贴浏览器 Session Token' : '粘贴该供应商的 OAuth Access Token 或 Coding Plan API Key'"></textarea><small>{{ form.provider === 'openai' ? '完整 auth.json 会自动提取 access_token、refresh_token 与账号 ID；' : '' }}凭据由服务端加密保存，并在入池前验证连通性。</small></label>
           <label class="span-2"><span>Refresh Token（可选）</span><textarea v-model.trim="form.refresh_token" rows="2" autocomplete="off"></textarea></label>
           <label><span>过期时间（可选）</span><input v-model.trim="form.expires_at" placeholder="2026-12-31T00:00:00Z" /></label>
           <label><span>账号邮箱（可选）</span><input v-model.trim="form.email" type="email" /></label>
@@ -68,13 +68,13 @@
         </details>
       </template>
 
-      <label v-if="!editingId" class="compliance-check"><input v-model="form.compliance_confirmed" type="checkbox" /><span>我确认已获得此账号所有者授权，并会遵守 OpenAI / Anthropic 的服务条款、地区限制和账号共享规则。</span></label>
+      <label v-if="!editingId" class="compliance-check"><input v-model="form.compliance_confirmed" type="checkbox" /><span>我确认已获得此账号所有者授权，并会遵守所选上游供应商的服务条款、地区限制和账号共享规则。</span></label>
 
       <div v-if="oauthSession && !editingId" class="oauth-step">
         <strong>授权链接已生成</strong>
         <p>在新窗口完成授权后，把浏览器最终回调地址或页面显示的完整授权码粘贴到下方。</p>
         <a :href="oauthSession.authorization_url" target="_blank" rel="noopener">打开 {{ providerLabel(form.provider) }} 授权页面 ↗</a>
-        <textarea v-model.trim="form.callback_value" rows="3" placeholder="OpenAI：粘贴 http://localhost:1455/auth/callback?...；Claude：粘贴 code#state"></textarea>
+        <textarea v-model.trim="form.callback_value" rows="3" placeholder="OpenAI/Grok：粘贴本地回调完整地址；Claude：粘贴 code#state"></textarea>
       </div>
 
       <div class="editor-actions">
@@ -89,7 +89,7 @@
     <section class="panel accounts-panel">
       <div class="panel-head">
         <div><span class="eyebrow">ACCOUNT POOL</span><h2>上游账号池</h2></div>
-        <div class="provider-filter"><button :class="['secondary-btn', { active: filter === '' }]" @click="setFilter('')">全部</button><button :class="['secondary-btn', { active: filter === 'openai' }]" @click="setFilter('openai')">OpenAI</button><button :class="['secondary-btn', { active: filter === 'claude' }]" @click="setFilter('claude')">Claude</button></div>
+        <div class="provider-filter"><button :class="['secondary-btn', { active: filter === '' }]" @click="setFilter('')">全部</button><button v-for="item in providers" :key="item.id" :class="['secondary-btn', { active: filter === item.id }]" @click="setFilter(item.id)">{{ item.short }}</button></div>
       </div>
       <div v-if="error" class="data-error" role="alert"><strong>订阅账号加载失败</strong><span>{{ error }}</span><button class="secondary-btn" @click="load">重试</button></div>
       <div v-if="loading" class="empty">正在加载订阅账号…</div>
@@ -98,7 +98,7 @@
         <article v-for="account in accounts" :key="account.id" :class="['account-card', account.provider]">
           <div class="account-card-top">
             <div class="account-main">
-              <div class="provider-mark" :class="account.provider">{{ account.provider === 'openai' ? 'O' : 'C' }}</div>
+              <div class="provider-mark" :class="account.provider">{{ providerMark(account.provider) }}</div>
               <div class="account-identity">
                 <span class="account-id">{{ account.provider.toUpperCase() }} ACCOUNT {{ String(account.id).padStart(2, '0') }}</span>
                 <h3>{{ account.name }}</h3>
@@ -188,7 +188,7 @@
 
     <section class="panel endpoint-help">
       <div class="panel-head"><div><span class="eyebrow">COMPATIBLE ENDPOINTS</span><h2>调用入口</h2></div></div>
-      <div class="endpoint-grid"><div><strong>OpenAI Subscription</strong><code>POST /v1/chat/completions</code><code>POST /v1/responses</code><p>两种格式统一接入同一订阅账号池；Chat Completions 会在后端自动转换。客户端填写服务根地址 /v1，同一对话可传稳定的 prompt_cache_key 保持账号粘连。</p></div><div><strong>Claude Subscription</strong><code>POST /v1/chat/completions</code><code>POST /v1/messages</code><code>POST /v1/messages/count_tokens</code><p>Claude 模型也可统一使用 Chat Completions，后端自动转换 Anthropic Messages；prompt_cache_key 或 metadata.user_id 可作为会话粘连键。</p></div></div>
+      <div class="endpoint-grid"><div><strong>OpenAI / Grok</strong><code>POST /v1/chat/completions</code><code>POST /v1/responses</code><p>两种格式接入 Responses 订阅池；Chat Completions 由后端自动转换。</p></div><div><strong>Claude Subscription</strong><code>POST /v1/chat/completions</code><code>POST /v1/messages</code><code>POST /v1/messages/count_tokens</code><p>Claude 模型可统一使用 Chat Completions，后端自动转换 Anthropic Messages。</p></div><div><strong>Kimi / GLM / MiniMax Coding</strong><code>POST /v1/chat/completions</code><p>使用官方 Coding Plan API Key，共享既有计费、并发排队、失败重试与会话粘滞。</p></div></div>
       <p class="safety-note">账号池按优先级和平滑权重轮询，失败、冷却或限流时自动切换下一账号；同时采用单账号限并发、RPM 上限、退避与健康账号粘连，不伪造浏览器或人为操作，也不能保证上游账号不会被限制。</p>
     </section>
   </section>
@@ -199,20 +199,31 @@ import { api } from '../api'
 import { askConfirm, notify } from '../ui'
 import GatewayActivity from '../components/GatewayActivity.vue'
 
-const defaults = provider => ({ mode: 'oauth', provider, name: '', models: provider === 'openai' ? 'gpt-5.4, gpt-5.4-mini' : 'claude-sonnet-4-6, claude-opus-4-6', priority: 0, weight: 1, input_price_cny: 0, output_price_cny: 0, price_multiplier: 1, enabled: true, access_token: '', refresh_token: '', expires_at: '', email: '', callback_value: '', compliance_confirmed: false })
+const PROVIDERS = [
+  { id: 'openai', label: 'OpenAI / Codex', short: 'OpenAI', mark: 'O', oauth: true, models: 'gpt-5.4, gpt-5.4-mini' },
+  { id: 'claude', label: 'Claude / Anthropic', short: 'Claude', mark: 'C', oauth: true, models: 'claude-sonnet-4-6, claude-opus-4-6' },
+  { id: 'grok', label: 'xAI / Grok', short: 'Grok', mark: 'G', oauth: true, models: 'grok-4.6, grok-4.5, grok-4.3' },
+  { id: 'kimi', label: 'Kimi Coding', short: 'Kimi', mark: 'K', oauth: false, models: 'kimi-for-coding, kimi-k2' },
+  { id: 'zhipu', label: '智谱 GLM Coding', short: 'GLM', mark: 'Z', oauth: false, models: 'glm-5.3, glm-5.3-flash, glm-5.2' },
+  { id: 'minimax', label: 'MiniMax Coding', short: 'MiniMax', mark: 'M', oauth: false, models: 'MiniMax-M3, MiniMax-M2.7, MiniMax-M2.5' }
+]
+const providerMeta = provider => PROVIDERS.find(item => item.id === provider) || PROVIDERS[0]
+const defaults = provider => ({ mode: providerMeta(provider).oauth ? 'oauth' : 'manual', provider, name: '', models: providerMeta(provider).models, priority: 0, weight: 1, input_price_cny: 0, output_price_cny: 0, price_multiplier: 1, enabled: true, access_token: '', refresh_token: '', expires_at: '', email: '', callback_value: '', compliance_confirmed: false })
 
 export default {
   name: 'UpstreamSubscriptions',
   components: { GatewayActivity },
   props: { user: { type: Object, default: null }, subscriptionContributionsEnabled: { type: Boolean, default: false } },
-  data: () => ({ accounts: [], summary: {}, gatewayMetrics: {}, quotaByAccount: {}, pagination: { page: 1, pages: 1, total: 0 }, error: '', loading: false, busy: false, actionId: null, filter: '', showForm: false, editingId: null, oauthSession: null, gatewayEnabled: false, metricsTimer: null, configRequests: [], requestPagination: { page: 1, page_size: 5, pages: 1, total: 0 }, requestLoading: false, requestBusy: false, requestForm: { url: '', api_key: '', model_id: '', use_proxy: false }, form: defaults('openai'), pricingAccount: null, pricingRows: [], pricingBusy: false }),
-  computed: { isAdmin () { return String(this.user?.role || '').toUpperCase() === 'ADMIN' } },
-  watch: { 'form.provider' (next, previous) { if (!this.editingId && !this.oauthSession && next !== previous) this.form.models = defaults(next).models } },
+  data: () => ({ providers: PROVIDERS, accounts: [], summary: {}, gatewayMetrics: {}, quotaByAccount: {}, pagination: { page: 1, pages: 1, total: 0 }, error: '', loading: false, busy: false, actionId: null, filter: '', showForm: false, editingId: null, oauthSession: null, gatewayEnabled: false, metricsTimer: null, configRequests: [], requestPagination: { page: 1, page_size: 5, pages: 1, total: 0 }, requestLoading: false, requestBusy: false, requestForm: { url: '', api_key: '', model_id: '', use_proxy: false }, form: defaults('openai'), pricingAccount: null, pricingRows: [], pricingBusy: false }),
+  computed: { isAdmin () { return String(this.user?.role || '').toUpperCase() === 'ADMIN' }, otherProviderCount () { return PROVIDERS.filter(item => item.id !== 'openai').reduce((sum, item) => sum + this.providerCount(item.id), 0) } },
+  watch: { 'form.provider' (next, previous) { if (!this.editingId && !this.oauthSession && next !== previous) { const fresh = defaults(next); this.form.models = fresh.models; this.form.mode = fresh.mode } } },
   created () { this.load(); this.loadConfigRequests(); if (this.isAdmin) this.metricsTimer = window.setInterval(this.refreshGatewayMetrics, 5000) },
   beforeUnmount () { window.clearInterval(this.metricsTimer) },
   beforeDestroy () { window.clearInterval(this.metricsTimer) },
   methods: {
-    providerLabel (provider) { return provider === 'openai' ? 'OpenAI / Codex' : 'Claude / Anthropic' },
+    providerLabel (provider) { return providerMeta(provider).label },
+    providerMark (provider) { return providerMeta(provider).mark },
+    oauthSupported (provider) { return providerMeta(provider).oauth },
     providerCount (provider) { return Number(this.summary[provider] || 0) },
     numberText (value) { const number = Number(value || 0); return Number.isFinite(number) ? number.toLocaleString('zh-CN', { maximumFractionDigits: 8 }) : '0' },
     pricingOverrideCount (account) { return Object.keys(account?.model_pricing || {}).length },
@@ -290,7 +301,7 @@ export default {
     closeForm () { this.showForm = false; this.editingId = null; this.oauthSession = null },
     async startOAuth () { if (!this.form.name) return notify('请先填写账号名称', 'error'); if (!this.form.compliance_confirmed) return notify('请勾选账号授权与合规确认', 'error'); this.busy = true; try { const data = await api.authorizeUpstreamSubscription(this.payload()); this.oauthSession = data; window.open(data.authorization_url, '_blank', 'noopener') } catch (error) { notify(error.message, 'error') } finally { this.busy = false } },
     async finishOAuth () { this.busy = true; try { const data = await api.exchangeUpstreamSubscription({ ...this.payload(), session_id: this.oauthSession.session_id, callback_value: this.form.callback_value }); notify(data.message || 'OAuth 授权完成', 'success'); this.closeForm(); await this.load() } catch (error) { notify(error.message, 'error') } finally { this.busy = false } },
-    async saveManual () { if (!this.form.name) return notify('请先填写账号名称', 'error'); if (!this.form.compliance_confirmed) return notify('请勾选账号授权与合规确认', 'error'); this.busy = true; try { const data = await api.createUpstreamSubscription({ ...this.payload(), auth_type: 'imported_token', access_token: this.form.access_token, refresh_token: this.form.refresh_token, expires_at: this.form.expires_at, email: this.form.email }); notify(data.message || '订阅账号已保存', 'success'); this.closeForm(); await this.load() } catch (error) { notify(error.message, 'error') } finally { this.busy = false } },
+    async saveManual () { if (!this.form.name) return notify('请先填写账号名称', 'error'); if (!this.form.compliance_confirmed) return notify('请勾选账号授权与合规确认', 'error'); this.busy = true; try { const data = await api.createUpstreamSubscription({ ...this.payload(), auth_type: this.oauthSupported(this.form.provider) ? 'imported_token' : 'api_key', access_token: this.form.access_token, refresh_token: this.form.refresh_token, expires_at: this.form.expires_at, email: this.form.email }); notify(data.message || '订阅账号已保存', 'success'); this.closeForm(); await this.load() } catch (error) { notify(error.message, 'error') } finally { this.busy = false } },
     async saveEdit () { if (!this.form.name) return notify('请先填写账号名称', 'error'); this.busy = true; try { const body = { ...this.payload(), access_token: this.form.access_token, refresh_token: this.form.refresh_token }; const data = await api.updateUpstreamSubscription(this.editingId, body); notify(data.message || '订阅账号已更新', 'success'); this.closeForm(); await this.load() } catch (error) { notify(error.message, 'error') } finally { this.busy = false } },
     async testAccount (account) { this.actionId = account.id; try { const data = await api.testUpstreamSubscription(account.id); notify(`${account.name}：${data.message || '连接正常'}${data.model_count ? `，发现 ${data.model_count} 个模型` : ''}`, 'success'); await this.load() } catch (error) { notify(error.message, 'error'); await this.load() } finally { this.actionId = null } },
     async refreshAccount (account) { this.actionId = account.id; try { const data = await api.refreshUpstreamSubscription(account.id); notify(data.message || 'Token 已刷新', 'success'); await this.load() } catch (error) { notify(error.message, 'error'); await this.load() } finally { this.actionId = null } },
@@ -600,7 +611,10 @@ export default {
 :global(html[data-theme="dark"] .account-actions .text-btn) { border-color:#68474a;background:#39292d;color:#d8a5a1; }
 :global(html[data-theme="dark"] .account-actions .text-btn:hover) { border-color:#8a5a5b;background:#472f33;color:#efc0bc; }
 
+.provider-mark.grok{background:#e9e9ed;color:#222}.provider-mark.kimi{background:#eeeaff;color:#5940a5}.provider-mark.zhipu{background:#e7f7f2;color:#16745a}.provider-mark.minimax{background:#fff0f2;color:#a3344a}
+.endpoint-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+
 @media(max-width:1240px){.account-list{grid-template-columns:repeat(3,minmax(0,1fr))}}
-@media(max-width:1050px){.account-list{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:600px){.account-list{grid-template-columns:1fr}.account-actions{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:1050px){.account-list{grid-template-columns:repeat(2,minmax(0,1fr))}.endpoint-grid{grid-template-columns:1fr 1fr}}
+@media(max-width:600px){.account-list,.endpoint-grid{grid-template-columns:1fr}.account-actions{grid-template-columns:repeat(2,minmax(0,1fr))}}
 </style>

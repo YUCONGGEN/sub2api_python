@@ -150,6 +150,8 @@ npm run dev
 
 生产环境可以直接使用 `frontend/dist`，或使用 Nginx 将 `/api` 和 `/v1` 反向代理到 8241。
 
+管理员可在管理后台的“系统配置”中直接查看和修改服务器 `application.yml`。服务端只允许操作项目固定配置文件，保存前会校验 YAML 和文件版本，采用原子替换并生成 `application.yml.bak`；普通用户无法访问该接口。通过 `restart_backend.sh` 管理、且 `.run/backend.pid` 与当前进程一致时，页面还可安全安排后端重启。可用 `rose.admin-config.enabled` 关闭此功能，并通过 `ROSE_APPLICATION_CONFIG_FILE`、`ROSE_BACKEND_RESTART_SCRIPT` 由服务器环境覆盖固定文件位置。
+
 注册页提供账户名、邮箱、密码确认、强度提示和服务条款勾选；账户名只允许字母、数字、下划线、中划线和点，管理员账号不会通过公开注册生成。
 
 ## Claude / OpenAI 订阅网关
@@ -220,7 +222,7 @@ curl.exe http://localhost:8241/v1/chat/completions `
   -d '{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hello"}],"stream":false,"prompt_cache_key":"chat-001"}'
 ```
 
-OpenAI 订阅账号接管命中账号模型白名单的 `/v1/responses` 和 `/v1/chat/completions` 请求。Claude 订阅账号同时提供统一的 `/v1/chat/completions`、原生 `/v1/messages` 与 `/v1/messages/count_tokens`。Chat Completions 的消息、多模态内容、函数工具、普通 JSON 响应和流式 SSE 会由 SpringBootAI 管理的兼容服务自动转换；未命中任何订阅池的模型仍走 `application.yml` 中已有的普通模型上游。完成后根据上游 usage 进入现有余额与用量统计。
+OpenAI 与 Grok 订阅账号接管命中账号模型白名单的 `/v1/responses` 和 `/v1/chat/completions` 请求。Claude 订阅账号同时提供统一的 `/v1/chat/completions`、原生 `/v1/messages` 与 `/v1/messages/count_tokens`。Kimi Coding、智谱 GLM Coding 和 MiniMax Coding 使用官方 API Key 接入 `/v1/chat/completions`。Chat Completions 的消息、多模态内容、函数工具、普通 JSON 响应和流式 SSE 会进入统一的排队、会话粘滞、计费与失败处理；未命中任何订阅池的模型仍走 `application.yml` 中已有的普通模型上游。
 
 ### Trae 使用 OpenAI 订阅模型
 
@@ -320,7 +322,7 @@ echo 'SQLite 业务数据已清空。现在可以重新启动后端。'
 
 `rose.models` 是独立的模型目录，每个条目都可以指向不同的 OpenAI 兼容网关。只要供应商提供 `/chat/completions` 接口，就不需要修改 Python 代码：
 
-默认配置已将 DeepSeek 模型注释停用，使用 `rose.models: []`，仅保留订阅账号池提供的模型；原条目保留在 YAML 注释中，需要恢复时可取消注释并配置密钥（全部恢复时把 `models: []` 改回 `models:`）。显式空列表不会再生成普通 API 默认模型；省略此配置项仍兼容旧版默认模型配置。下面的第三方模型配置是手动添加示例，不代表默认提供。
+默认配置已将 DeepSeek 模型注释停用，使用 `rose.models: []`，仅保留订阅账号池提供的模型；原条目保留在 YAML 注释中，需要恢复时可取消注释并配置密钥（全部恢复时把 `models: []` 改回 `models:`）。这与账号池新增的 Grok、Kimi Coding、GLM Coding 和 MiniMax Coding 支持相互独立。显式空列表不会再生成普通 API 默认模型；省略此配置项仍兼容旧版默认模型配置。
 
 ```yaml
 rose:

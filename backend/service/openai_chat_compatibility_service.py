@@ -11,7 +11,7 @@ from typing import Any, AsyncIterator
 
 from springbootai import Service, Slf4j
 
-from backend.common.reasoning import requested_reasoning_effort
+from backend.common.reasoning import validated_reasoning_effort
 
 
 @dataclass
@@ -102,7 +102,7 @@ class OpenAIChatCompatibilityService:
             outgoing["reasoning"] = dict(reasoning)
         # A summary-only/empty Responses object must not hide an explicit
         # Chat effort. Missing effort is defaulted once at the gateway boundary.
-        effort = requested_reasoning_effort(payload)
+        effort = validated_reasoning_effort(payload)
         if effort is not None:
             outgoing.setdefault("reasoning", {})["effort"] = effort
 

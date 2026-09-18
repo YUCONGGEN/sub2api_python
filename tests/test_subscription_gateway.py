@@ -11,13 +11,19 @@ import httpx
 import pytest
 from cryptography.fernet import Fernet
 
-from backend.common.codex_client import DEFAULT_CODEX_CLIENT_VERSION, codex_client_version
+from backend.common.codex_client import (
+    DEFAULT_CODEX_CLIENT_VERSION,
+    codex_client_version,
+    normalize_codex_client_version,
+)
+from backend.common.subscription_providers import DEFAULT_MODELS, SUBSCRIPTION_PROVIDERS
 from backend.protocol import subscription_adapter
 from backend.service.credential_cipher_service import CredentialCipherService
 from backend.service.openai_chat_compatibility_service import OpenAIChatCompatibilityService
 from backend.service.subscription_account_pool_service import SubscriptionAccountPoolService
 from backend.service.subscription_account_service import SubscriptionAccountService
 from backend.service.subscription_gateway_service import SubscriptionGatewayService
+from backend.service.subscription_gateway_service import SubscriptionGatewayResponse
 from backend.service.subscription_oauth_service import SubscriptionOAuthService
 
 
@@ -134,6 +140,88 @@ def test_codex_auth_json_import_extracts_nested_credentials():
         "account_id": "account-17",
         "email": "owner@example.com",
     }
+
+
+@pytest.mark.parametrize("provider", ["grok", "kimi", "zhipu", "minimax"])
+def test_extended_subscription_providers_have_safe_defaults(provider):
+    assert SubscriptionAccountService.normalize_provider(provider) == provider
+    assert SubscriptionAccountService.normalize_models(provider, "") == DEFAULT_MODELS[provider]
+    assert SUBSCRIPTION_PROVIDERS[provider]["models"]
+
+
+def test_grok_oauth_authorization_and_token_exchange(monkeypatch):
+    oauth = SubscriptionOAuthService()
+    oauth.init()
+    generated = oauth.generate_authorization("grok", 17)
+    query = parse_qs(urlparse(generated["authorization_url"]).query)
+
+    assert urlparse(generated["authorization_url"]).netloc == "auth.x.ai"
+    assert query["client_id"] == ["b1a00492-073a-47ea-816f-4c329264a828"]
+    assert query["scope"] == ["openid profile email offline_access grok-cli:access api:access"]
+    assert query["nonce"][0]
+    captured = {}
+
+    async def fake_post(url, **kwargs):
+        captured.update({"url": url, **kwargs})
+        return {"access_token": "grok-access", "refresh_token": "grok-refresh", "expires_in": 3600}
+
+    monkeypatch.setattr(oauth, "_post_token", fake_post)
+    credentials = asyncio.run(oauth.exchange(
+        "grok",
+        session_id=generated["session_id"],
+        callback_value=f"http://127.0.0.1:56121/callback?code=ok&state={query['state'][0]}",
+        state="",
+        admin_id=17,
+    ))
+
+    assert captured["url"] == "https://auth.x.ai/oauth2/token"
+    assert captured["data"]["code_verifier"]
+    assert credentials["access_token"] == "grok-access"
+    assert credentials["base_url"] == "https://cli-chat-proxy.grok.com/v1"
+
+
+@pytest.mark.parametrize(
+    ("provider", "expected_url"),
+    [
+        ("grok", "https://cli-chat-proxy.grok.com/v1/responses"),
+        ("kimi", "https://api.kimi.com/coding/v1/chat/completions"),
+        ("zhipu", "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions"),
+        ("minimax", "https://api.minimaxi.com/v1/chat/completions"),
+    ],
+)
+def test_extended_provider_request_targets_and_headers(provider, expected_url):
+    gateway = SubscriptionGatewayService(None, None)
+    gateway.grok_client_version = "0.2.120"
+    url, headers = gateway._provider_request(
+        provider, {"access_token": "secret"}, {"id": 1}, {}, True,
+    )
+
+    assert url == expected_url
+    assert headers["Authorization"] == "Bearer secret"
+    assert headers["Accept"] == "text/event-stream"
+    if provider == "grok":
+        assert headers["X-XAI-Token-Auth"] == "xai-grok-cli"
+        assert headers["x-grok-client-version"] == "0.2.120"
+
+
+def test_compatible_chat_route_is_direct_and_enables_stream_usage(monkeypatch):
+    gateway = SubscriptionGatewayService(None, None)
+    captured = {}
+
+    async def fake_proxy(provider, model, payload, user_id, incoming_headers, **kwargs):
+        captured.update({"provider": provider, "model": model, "payload": payload, "user_id": user_id})
+        return SubscriptionGatewayResponse(
+            200, {"content-type": "application/json"}, body=b'{"choices":[]}',
+        )
+
+    monkeypatch.setattr(gateway, "_proxy", fake_proxy)
+    result = asyncio.run(gateway.proxy_chat("kimi", {
+        "model": "kimi-for-coding", "messages": [{"role": "user", "content": "hi"}], "stream": True,
+    }, 9))
+
+    assert result.status_code == 200
+    assert captured["provider"] == "kimi"
+    assert captured["payload"]["stream_options"] == {"include_usage": True}
 
 
 def test_openai_browser_session_jwe_is_rejected_before_saving():
@@ -890,7 +978,7 @@ def test_non_subscription_chat_bypasses_trae_compatibility(monkeypatch):
         assert payload == original
 
 
-def test_codex_native_route_bypasses_trae_filter_and_preserves_sse(monkeypatch):
+def test_codex_native_route_uses_shared_sanitizer_and_preserves_sse(monkeypatch):
     chunks = [
         b'data: {"type":"response.output_text.delta","delta":"hello"}\n\n',
         b'data: {"type":"response.completed","response":{"usage":{"input_tokens":4,"output_tokens":2}}}\n\n',
@@ -908,7 +996,8 @@ def test_codex_native_route_bypasses_trae_filter_and_preserves_sse(monkeypatch):
         "reasoning": {"effort": "high", "summary": "auto"},
         "include": ["reasoning.encrypted_content"], "prompt_cache_key": "codex-session",
         "tools": [{"type": "function", "name": "inspect", "parameters": {"type": "object"}, "async": True}],
-        # These sentinel fields must not be filtered on the native route.
+        # Public Responses fields rejected by the subscription transport are
+        # filtered on native and Chat compatibility routes alike.
         "metadata": {"test": "untouched"}, "truncation": "disabled", "temperature": 1,
     }
     original = deepcopy(payload)
@@ -918,9 +1007,203 @@ def test_codex_native_route_bypasses_trae_filter_and_preserves_sse(monkeypatch):
         return b"".join([chunk async for chunk in response.body_iterator])
 
     assert asyncio.run(scenario()) == b"".join(chunks)
-    assert json.loads(client.requests[0].content) == original
+    forwarded = json.loads(client.requests[0].content)
+    assert not {"metadata", "truncation", "temperature"} & forwarded.keys()
+    assert forwarded == {key: value for key, value in original.items() if key not in {"metadata", "truncation", "temperature"}}
     assert payload == original
     assert client.calls == 1
+
+
+def test_native_responses_promotes_instructions_and_legacy_tools_without_mutating_input():
+    gateway = SubscriptionGatewayService(None, None)
+    payload = {
+        "model": "gpt-6-astra",
+        "input": [
+            {"role": "system", "content": "System rule"},
+            {"role": "developer", "content": [{"type": "input_text", "text": "Developer rule"}]},
+            {"role": "user", "content": "hello"},
+        ],
+        "instructions": "Existing rule",
+        "functions": [{"name": "lookup", "description": "Lookup", "parameters": {"type": "object"}}],
+        "function_call": {"name": "lookup"},
+        "reasoning_effort": "HIGH",
+        "metadata": {"client": "native"},
+    }
+    original = deepcopy(payload)
+
+    outgoing = gateway._prepare_openai_subscription_payload(payload)
+
+    assert outgoing["instructions"] == "System rule\n\nDeveloper rule\n\nExisting rule"
+    assert outgoing["input"] == [{"role": "user", "content": "hello"}]
+    assert outgoing["tools"] == [{
+        "type": "function", "name": "lookup", "description": "Lookup",
+        "parameters": {"type": "object"},
+    }]
+    assert outgoing["tool_choice"] == {"type": "function", "name": "lookup"}
+    assert outgoing["reasoning"]["effort"] == "high"
+    assert "metadata" not in outgoing
+    assert outgoing["store"] is False
+    assert payload == original
+
+
+def test_native_responses_normalizes_new_client_compatibility_fields_without_mutating_input():
+    gateway = SubscriptionGatewayService(None, None)
+    payload = {
+        "model": "  gpt-5.6-sol  ",
+        "prompt": "legacy prompt",
+        "commands": ["unsupported"],
+        "reasoning": {"mode": "pro"},
+        "input": [{
+            "role": "user",
+            "content": "hello",
+            "internal_chat_message_metadata_passthrough": {"private": True},
+        }],
+        "text": {"format": {
+            "type": "json_schema",
+            "schema": {
+                "properties": {
+                    "items": {"items": {"type": "string"}, "uniqueItems": True},
+                },
+                "minProperties": 1,
+            },
+        }},
+        "tools": [{
+            "type": "image_generation", "model": "gpt-image-2",
+            "format": "png", "compression": 80, "input_fidelity": "high",
+        }],
+        "prompt_cache_options": {"retention": "24h"},
+    }
+    original = deepcopy(payload)
+
+    outgoing = gateway._prepare_openai_subscription_payload(payload)
+
+    assert outgoing["model"] == "gpt-5.6-sol"
+    assert "prompt" not in outgoing and "commands" not in outgoing
+    assert "internal_chat_message_metadata_passthrough" not in outgoing["input"][0]
+    assert outgoing["reasoning"]["effort"] == "max"
+    assert "mode" not in outgoing["reasoning"]
+    schema = outgoing["text"]["format"]["schema"]
+    assert schema["type"] == "object"
+    assert "minProperties" not in schema
+    assert schema["properties"]["items"]["type"] == "array"
+    assert "uniqueItems" not in schema["properties"]["items"]
+    assert outgoing["tools"] == [{
+        "type": "image_generation", "model": "gpt-image-2",
+        "output_format": "png", "output_compression": 80,
+    }]
+    assert "prompt_cache_options" not in outgoing
+    assert payload == original
+
+
+def test_native_responses_uses_legacy_prompt_only_when_input_is_missing():
+    gateway = SubscriptionGatewayService(None, None)
+    from_prompt = gateway._prepare_openai_subscription_payload({
+        "model": "gpt-5.6-sol", "prompt": "legacy",
+    })
+    explicit_input = gateway._prepare_openai_subscription_payload({
+        "model": "gpt-5.6-sol", "prompt": "legacy", "input": "explicit",
+    })
+    assert from_prompt["input"] == "legacy"
+    assert explicit_input["input"] == "explicit"
+    assert "prompt" not in from_prompt and "prompt" not in explicit_input
+
+
+def test_native_responses_preserves_astra_reasoning_mode():
+    gateway = SubscriptionGatewayService(None, None)
+    outgoing = gateway._prepare_openai_subscription_payload({
+        "model": "gpt-6-astra", "input": "hello", "reasoning": {"mode": "pro"},
+    })
+    assert outgoing["reasoning"] == {"mode": "pro", "effort": "high"}
+
+
+@pytest.mark.parametrize("effort", [False, 0, "invalid", "turbo"])
+def test_native_responses_rejects_invalid_reasoning_before_account_use(effort):
+    gateway = SubscriptionGatewayService(None, None)
+    result = asyncio.run(gateway.proxy_openai({
+        "model": "gpt-6-astra", "input": "hello", "reasoning_effort": effort,
+    }, 9))
+    assert result.status_code == 400
+    assert b"reasoning effort" in (result.body or b"")
+
+
+@pytest.mark.parametrize("policy, supplied, expected", [
+    ("pass", "fast", "priority"),
+    ("pass", "flex", "flex"),
+    ("filter", "priority", None),
+    ("force_priority", None, "priority"),
+    ("force_priority", "flex", "priority"),
+])
+def test_openai_service_tier_policy(policy, supplied, expected):
+    gateway = SubscriptionGatewayService(None, None)
+    gateway.openai_service_tier_policy = policy
+    payload = {"model": "gpt-6-astra", "input": "hello"}
+    if supplied is not None:
+        payload["service_tier"] = supplied
+    outgoing = gateway._prepare_openai_subscription_payload(payload)
+    assert outgoing.get("service_tier") == expected
+
+
+def test_openai_service_tier_rejects_unknown_value():
+    gateway = SubscriptionGatewayService(None, None)
+    with pytest.raises(ValueError, match="service_tier"):
+        gateway._prepare_openai_subscription_payload({
+            "model": "gpt-6-astra", "input": "hello", "service_tier": "turbo",
+        })
+
+
+@pytest.mark.parametrize("tag, expected", [
+    ("rust-v0.153.2", "0.153.2"),
+    ("v1.2.3", "1.2.3"),
+    ("0.200.1-alpha.4", "0.200.1-alpha.4"),
+    ("latest", ""),
+    ("0.1.2\r\nInjected: value", ""),
+])
+def test_codex_release_version_normalization(tag, expected):
+    assert normalize_codex_client_version(tag) == expected
+
+
+def test_codex_version_sync_updates_valid_release_and_keeps_fallback_on_error(monkeypatch):
+    gateway = SubscriptionGatewayService(None, None)
+    gateway.enabled = True
+    gateway.codex_version_sync_enabled = True
+    gateway.codex_release_url = "https://example.test/latest"
+    gateway.connect_timeout = 5
+    gateway.logger = logging.getLogger("test.codex.version.sync")
+
+    class ReleaseResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"tag_name": "rust-v0.200.1"}
+
+    monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: ReleaseResponse())
+    gateway.sync_subscription_client_versions()
+    assert gateway.codex_client_version == "0.200.1"
+
+    monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: (_ for _ in ()).throw(httpx.ConnectError("offline")))
+    gateway.sync_subscription_client_versions()
+    assert gateway.codex_client_version == "0.200.1"
+
+
+def test_claude_version_sync_uses_the_same_validated_release_path(monkeypatch):
+    gateway = SubscriptionGatewayService(None, None)
+    gateway.enabled = True
+    gateway.claude_version_sync_enabled = True
+    gateway.claude_release_url = "https://example.test/claude/latest"
+    gateway.connect_timeout = 5
+    gateway.logger = logging.getLogger("test.claude.version.sync")
+
+    class ReleaseResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"tag_name": "v2.1.300"}
+
+    monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: ReleaseResponse())
+    gateway.sync_subscription_client_versions()
+    assert gateway.claude_client_version == "2.1.300"
 
 
 def test_cancel_before_first_semantic_stream_event_closes_response_and_account_slot():

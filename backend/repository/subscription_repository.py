@@ -6,6 +6,8 @@ from typing import Any, Mapping
 
 from springbootai import Autowired, Repository
 
+from backend.common.subscription_providers import SUBSCRIPTION_PROVIDERS
+
 
 @Repository("subscription_repository")
 class SubscriptionRepository:
@@ -32,8 +34,10 @@ class SubscriptionRepository:
             "pages": pages,
             "summary": {
                 "total": int(self.mapper.count_accounts("") or 0),
-                "openai": int(self.mapper.count_accounts("openai") or 0),
-                "claude": int(self.mapper.count_accounts("claude") or 0),
+                **{
+                    item: int(self.mapper.count_accounts(item) or 0)
+                    for item in SUBSCRIPTION_PROVIDERS
+                },
             },
         }
 

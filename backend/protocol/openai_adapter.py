@@ -14,6 +14,7 @@ from backend.service.conversation_service import ConversationService
 from backend.common.multimodal import normalize_content, parse_dsml_tool_calls
 from backend.protocol.subscription_adapter import (
     maybe_proxy_claude_chat_subscription,
+    maybe_proxy_compatible_chat_subscription,
     maybe_proxy_openai_chat_subscription,
     maybe_proxy_openai_subscription,
 )
@@ -97,6 +98,9 @@ async def openai_chat(request: Request):
     if subscription_response is not None:
         return subscription_response
     subscription_response = await maybe_proxy_claude_chat_subscription(request, payload, user)
+    if subscription_response is not None:
+        return subscription_response
+    subscription_response = await maybe_proxy_compatible_chat_subscription(request, payload, user)
     if subscription_response is not None:
         return subscription_response
     request_id = "chatcmpl-" + uuid.uuid4().hex

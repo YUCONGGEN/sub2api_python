@@ -16,6 +16,7 @@ import httpx
 from springbootai import PostConstruct, Service, get_config
 
 from backend.common.codex_client import codex_client_version, codex_identity_headers
+from backend.common.subscription_providers import OAUTH_PROVIDERS
 
 OPENAI_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 OPENAI_AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize"
@@ -28,6 +29,12 @@ CLAUDE_AUTHORIZE_URL = "https://claude.com/cai/oauth/authorize"
 CLAUDE_TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
 CLAUDE_REDIRECT_URI = "https://platform.claude.com/oauth/code/callback"
 CLAUDE_SCOPES = "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
+
+GROK_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828"
+GROK_AUTHORIZE_URL = "https://auth.x.ai/oauth2/authorize"
+GROK_TOKEN_URL = "https://auth.x.ai/oauth2/token"
+GROK_REDIRECT_URI = "http://127.0.0.1:56121/callback"
+GROK_SCOPES = "openid profile email offline_access grok-cli:access api:access"
 
 
 def _b64url(value: bytes) -> str:
@@ -54,8 +61,8 @@ class SubscriptionOAuthService:
     @staticmethod
     def _provider(provider: str) -> str:
         value = str(provider or "").strip().lower()
-        if value not in {"openai", "claude"}:
-            raise ValueError("provider 只能是 openai 或 claude")
+        if value not in OAUTH_PROVIDERS:
+            raise ValueError("该供应商不支持 OAuth 授权")
         return value
 
     def generate_authorization(self, provider: str, admin_id: int) -> dict[str, str]:
@@ -76,6 +83,7 @@ class SubscriptionOAuthService:
                 "state": state,
                 "verifier": verifier,
                 "created_at": created,
+                "nonce": secrets.token_hex(16),
             }
         if provider == "openai":
             query = {
@@ -90,7 +98,7 @@ class SubscriptionOAuthService:
                 "codex_cli_simplified_flow": "true",
             }
             authorize_url = OPENAI_AUTHORIZE_URL + "?" + urlencode(query)
-        else:
+        elif provider == "claude":
             query = {
                 "code": "true",
                 "client_id": CLAUDE_CLIENT_ID,
@@ -102,6 +110,20 @@ class SubscriptionOAuthService:
                 "state": state,
             }
             authorize_url = CLAUDE_AUTHORIZE_URL + "?" + urlencode(query)
+        else:
+            query = {
+                "response_type": "code",
+                "client_id": GROK_CLIENT_ID,
+                "redirect_uri": GROK_REDIRECT_URI,
+                "scope": GROK_SCOPES,
+                "state": state,
+                "nonce": self._sessions[session_id]["nonce"],
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+                "plan": "generic",
+                "referrer": "sub2api",
+            }
+            authorize_url = GROK_AUTHORIZE_URL + "?" + urlencode(query)
         return {"provider": provider, "authorization_url": authorize_url, "session_id": session_id}
 
     def _consume_session(self, session_id: str, provider: str, admin_id: int, state: str) -> dict[str, Any]:
@@ -149,7 +171,7 @@ class SubscriptionOAuthService:
                 "code_verifier": session["verifier"],
             }
             response = await self._post_token(OPENAI_TOKEN_URL, data=form, headers=codex_identity_headers(self.codex_client_version))
-        else:
+        elif provider == "claude":
             body = {
                 "grant_type": "authorization_code",
                 "client_id": CLAUDE_CLIENT_ID,
@@ -159,6 +181,17 @@ class SubscriptionOAuthService:
                 "state": returned_state,
             }
             response = await self._post_token(CLAUDE_TOKEN_URL, json_body=body, headers={"User-Agent": "axios/1.13.6"})
+        else:
+            form = {
+                "grant_type": "authorization_code",
+                "client_id": GROK_CLIENT_ID,
+                "code": code,
+                "redirect_uri": GROK_REDIRECT_URI,
+                "code_verifier": session["verifier"],
+            }
+            response = await self._post_token(
+                GROK_TOKEN_URL, data=form, headers={"User-Agent": "sub2api-grok-oauth/1.0"},
+            )
         credentials = self._normalize_token(provider, response)
         with self._lock:
             self._sessions.pop(str(session_id), None)
@@ -179,11 +212,21 @@ class SubscriptionOAuthService:
                 },
                 headers=codex_identity_headers(self.codex_client_version),
             )
-        else:
+        elif provider == "claude":
             response = await self._post_token(
                 CLAUDE_TOKEN_URL,
                 json_body={"grant_type": "refresh_token", "refresh_token": refresh_token, "client_id": CLAUDE_CLIENT_ID},
                 headers={"User-Agent": "axios/1.13.6"},
+            )
+        else:
+            response = await self._post_token(
+                GROK_TOKEN_URL,
+                data={
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh_token,
+                    "client_id": GROK_CLIENT_ID,
+                },
+                headers={"User-Agent": "sub2api-grok-oauth/1.0"},
             )
         result = self._normalize_token(provider, response)
         if not result.get("refresh_token"):
@@ -243,7 +286,7 @@ class SubscriptionOAuthService:
                 "plan_type": str(auth.get("chatgpt_plan_type") or ""),
                 "client_id": OPENAI_CLIENT_ID,
             })
-        else:
+        elif provider == "claude":
             account = payload.get("account") if isinstance(payload.get("account"), dict) else {}
             organization = payload.get("organization") if isinstance(payload.get("organization"), dict) else {}
             result.update({
@@ -251,6 +294,17 @@ class SubscriptionOAuthService:
                 "account_id": str(account.get("uuid") or ""),
                 "organization_id": str(organization.get("uuid") or ""),
                 "client_id": CLAUDE_CLIENT_ID,
+            })
+        else:
+            id_token = str(payload.get("id_token") or "")
+            if id_token:
+                result["id_token"] = id_token
+            claims = self._decode_jwt_payload(id_token or result["access_token"])
+            result.update({
+                "email": str(claims.get("email") or ""),
+                "account_id": str(claims.get("sub") or ""),
+                "client_id": GROK_CLIENT_ID,
+                "base_url": "https://cli-chat-proxy.grok.com/v1",
             })
         return result
 

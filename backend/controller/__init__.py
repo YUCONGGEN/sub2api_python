@@ -7,12 +7,14 @@ the application layer annotation-first.
 
 from .payment_controller import PaymentController, register_payment_routes
 from .proxy_controller import ProxyController, register_proxy_route
+from .admin_config_controller import AdminConfigController
 from .subscription_admin_controller import SubscriptionAdminController
 from .subscription_controller import SubscriptionController
 
 __all__ = [
     "PaymentController",
     "ProxyController",
+    "AdminConfigController",
     "SubscriptionAdminController",
     "SubscriptionController",
     "register_payment_routes",

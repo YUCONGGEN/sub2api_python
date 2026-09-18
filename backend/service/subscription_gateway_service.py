@@ -1,6 +1,7 @@
-"""Managed upstream transport for Claude/OpenAI subscription-backed API calls."""
+"""Managed upstream transport for subscription and coding-plan API calls."""
 
 import asyncio
+import copy
 import hashlib
 import json
 import math
@@ -12,10 +13,28 @@ from datetime import datetime, timezone
 from typing import Any, AsyncIterator
 
 import httpx
-from springbootai import Autowired, PostConstruct, PreDestroy, Service, Slf4j, get_config
+from springbootai import Autowired, PostConstruct, PreDestroy, Scheduled, Service, Slf4j, get_config
 
-from backend.common.codex_client import DEFAULT_CODEX_CLIENT_VERSION, codex_client_version, codex_identity_headers
-from backend.common.reasoning import DEFAULT_GPT_REASONING_EFFORT, configured_gpt_reasoning_effort, with_responses_reasoning
+from backend.common.codex_client import (
+    DEFAULT_CODEX_CLIENT_VERSION,
+    DEFAULT_CODEX_RELEASE_URL,
+    codex_client_version,
+    codex_client_version_is_pinned,
+    codex_identity_headers,
+    normalize_codex_client_version,
+)
+from backend.common.reasoning import (
+    DEFAULT_GPT_REASONING_EFFORT,
+    configured_gpt_reasoning_effort,
+    validated_reasoning_effort,
+    with_responses_reasoning,
+)
+from backend.common.subscription_providers import (
+    CHAT_PROVIDERS,
+    RESPONSES_PROVIDERS,
+    SUBSCRIPTION_PROVIDERS,
+    provider_base_url,
+)
 from backend.service.store_service import StoreService
 from backend.service.subscription_account_service import SubscriptionAccountService
 from backend.service.user_group_service import user_group_runtime
@@ -28,6 +47,9 @@ OPENAI_RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-rese
 CLAUDE_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 CLAUDE_COUNT_TOKENS_URL = "https://api.anthropic.com/v1/messages/count_tokens"
 CLAUDE_MODELS_URL = "https://api.anthropic.com/v1/models"
+DEFAULT_CLAUDE_CLIENT_VERSION = "2.1.258"
+DEFAULT_CLAUDE_RELEASE_URL = "https://api.github.com/repos/anthropics/claude-code/releases/latest"
+DEFAULT_GROK_CLIENT_VERSION = "0.2.120"
 
 CAPACITY_ERROR_MARKERS = (
     "selected model is at capacity",
@@ -44,6 +66,24 @@ OPENAI_STREAM_CONTROL_EVENTS = {
     "response.in_progress",
     "response.queued",
 }
+
+OPENAI_SUBSCRIPTION_UNSUPPORTED_FIELDS = {
+    "chat_template_kwargs",
+    "user",
+    "metadata",
+    "prompt_cache_retention",
+    "prompt_cache_options",
+    "safety_identifier",
+    "stream_options",
+    "truncation",
+    "stop_sequences",
+    "temperature",
+    "top_p",
+    "frequency_penalty",
+    "presence_penalty",
+}
+OPENAI_SERVICE_TIERS = {"auto", "default", "fast", "flex", "priority", "scale", "ultrafast"}
+OPENAI_SERVICE_TIER_POLICIES = {"pass", "filter", "force_priority"}
 
 
 @dataclass
@@ -82,6 +122,8 @@ class SubscriptionGatewayService:
         self._quota_task_accounts: set[int] = set()
         self.max_queued_requests = 200
         self.codex_client_version = DEFAULT_CODEX_CLIENT_VERSION
+        self.claude_client_version = DEFAULT_CLAUDE_CLIENT_VERSION
+        self.grok_client_version = DEFAULT_GROK_CLIENT_VERSION
         self.gpt_default_reasoning_effort = DEFAULT_GPT_REASONING_EFFORT
 
     @PostConstruct
@@ -96,6 +138,27 @@ class SubscriptionGatewayService:
         self.gpt_default_reasoning_effort = configured_gpt_reasoning_effort(config)
         cfg = config.get("rose", {}).get("subscription-gateway", {})
         self.codex_client_version = codex_client_version(cfg)
+        self.codex_client_version_pinned = codex_client_version_is_pinned(cfg)
+        self.codex_version_sync_enabled = (
+            str(cfg.get("codex-version-auto-sync", True)).strip().lower() in {"1", "true", "yes", "on"}
+            and not self.codex_client_version_pinned
+        )
+        self.codex_release_url = str(cfg.get("codex-version-release-url") or DEFAULT_CODEX_RELEASE_URL).strip()
+        raw_claude_version = str(cfg.get("claude-client-version") or "").strip()
+        if raw_claude_version:
+            normalized_claude_version = normalize_codex_client_version(raw_claude_version)
+            if not normalized_claude_version:
+                raise ValueError("claude-client-version 必须是有效版本号，例如 2.1.258")
+            self.claude_client_version = normalized_claude_version
+        self.claude_version_sync_enabled = (
+            str(cfg.get("claude-version-auto-sync", True)).strip().lower() in {"1", "true", "yes", "on"}
+            and not raw_claude_version
+        )
+        self.claude_release_url = str(cfg.get("claude-version-release-url") or DEFAULT_CLAUDE_RELEASE_URL).strip()
+        self.grok_client_version = str(cfg.get("grok-client-version") or DEFAULT_GROK_CLIENT_VERSION).strip()
+        self.openai_service_tier_policy = str(cfg.get("openai-service-tier-policy") or "pass").strip().lower()
+        if self.openai_service_tier_policy not in OPENAI_SERVICE_TIER_POLICIES:
+            raise ValueError("openai-service-tier-policy 只能是 pass、filter 或 force_priority")
         self.enabled = str(cfg.get("enabled", True)).strip().lower() in {"1", "true", "yes", "on"}
         self.timeout = max(5.0, min(900.0, float(cfg.get("request-timeout-seconds", 600) or 600)))
         self.connect_timeout = max(1.0, min(60.0, float(cfg.get("connect-timeout-seconds", 10) or 10)))
@@ -128,6 +191,43 @@ class SubscriptionGatewayService:
             self.capacity_retries,
             int(self.session_affinity_ttl),
         )
+
+    @Scheduled(fixed_rate=21600000, initial_delay=5000)
+    def sync_subscription_client_versions(self) -> None:
+        """Refresh outbound CLI identities without blocking startup/requests."""
+        if not getattr(self, "enabled", False):
+            return
+        targets = []
+        if getattr(self, "codex_version_sync_enabled", False):
+            targets.append(("Codex", "codex_client_version", self.codex_release_url))
+        if getattr(self, "claude_version_sync_enabled", False):
+            targets.append(("Claude Code", "claude_client_version", self.claude_release_url))
+        for label, attribute, url in targets:
+            try:
+                response = httpx.get(
+                    url,
+                    headers={"Accept": "application/vnd.github+json", "User-Agent": "rose-ai-proxy"},
+                    timeout=min(10.0, max(2.0, float(getattr(self, "connect_timeout", 5.0)))),
+                    follow_redirects=True,
+                )
+                response.raise_for_status()
+                release = response.json()
+                version = normalize_codex_client_version(
+                    release.get("tag_name") if isinstance(release, dict) else ""
+                )
+                if not version:
+                    raise ValueError("最新版发布标签不包含有效版本")
+                previous = str(getattr(self, attribute))
+                setattr(self, attribute, version)
+                if previous != version:
+                    self.logger.info("%s 客户端版本已自动同步 %s -> %s", label, previous, version)
+            except Exception as exc:
+                self.logger.warning(
+                    "%s 客户端版本自动同步失败，继续使用 %s error=%s",
+                    label,
+                    getattr(self, attribute),
+                    str(exc)[:300],
+                )
 
     def _account_semaphore(self, account_id: int) -> asyncio.Semaphore:
         loop = asyncio.get_running_loop()
@@ -485,8 +585,7 @@ class SubscriptionGatewayService:
         })
         return headers
 
-    @staticmethod
-    def _claude_headers(credentials: dict[str, Any], incoming: dict[str, str], stream: bool) -> dict[str, str]:
+    def _claude_headers(self, credentials: dict[str, Any], incoming: dict[str, str], stream: bool) -> dict[str, str]:
         required_betas = [
             "claude-code-20250219",
             "oauth-2025-04-20",
@@ -505,7 +604,7 @@ class SubscriptionGatewayService:
             "Accept": "text/event-stream" if stream else "application/json",
             "Anthropic-Version": str(incoming.get("anthropic-version") or "2023-06-01"),
             "Anthropic-Beta": ",".join(betas),
-            "User-Agent": "claude-cli/2.1.220 (external, cli)",
+            "User-Agent": f"claude-cli/{self.claude_client_version} (external, cli)",
             "X-App": "cli",
             "X-Stainless-Lang": "js",
             "X-Stainless-Package-Version": "0.94.0",
@@ -515,6 +614,39 @@ class SubscriptionGatewayService:
             "X-Stainless-Timeout": "600",
             "Anthropic-Dangerous-Direct-Browser-Access": "true",
         }
+
+    def _grok_headers(self, credentials: dict[str, Any], stream: bool) -> dict[str, str]:
+        return {
+            "Authorization": "Bearer " + str(credentials.get("access_token") or ""),
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream" if stream else "application/json",
+            "X-XAI-Token-Auth": "xai-grok-cli",
+            "x-grok-client-version": self.grok_client_version,
+            "x-grok-client-identifier": "grok-shell",
+            "User-Agent": f"xai-grok-workspace/{self.grok_client_version}",
+        }
+
+    @staticmethod
+    def _compatible_headers(credentials: dict[str, Any], stream: bool) -> dict[str, str]:
+        return {
+            "Authorization": "Bearer " + str(credentials.get("access_token") or ""),
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream" if stream else "application/json",
+            "User-Agent": "Rose-Subscription-Gateway/1.0",
+        }
+
+    def _provider_request(self, provider: str, credentials: dict[str, Any], account: dict[str, Any], incoming: dict[str, str], stream: bool, *, count_tokens: bool = False) -> tuple[str, dict[str, str]]:
+        if provider == "openai":
+            return OPENAI_RESPONSES_URL, self._openai_headers(credentials, account, stream)
+        if provider == "claude":
+            url = CLAUDE_COUNT_TOKENS_URL if count_tokens else CLAUDE_MESSAGES_URL
+            return url, self._claude_headers(credentials, incoming, stream)
+        base_url = provider_base_url(provider)
+        if provider == "grok":
+            return base_url + "/responses", self._grok_headers(credentials, stream)
+        if provider in CHAT_PROVIDERS:
+            return base_url + "/chat/completions", self._compatible_headers(credentials, stream)
+        raise ValueError(f"不支持的订阅供应商：{provider}")
 
     @staticmethod
     def _safe_response_headers(response: httpx.Response) -> dict[str, str]:
@@ -546,18 +678,245 @@ class SubscriptionGatewayService:
         except (ValueError, UnicodeError, TypeError):
             return body.decode("utf-8", errors="replace")[:1000]
 
-    async def proxy_openai(self, payload: dict[str, Any], user_id: int) -> SubscriptionGatewayResponse:
-        model = str(payload.get("model") or "").strip()
-        if not model:
-            return self._json_error(400, "model is required", "invalid_request_error")
-        # Apply the default before _proxy snapshots activity and sends JSON:
-        # the panel must show the effort actually requested from upstream.
-        outgoing = with_responses_reasoning(payload, self.gpt_default_reasoning_effort)
-        # The public Responses API calls this field ``max_output_tokens``, but
-        # ChatGPT's Codex subscription transport currently accepts
-        # ``max_tokens`` and rejects ``max_output_tokens``.  Accept either
-        # public spelling and normalize it to the subscription wire format
-        # before an account is acquired.
+    def _apply_openai_service_tier_policy(self, payload: dict[str, Any]) -> None:
+        policy = getattr(self, "openai_service_tier_policy", "pass")
+        raw = payload.get("service_tier")
+        if raw is None or (isinstance(raw, str) and not raw.strip()):
+            payload.pop("service_tier", None)
+            if policy == "force_priority":
+                payload["service_tier"] = "priority"
+            return
+        if not isinstance(raw, str):
+            raise ValueError("service_tier 必须是字符串")
+        tier = raw.strip().lower()
+        if tier not in OPENAI_SERVICE_TIERS:
+            raise ValueError(
+                "service_tier 必须是 auto、default、fast、flex、priority、scale 或 ultrafast"
+            )
+        if policy == "filter":
+            payload.pop("service_tier", None)
+        elif policy == "force_priority":
+            payload["service_tier"] = "priority"
+        else:
+            # ChatGPT/Codex uses priority as the upstream spelling for the
+            # client-facing fast alias.
+            payload["service_tier"] = "priority" if tier == "fast" else tier
+
+    @staticmethod
+    def _responses_text_content(content: Any) -> str | None:
+        if isinstance(content, str):
+            return content
+        if not isinstance(content, list):
+            return None
+        text_parts: list[str] = []
+        for part in content:
+            if not isinstance(part, dict) or str(part.get("type") or "") not in {"text", "input_text"}:
+                return None
+            text_parts.append(str(part.get("text") or ""))
+        return "\n".join(text_parts)
+
+    @classmethod
+    def _promote_openai_instructions(cls, payload: dict[str, Any]) -> None:
+        source = payload.get("input")
+        if not isinstance(source, list):
+            return
+        promoted: list[str] = []
+        remaining: list[Any] = []
+        changed = False
+        for item in source:
+            if not isinstance(item, dict):
+                remaining.append(item)
+                continue
+            role = str(item.get("role") or "").strip().lower()
+            if role not in {"system", "developer"}:
+                remaining.append(item)
+                continue
+            text = cls._responses_text_content(item.get("content"))
+            if text is None:
+                # The internal Codex transport rejects system, but developer
+                # can preserve non-text structured content without dropping it.
+                copy = dict(item)
+                copy["role"] = "developer"
+                remaining.append(copy)
+                changed = changed or role == "system"
+                continue
+            if text.strip():
+                promoted.append(text.strip())
+            changed = True
+        if promoted:
+            existing = str(payload.get("instructions") or "").strip()
+            payload["instructions"] = "\n\n".join(promoted + ([existing] if existing else []))
+        if changed:
+            payload["input"] = remaining
+
+    @staticmethod
+    def _normalize_openai_legacy_tools(payload: dict[str, Any]) -> None:
+        functions = payload.pop("functions", None)
+        if functions is not None and "tools" not in payload:
+            if not isinstance(functions, list):
+                raise ValueError("functions 必须是数组")
+            tools: list[dict[str, Any]] = []
+            for function in functions:
+                if not isinstance(function, dict) or not str(function.get("name") or "").strip():
+                    raise ValueError("每个 function 都必须包含 name")
+                tool = {
+                    "type": "function",
+                    "name": str(function["name"]).strip(),
+                    "parameters": function.get("parameters") if isinstance(function.get("parameters"), dict) else {"type": "object"},
+                }
+                if function.get("description") is not None:
+                    tool["description"] = str(function.get("description") or "")
+                if function.get("strict") is not None:
+                    tool["strict"] = bool(function.get("strict"))
+                tools.append(tool)
+            payload["tools"] = tools
+
+        function_call = payload.pop("function_call", None)
+        if function_call is None or "tool_choice" in payload:
+            return
+        if isinstance(function_call, str):
+            if function_call not in {"auto", "none", "required"}:
+                raise ValueError("function_call 字符串必须是 auto、none 或 required")
+            payload["tool_choice"] = function_call
+        elif isinstance(function_call, dict) and str(function_call.get("name") or "").strip():
+            payload["tool_choice"] = {"type": "function", "name": str(function_call["name"]).strip()}
+        else:
+            raise ValueError("function_call 格式无效")
+
+    @staticmethod
+    def _normalize_openai_compatibility_fields(payload: dict[str, Any]) -> None:
+        """Normalize legacy/custom-provider fields accepted by newer clients."""
+        if "prompt" in payload:
+            if payload.get("input") is None and payload.get("prompt") is not None:
+                payload["input"] = payload["prompt"]
+            payload.pop("prompt", None)
+        payload.pop("commands", None)
+
+        source = payload.get("input")
+        if isinstance(source, list):
+            for item in source:
+                if isinstance(item, dict):
+                    item.pop("internal_chat_message_metadata_passthrough", None)
+
+    @staticmethod
+    def _normalize_openai_reasoning_mode(payload: dict[str, Any]) -> None:
+        reasoning = payload.get("reasoning")
+        if not isinstance(reasoning, dict) or "mode" not in reasoning:
+            return
+        model = str(payload.get("model") or "").strip().lower()
+        # Astra supports mode and effort as independent native parameters.
+        if model == "gpt-6" or model == "gpt-6-astra" or model.startswith("gpt-6-astra-"):
+            return
+        mode = reasoning.pop("mode", None)
+        if not str(reasoning.get("effort") or "").strip() and str(mode or "").strip().lower() == "pro":
+            reasoning["effort"] = "max"
+        if not reasoning:
+            payload.pop("reasoning", None)
+
+    @classmethod
+    def _normalize_openai_json_schema(cls, schema: dict[str, Any]) -> None:
+        """Remove schema keywords rejected by the internal Responses endpoint."""
+        schema.pop("uniqueItems", None)
+        schema.pop("minProperties", None)
+        if not schema.get("type"):
+            if schema.get("properties") is not None:
+                schema["type"] = "object"
+            elif schema.get("items") is not None:
+                schema["type"] = "array"
+
+        properties = schema.get("properties")
+        if isinstance(properties, dict):
+            for child in properties.values():
+                if isinstance(child, dict):
+                    cls._normalize_openai_json_schema(child)
+
+        items = schema.get("items")
+        if isinstance(items, dict):
+            cls._normalize_openai_json_schema(items)
+        elif isinstance(items, list):
+            for child in items:
+                if isinstance(child, dict):
+                    cls._normalize_openai_json_schema(child)
+
+        for key in (
+            "additionalProperties", "additionalItems", "contains", "not", "if", "then", "else",
+            "propertyNames", "unevaluatedProperties", "unevaluatedItems",
+        ):
+            child = schema.get(key)
+            if isinstance(child, dict):
+                cls._normalize_openai_json_schema(child)
+        for key in ("anyOf", "oneOf", "allOf", "prefixItems"):
+            children = schema.get(key)
+            if isinstance(children, list):
+                for child in children:
+                    if isinstance(child, dict):
+                        cls._normalize_openai_json_schema(child)
+        for key in ("$defs", "definitions", "patternProperties", "dependentSchemas"):
+            children = schema.get(key)
+            if isinstance(children, dict):
+                for child in children.values():
+                    if isinstance(child, dict):
+                        cls._normalize_openai_json_schema(child)
+        dependencies = schema.get("dependencies")
+        if isinstance(dependencies, dict):
+            for child in dependencies.values():
+                if isinstance(child, dict):
+                    cls._normalize_openai_json_schema(child)
+
+    @classmethod
+    def _normalize_openai_response_formats(cls, payload: dict[str, Any]) -> None:
+        candidates: list[Any] = []
+        text = payload.get("text")
+        if isinstance(text, dict):
+            candidates.append(text.get("format"))
+        candidates.append(payload.get("response_format"))
+        for value in candidates:
+            if not isinstance(value, dict) or str(value.get("type") or "").strip() != "json_schema":
+                continue
+            schema = value.get("schema")
+            if isinstance(schema, dict):
+                cls._normalize_openai_json_schema(schema)
+            legacy = value.get("json_schema")
+            if isinstance(legacy, dict) and isinstance(legacy.get("schema"), dict):
+                cls._normalize_openai_json_schema(legacy["schema"])
+
+    @staticmethod
+    def _normalize_openai_image_tools(payload: dict[str, Any]) -> None:
+        tools = payload.get("tools")
+        if not isinstance(tools, list):
+            return
+        for tool in tools:
+            if not isinstance(tool, dict) or str(tool.get("type") or "") != "image_generation":
+                continue
+            if "output_format" not in tool and str(tool.get("format") or "").strip():
+                tool["output_format"] = str(tool["format"]).strip()
+            if "output_compression" not in tool and tool.get("compression") is not None:
+                tool["output_compression"] = tool["compression"]
+            tool.pop("format", None)
+            tool.pop("compression", None)
+            if str(tool.get("model") or "").strip().lower().startswith("gpt-image-2"):
+                tool.pop("input_fidelity", None)
+
+    def _prepare_openai_subscription_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise ValueError("request body must be a JSON object")
+        normalized = copy.deepcopy(payload)
+        model = str(normalized.get("model") or "").strip()
+        if model:
+            normalized["model"] = model
+        self._normalize_openai_compatibility_fields(normalized)
+        self._normalize_openai_reasoning_mode(normalized)
+        reasoning = normalized.get("reasoning")
+        if reasoning is not None and not isinstance(reasoning, dict):
+            raise ValueError("reasoning must be a JSON object")
+        # Validate before applying the configured default so malformed client
+        # input cannot be silently promoted to a valid shared-account request.
+        explicit_effort = validated_reasoning_effort(normalized)
+        outgoing = with_responses_reasoning(normalized, self.gpt_default_reasoning_effort)
+        outgoing = dict(outgoing)
+        if explicit_effort is not None:
+            outgoing["reasoning"] = {**dict(outgoing.get("reasoning") or {}), "effort": explicit_effort}
+
         raw_max_tokens = outgoing.get("max_output_tokens")
         if raw_max_tokens is None:
             raw_max_tokens = outgoing.get("max_completion_tokens")
@@ -570,37 +929,64 @@ class SubscriptionGatewayService:
             try:
                 if isinstance(raw_max_tokens, bool):
                     raise ValueError
-                max_output_tokens = int(raw_max_tokens)
-                if isinstance(raw_max_tokens, float) and not raw_max_tokens.is_integer():
+                max_tokens = int(raw_max_tokens)
+                if max_tokens <= 0 or (isinstance(raw_max_tokens, float) and not raw_max_tokens.is_integer()):
                     raise ValueError
-            except (TypeError, ValueError, OverflowError):
-                return self._json_error(
-                    400,
-                    "max_tokens/max_output_tokens must be a positive integer",
-                    "invalid_request_error",
-                )
-            if max_output_tokens <= 0:
-                return self._json_error(
-                    400,
-                    "max_tokens/max_output_tokens must be a positive integer",
-                    "invalid_request_error",
-                )
-            outgoing["max_tokens"] = max_output_tokens
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError("max_tokens/max_output_tokens must be a positive integer") from exc
+            outgoing["max_tokens"] = max_tokens
+
+        for key in OPENAI_SUBSCRIPTION_UNSUPPORTED_FIELDS:
+            outgoing.pop(key, None)
+        self._normalize_openai_legacy_tools(outgoing)
+        self._promote_openai_instructions(outgoing)
+        self._normalize_openai_response_formats(outgoing)
+        self._normalize_openai_image_tools(outgoing)
+        self._apply_openai_service_tier_policy(outgoing)
         outgoing["store"] = False
-        if not str(outgoing.get("instructions") or "").strip() and not self._has_instruction_input(outgoing.get("input")):
+        if not str(outgoing.get("instructions") or "").strip():
             outgoing["instructions"] = "You are a helpful coding assistant. Follow the user's instructions carefully."
+        return outgoing
+
+    async def proxy_openai(self, payload: dict[str, Any], user_id: int) -> SubscriptionGatewayResponse:
+        model = str(payload.get("model") or "").strip()
+        if not model:
+            return self._json_error(400, "model is required", "invalid_request_error")
+        try:
+            outgoing = self._prepare_openai_subscription_payload(payload)
+        except ValueError as exc:
+            return self._json_error(400, str(exc), "invalid_request_error")
         return await self._proxy("openai", model, outgoing, user_id, {})
 
-    @staticmethod
-    def _has_instruction_input(value: Any) -> bool:
-        if not isinstance(value, list):
-            return False
-        return any(
-            isinstance(item, dict)
-            and str(item.get("role") or "").strip().lower() in {"system", "developer"}
-            and bool(item.get("content"))
-            for item in value
-        )
+    async def proxy_responses(self, provider: str, payload: dict[str, Any], user_id: int) -> SubscriptionGatewayResponse:
+        provider = str(provider or "").strip().lower()
+        if provider not in SUBSCRIPTION_PROVIDERS:
+            return self._json_error(400, "provider 不受支持", "invalid_request_error")
+        if provider == "openai":
+            return await self.proxy_openai(payload, user_id)
+        if provider not in RESPONSES_PROVIDERS:
+            return self._json_error(400, f"{provider} 不支持 Responses 协议", "invalid_request_error")
+        model = str(payload.get("model") or "").strip()
+        if not model:
+            return self._json_error(400, "model is required", "invalid_request_error")
+        return await self._proxy(provider, model, copy.deepcopy(payload), user_id, {})
+
+    async def proxy_chat(self, provider: str, payload: dict[str, Any], user_id: int) -> SubscriptionGatewayResponse:
+        provider = str(provider or "").strip().lower()
+        if provider not in SUBSCRIPTION_PROVIDERS:
+            return self._json_error(400, "provider 不受支持", "invalid_request_error")
+        if provider not in CHAT_PROVIDERS:
+            return self._json_error(400, f"{provider} 不支持 Chat Completions 协议", "invalid_request_error")
+        model = str(payload.get("model") or "").strip()
+        if not model:
+            return self._json_error(400, "model is required", "invalid_request_error")
+        outgoing = copy.deepcopy(payload)
+        if outgoing.get("stream"):
+            stream_options = outgoing.get("stream_options")
+            if not isinstance(stream_options, dict):
+                stream_options = {}
+            outgoing["stream_options"] = {**stream_options, "include_usage": True}
+        return await self._proxy(provider, model, outgoing, user_id, {})
 
     async def proxy_claude(self, payload: dict[str, Any], user_id: int, incoming_headers: dict[str, str], *, count_tokens: bool = False) -> SubscriptionGatewayResponse:
         model = str(payload.get("model") or "").strip()
@@ -703,12 +1089,10 @@ class SubscriptionGatewayService:
                     continue
                 last_error_type = "upstream_error"
                 last_headers = {}
-                if provider == "openai":
-                    url = OPENAI_RESPONSES_URL
-                    headers = self._openai_headers(credentials, account, stream_requested)
-                else:
-                    url = CLAUDE_COUNT_TOKENS_URL if count_tokens else CLAUDE_MESSAGES_URL
-                    headers = self._claude_headers(credentials, incoming_headers, stream_requested)
+                url, headers = self._provider_request(
+                    provider, credentials, account, incoming_headers, stream_requested,
+                    count_tokens=count_tokens,
+                )
                 request = self._client().build_request("POST", url, headers=headers, json=payload)
                 try:
                     response = await self._client().send(request, stream=stream_requested)
@@ -783,7 +1167,7 @@ class SubscriptionGatewayService:
                 if stream_requested:
                     stream_iterator = response.aiter_bytes()
                     stream_prefix = b""
-                    if provider == "openai":
+                    if provider in RESPONSES_PROVIDERS:
                         stream_prefix, stream_failure = await self._prefetch_openai_stream(stream_iterator)
                         if stream_failure and self._is_capacity_error(stream_failure):
                             with self._safety_lock:
@@ -1072,19 +1456,19 @@ class SubscriptionGatewayService:
         payload = SubscriptionGatewayService._sse_payload(line)
         if not payload:
             return
-        if provider == "openai":
+        if provider in RESPONSES_PROVIDERS:
             source = payload.get("response") if isinstance(payload, dict) and isinstance(payload.get("response"), dict) else payload
             raw_usage = source.get("usage") if isinstance(source, dict) else None
             if isinstance(raw_usage, dict):
-                usage["input_tokens"] = max(usage["input_tokens"], int(raw_usage.get("input_tokens") or 0))
-                usage["output_tokens"] = max(usage["output_tokens"], int(raw_usage.get("output_tokens") or 0))
+                usage["input_tokens"] = max(usage["input_tokens"], int(raw_usage.get("input_tokens") or raw_usage.get("prompt_tokens") or 0))
+                usage["output_tokens"] = max(usage["output_tokens"], int(raw_usage.get("output_tokens") or raw_usage.get("completion_tokens") or 0))
         elif isinstance(payload, dict):
             raw_usage = payload.get("usage")
             if not isinstance(raw_usage, dict) and isinstance(payload.get("message"), dict):
                 raw_usage = payload["message"].get("usage")
             if isinstance(raw_usage, dict):
-                usage["input_tokens"] = max(usage["input_tokens"], int(raw_usage.get("input_tokens") or 0))
-                usage["output_tokens"] = max(usage["output_tokens"], int(raw_usage.get("output_tokens") or 0))
+                usage["input_tokens"] = max(usage["input_tokens"], int(raw_usage.get("input_tokens") or raw_usage.get("prompt_tokens") or 0))
+                usage["output_tokens"] = max(usage["output_tokens"], int(raw_usage.get("output_tokens") or raw_usage.get("completion_tokens") or 0))
 
     @staticmethod
     def _usage_from_json(provider: str, body: bytes) -> dict[str, int]:
@@ -1359,9 +1743,13 @@ class SubscriptionGatewayService:
         if provider == "openai":
             url = f"{OPENAI_MODELS_URL}?client_version={self.codex_client_version}"
             headers = self._openai_headers(credentials, account, False)
-        else:
+        elif provider == "claude":
             url = CLAUDE_MODELS_URL
             headers = self._claude_headers(credentials, {}, False)
+        else:
+            base_url = provider_base_url(provider)
+            url = base_url + "/models"
+            headers = self._grok_headers(credentials, False) if provider == "grok" else self._compatible_headers(credentials, False)
         request = self._client().build_request("GET", url, headers=headers)
         response: httpx.Response | None = None
         try:
@@ -1392,9 +1780,13 @@ class SubscriptionGatewayService:
         if provider == "openai":
             url = f"{OPENAI_MODELS_URL}?client_version={self.codex_client_version}"
             headers = self._openai_headers(credentials, account, False)
-        else:
+        elif provider == "claude":
             url = CLAUDE_MODELS_URL
             headers = self._claude_headers(credentials, {}, False)
+        else:
+            base_url = provider_base_url(provider)
+            url = base_url + "/models"
+            headers = self._grok_headers(credentials, False) if provider == "grok" else self._compatible_headers(credentials, False)
         try:
             response = await self._client().get(url, headers=headers)
         except (httpx.TimeoutException, httpx.TransportError) as exc:

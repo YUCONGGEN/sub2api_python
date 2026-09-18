@@ -13,6 +13,7 @@ from backend.service.auth_service import AuthService
 from backend.service.claude_chat_compatibility_service import ClaudeChatCompatibilityService
 from backend.service.openai_chat_compatibility_service import OpenAIChatCompatibilityService
 from backend.service.subscription_gateway_service import SubscriptionGatewayResponse, SubscriptionGatewayService
+from backend.common.subscription_providers import CHAT_PROVIDERS, RESPONSES_PROVIDERS
 
 
 def _beans(request: Request) -> tuple[SubscriptionGatewayService, AuthService]:
@@ -78,16 +79,18 @@ def as_response(result: SubscriptionGatewayResponse):
 async def maybe_proxy_openai_subscription(request: Request, payload: dict[str, Any], user: dict[str, Any]):
     gateway, _ = _beans(request)
     model = str(payload.get("model") or "").strip()
-    if not gateway.should_route("openai", model):
-        return None
-    return as_response(await gateway.proxy_openai(payload, int(user["id"])))
+    for provider in RESPONSES_PROVIDERS:
+        if gateway.should_route(provider, model):
+            return as_response(await gateway.proxy_responses(provider, payload, int(user["id"])))
+    return None
 
 
 async def maybe_proxy_openai_chat_subscription(request: Request, payload: dict[str, Any], user: dict[str, Any]):
     """Route matching Chat Completions models through the Responses account pool."""
     gateway, _ = _beans(request)
     model = str(payload.get("model") or "").strip()
-    if not gateway.should_route("openai", model):
+    provider = next((item for item in RESPONSES_PROVIDERS if gateway.should_route(item, model)), "")
+    if not provider:
         return None
     compatibility = _chat_compatibility(request)
     try:
@@ -95,7 +98,7 @@ async def maybe_proxy_openai_chat_subscription(request: Request, payload: dict[s
     except ValueError as exc:
         return _error(400, str(exc))
 
-    result = await gateway.proxy_openai(outgoing, int(user["id"]))
+    result = await gateway.proxy_responses(provider, outgoing, int(user["id"]))
     if result.status_code < 200 or result.status_code >= 300:
         return as_response(result)
     if result.stream is not None:
@@ -131,6 +134,16 @@ async def maybe_proxy_openai_chat_subscription(request: Request, payload: dict[s
     headers = dict(result.headers)
     headers["content-type"] = "application/json; charset=utf-8"
     return as_response(SubscriptionGatewayResponse(result.status_code, headers, body=encoded))
+
+
+async def maybe_proxy_compatible_chat_subscription(request: Request, payload: dict[str, Any], user: dict[str, Any]):
+    """Pass Chat Completions through API-key coding-plan account pools."""
+    gateway, _ = _beans(request)
+    model = str(payload.get("model") or "").strip()
+    provider = next((item for item in CHAT_PROVIDERS if gateway.should_route(item, model)), "")
+    if not provider:
+        return None
+    return as_response(await gateway.proxy_chat(provider, payload, int(user["id"])))
 
 
 async def maybe_proxy_claude_chat_subscription(request: Request, payload: dict[str, Any], user: dict[str, Any]):
@@ -235,5 +248,6 @@ __all__ = [
     "maybe_proxy_openai_subscription",
     "maybe_proxy_openai_chat_subscription",
     "maybe_proxy_claude_chat_subscription",
+    "maybe_proxy_compatible_chat_subscription",
     "as_response",
 ]

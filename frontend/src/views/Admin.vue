@@ -13,6 +13,7 @@
       <button :class="{ active: activeAdminSection === 'visuals' }" @click="activeAdminSection = 'visuals'">数据可视化</button>
       <button :class="{ active: activeAdminSection === 'logs' }" @click="activeAdminSection = 'logs'">后台日志</button>
       <button :class="{ active: activeAdminSection === 'device' }" @click="activeAdminSection = 'device'">设备信息</button>
+      <button :class="{ active: activeAdminSection === 'config' }" @click="activeAdminSection = 'config'">系统配置</button>
     </nav>
 
     <nav v-if="activeAdminSection === 'business'" class="business-anchor-nav" aria-label="业务管理快速导航">
@@ -168,6 +169,8 @@
       </div>
     </section>
 
+    <AdminConfigEditor v-if="activeAdminSection === 'config'" />
+
     <div v-if="activeAdminSection === 'business'" id="admin-business-plans" class="panel subscription-admin-panel business-anchor-target">
       <div class="panel-head"><div><span class="eyebrow">SUBSCRIPTION MANAGEMENT</span><h2>套餐管理</h2><p class="panel-note">金额或 Token 未填写时按 0 处理，0 表示该项不限制。</p></div></div>
       <form class="plan-form" @submit.prevent="savePlan"><div class="plan-form-intro"><div><span class="eyebrow">{{ editingPlan ? 'EDIT PLAN' : 'NEW PLAN' }}</span><strong>{{ editingPlan ? '编辑套餐配置' : '新建套餐配置' }}</strong></div><small>套餐可将用户自动升级到指定分组</small></div><label>套餐名称<input v-model.trim="planForm.name" placeholder="例如：标准版" required /></label><label class="plan-description">套餐说明<input v-model.trim="planForm.description" placeholder="面向日常对话与代码任务" /></label><label>售价<input v-model.number="planForm.price" type="number" min="0" step="0.01" placeholder="0" /></label><label>有效天数<input v-model.number="planForm.duration_days" type="number" min="1" step="1" placeholder="30" /></label><label>每日金额<input v-model.number="planForm.daily_amount" type="number" min="0" step="0.0001" placeholder="0" /></label><label>每日 Token<input v-model.number="planForm.daily_tokens" type="number" min="0" step="1" placeholder="0" /></label><label class="plan-group-field">套餐对应分组<AppSelect v-model="planForm.group_id" :options="planGroupSelectOptions" aria-label="套餐对应分组" /><small>套餐可用时按权重自动升级；失效后自动降级。</small></label><div class="plan-form-actions"><button class="primary-btn" :disabled="planSaving">{{ planSaving ? '保存中…' : editingPlan ? '保存套餐' : '新建套餐' }}<span class="plan-action-arrow">→</span></button><button v-if="editingPlan" type="button" class="secondary-btn" @click="resetPlanForm">取消编辑</button></div></form>
@@ -284,13 +287,14 @@
 import { api } from '../api'
 import { copyToClipboard, notify, askConfirm, focusDialog, trapDialogFocus } from '../ui'
 import AppSelect from '../components/AppSelect.vue'
+import AdminConfigEditor from '../components/AdminConfigEditor.vue'
 import { buildCodexConfig, downloadTextFile } from '../config/codex'
 
 const emptyGroup = () => ({ name: '', description: '', weight: 10, concurrency_limit: 1, is_default: false, allow_all: true, allowed_models: [], model_mapping_ids: [] })
 const emptyMapping = () => ({ name: '', source_model: '', source_effort: 'xhigh', target_model: '', target_effort: 'high', enabled: true })
 
 export default {
-  components: { AppSelect },
+  components: { AppSelect, AdminConfigEditor },
   props: { appName: String, apiBaseUrl: String, codexConfig: Object },
   data: () => ({
     summary: {},

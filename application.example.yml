@@ -83,6 +83,13 @@ database:
 rose:
   application:
     name: ${ROSE_APPLICATION_NAME:大模型接口管理}
+  admin-config:
+    # 管理员可在前端读取和修改项目固定的 application.yml。保存时会校验 YAML、
+    # 检查并发修改并生成 application.yml.bak；普通用户无法访问对应接口。
+    enabled: ${ROSE_ADMIN_CONFIG_ENABLED:true}
+    max-bytes: ${ROSE_ADMIN_CONFIG_MAX_BYTES:1048576}
+    # 重启只会调用项目内置 restart_backend.sh；这里仅控制接口返回后的延迟。
+    restart-delay-seconds: ${ROSE_ADMIN_CONFIG_RESTART_DELAY_SECONDS:1}
   conversation:
     # 隐私模式：只记录调用元数据、Token、费用、状态和耗时，绝不保存
     # 用户问题、模型回答、原始 JSON、错误正文或图片。
@@ -115,11 +122,23 @@ rose:
   subscription-gateway:
     # 允许普通用户贡献自己的订阅账号及提交第三方 URL/API Key/Model ID 申请。
     user-contributions-enabled: ${ROSE_SUBSCRIPTION_USER_CONTRIBUTIONS_ENABLED:true}
-    # 仅管理员可接入自己有权使用的 Claude/OpenAI 订阅账号。OAuth 凭据在数据库中
+    # 可接入自己有权使用的 OpenAI、Claude、Grok、Kimi、GLM 与 MiniMax 账号。凭据在数据库中
     # 使用独立密钥加密；生产环境必须设置为随机值，修改后旧凭据需要重新授权。
     enabled: ${ROSE_SUBSCRIPTION_GATEWAY_ENABLED:true}
-    # Codex 订阅传输的版本兼容标识（不是模型授权）。请求、模型查询与 OAuth 统一使用。
-    codex-client-version: ${ROSE_CODEX_CLIENT_VERSION:0.153.2}
+    # Codex 订阅传输的版本兼容标识（不是模型授权）。留空时每 6 小时从官方
+    # GitHub release 自动同步；显式填写后固定版本，不再自动更新。
+    codex-client-version: ${ROSE_CODEX_CLIENT_VERSION:}
+    codex-version-auto-sync: ${ROSE_CODEX_VERSION_AUTO_SYNC:true}
+    codex-version-release-url: ${ROSE_CODEX_VERSION_RELEASE_URL:https://api.github.com/repos/openai/codex/releases/latest}
+    # Claude Code 同样默认跟随官方最新稳定版；填写后固定版本。
+    claude-client-version: ${ROSE_CLAUDE_CLIENT_VERSION:}
+    claude-version-auto-sync: ${ROSE_CLAUDE_VERSION_AUTO_SYNC:true}
+    claude-version-release-url: ${ROSE_CLAUDE_VERSION_RELEASE_URL:https://api.github.com/repos/anthropics/claude-code/releases/latest}
+    # Grok Build OAuth 访问 CLI Responses 接口时使用的兼容版本标识。
+    grok-client-version: ${ROSE_GROK_CLIENT_VERSION:0.2.120}
+    # pass：校验并透传（fast 会规范为 priority）；filter：删除；
+    # force_priority：无论客户端是否提供都强制 priority。
+    openai-service-tier-policy: ${ROSE_OPENAI_SERVICE_TIER_POLICY:pass}
     credential-secret: ${ROSE_SUBSCRIPTION_CREDENTIAL_SECRET:}
     oauth-timeout-seconds: ${ROSE_SUBSCRIPTION_OAUTH_TIMEOUT_SECONDS:60}
     request-timeout-seconds: ${ROSE_SUBSCRIPTION_REQUEST_TIMEOUT_SECONDS:600}
@@ -179,7 +198,7 @@ rose:
     max-tokens-per-request: 100000
     request-timeout-seconds: 180
   # DeepSeek 模型已停用，以下保留配置为注释；恢复时需取消注释并配置密钥。
-  # OpenAI / Claude 订阅模型由订阅账号池提供，不受此列表影响。
+  # OpenAI / Claude / Grok / Kimi / GLM / MiniMax 账号池模型不受此列表影响。
   # 每个 URL/API Key/Model ID 可在自己的模型条目内单独设置 use-proxy；
   # false 表示直连，true 表示读取服务器代理环境变量。旧字段 trust-env 仍兼容。
   models: []

@@ -10,11 +10,11 @@ from springbootai.orm import Column, CreateTime, Entity, Id, Index
         Index("idx_upstream_subscription_cooldown", ["provider", "cooldown_until"]),
         Index("idx_upstream_subscription_owner", ["owner_user_id", "created_at"]),
     ],
-    comment="Claude/OpenAI subscription accounts managed by the gateway",
+    comment="Subscription and coding-plan accounts managed by the gateway",
 )
 @dataclass
 class UpstreamSubscriptionAccount:
-    """Metadata only; OAuth credentials are encrypted before persistence."""
+    """Metadata only; OAuth tokens and API keys are encrypted before persistence."""
 
     id: int = Id()
     owner_user_id: int = Column(nullable=True)

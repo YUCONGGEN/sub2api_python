@@ -182,6 +182,10 @@ class StoreMapper:
     def delete_subscription_plan(self, plan_id: int, updated_at: str) -> int:
         pass
 
+    def disable_plan_subscription_auto_renew(self, plan_id: int) -> int:
+        """Stop future renewals without revoking the current paid period."""
+        pass
+
     def list_user_subscriptions(self, user_id: int, offset: int = 0, limit: int = 5) -> list[dict]:
         pass
 

@@ -189,7 +189,7 @@
         FROM user_subscriptions s
         JOIN subscription_plans p ON p.id=s.plan_id
         JOIN user_groups g ON g.id=p.group_id
-        WHERE s.user_id=#{user_id} AND s.status='ACTIVE' AND p.enabled=1
+        WHERE s.user_id=#{user_id} AND s.status='ACTIVE'
           AND s.starts_at &lt;= #{now} AND s.ends_at &gt; #{now}
         ORDER BY g.weight DESC,s.ends_at DESC,s.id DESC
     </select>
@@ -262,6 +262,10 @@
         WHERE id = #{plan_id}
     </update>
     <delete id="delete_subscription_plan">UPDATE subscription_plans SET enabled=0,updated_at=#{updated_at} WHERE id = #{plan_id}</delete>
+    <update id="disable_plan_subscription_auto_renew">
+        UPDATE user_subscriptions SET auto_renew = 0
+        WHERE plan_id = #{plan_id} AND status = 'ACTIVE' AND auto_renew = 1
+    </update>
     <select id="count_user_subscriptions" resultType="int">SELECT COUNT(*) FROM user_subscriptions WHERE user_id = #{user_id}</select>
     <select id="list_user_subscriptions">
         SELECT s.id, s.user_id, s.plan_id, s.starts_at, s.ends_at, s.status, s.auto_renew, s.created_at,
@@ -279,7 +283,7 @@
                     s.starts_at, s.ends_at, s.status, s.auto_renew, NULL enabled,
                     p.enabled plan_enabled, p.group_id, g.name group_name, g.weight group_weight, s.created_at,
                    CASE
-                       WHEN s.status = 'ACTIVE' AND p.enabled = 1 AND s.starts_at &lt;= #{now} AND s.ends_at &gt; #{now} THEN 0
+                       WHEN s.status = 'ACTIVE' AND s.starts_at &lt;= #{now} AND s.ends_at &gt; #{now} THEN 0
                        WHEN s.ends_at &lt;= #{now} OR s.status IN ('EXPIRED', 'CANCELLED') THEN 2
                        ELSE 1
                    END sort_group
@@ -319,7 +323,7 @@
         SELECT s.id, s.user_id, s.plan_id, s.starts_at, s.ends_at, s.status, s.auto_renew, s.created_at,
                p.name plan_name, p.description plan_description, p.price, p.duration_days, p.daily_amount, p.daily_tokens
         FROM user_subscriptions s JOIN subscription_plans p ON p.id = s.plan_id
-        WHERE s.user_id = #{user_id} AND s.status = 'ACTIVE' AND p.enabled = 1
+        WHERE s.user_id = #{user_id} AND s.status = 'ACTIVE'
           AND s.starts_at &lt;= #{now} AND s.ends_at &gt; #{now}
         ORDER BY s.ends_at ASC, s.id ASC
     </select>
@@ -327,7 +331,7 @@
         SELECT s.id, s.user_id, s.plan_id, s.starts_at, s.ends_at, s.status, s.auto_renew, s.created_at,
                p.name plan_name, p.description plan_description, p.price, p.duration_days, p.daily_amount, p.daily_tokens
         FROM user_subscriptions s JOIN subscription_plans p ON p.id = s.plan_id
-        WHERE s.user_id = #{user_id} AND s.plan_id = #{plan_id} AND s.status = 'ACTIVE' AND p.enabled = 1
+        WHERE s.user_id = #{user_id} AND s.plan_id = #{plan_id} AND s.status = 'ACTIVE'
           AND s.starts_at &lt;= #{now} AND s.ends_at &gt; #{now}
         ORDER BY s.ends_at DESC, s.id DESC
         LIMIT 1
@@ -366,7 +370,11 @@
     <delete id="delete_user_subscription">DELETE FROM user_subscriptions WHERE id = #{subscription_id} AND user_id = #{user_id}</delete>
     <update id="expire_subscriptions">
         UPDATE user_subscriptions SET status = 'EXPIRED', auto_renew = 0
-        WHERE status = 'ACTIVE' AND ends_at &lt;= #{now} AND auto_renew = 0
+        WHERE status = 'ACTIVE' AND ends_at &lt;= #{now}
+          AND (
+              auto_renew = 0
+              OR plan_id IN (SELECT id FROM subscription_plans WHERE enabled = 0)
+          )
     </update>
     <update id="expire_subscription">UPDATE user_subscriptions SET status = 'EXPIRED', auto_renew = 0 WHERE id = #{subscription_id} AND status = 'ACTIVE'</update>
     <select id="count_user_quota_policies" resultType="int">SELECT COUNT(*) FROM user_quota_policies WHERE user_id = #{user_id}</select>
@@ -429,7 +437,7 @@
             SELECT 1 FROM user_quota_policies WHERE user_id = #{user_id} AND enabled = 1 AND starts_at &lt;= #{now} AND (ends_at IS NULL OR ends_at &gt; #{now})
         ) OR EXISTS(
             SELECT 1 FROM user_subscriptions s JOIN subscription_plans p ON p.id = s.plan_id
-            WHERE s.user_id = #{user_id} AND s.status = 'ACTIVE' AND p.enabled = 1 AND s.starts_at &lt;= #{now} AND s.ends_at &gt; #{now}
+            WHERE s.user_id = #{user_id} AND s.status = 'ACTIVE' AND s.starts_at &lt;= #{now} AND s.ends_at &gt; #{now}
         ) THEN 1 ELSE 0 END
     </select>
 

@@ -34,12 +34,12 @@
               <span :class="['status', item.usage?.active ? 'success' : 'pending']">{{ item.usage?.active ? '可用' : '不可用' }}</span>
             </template>
             <template v-else>
-              <div class="entitlement-main"><span><b>{{ item.plan_name }}</b><i class="entitlement-kind plan">付费套餐</i></span><small>有效至 {{ format(item.ends_at) }} · {{ item.auto_renew ? '自动续订已开启' : '默认不自动续订' }}</small><em>套餐价 ¥{{ Number(item.price || 0).toFixed(2) }}{{ item.group_name ? ` · 生效分组 ${item.group_name} · 权重 ${Number(item.group_weight || 0)}` : '' }}</em></div>
+              <div class="entitlement-main"><span><b>{{ item.plan_name }}</b><i class="entitlement-kind plan">付费套餐</i></span><small>有效至 {{ format(item.ends_at) }} · {{ item.plan_enabled ? (item.auto_renew ? '自动续订已开启' : '默认不自动续订') : '套餐已下架，当前周期仍可使用' }}</small><em>套餐价 ¥{{ Number(item.price || 0).toFixed(2) }}{{ item.group_name ? ` · 生效分组 ${item.group_name} · 权重 ${Number(item.group_weight || 0)}` : '' }}</em></div>
               <div class="entitlement-usage-grid">
                 <div class="entitlement-usage"><small>今日套餐金额</small><b>已用 {{ usageValue(item, 'daily_amount', true) }}</b><span>剩余 {{ remainingValue(item, 'daily_amount', true) }}</span><i><u :style="{ width: usagePercent(item, 'daily_amount') + '%' }"></u></i></div>
                 <div class="entitlement-usage"><small>今日套餐 Token</small><b>已用 {{ usageValue(item, 'daily_tokens') }}</b><span>剩余 {{ remainingValue(item, 'daily_tokens') }}</span><i><u :style="{ width: usagePercent(item, 'daily_tokens') + '%' }"></u></i></div>
               </div>
-              <div class="subscription-entitlement-actions"><span :class="['status', item.usage?.active ? 'success' : 'pending']">{{ item.usage?.active ? '可用' : subscriptionStatus(item.status) }}</span><button v-if="item.usage?.active" class="text-btn" :disabled="renewing === item.id" @click="renewSubscription(item)">{{ renewing === item.id ? '续订中…' : '续订' }}</button><button v-if="item.usage?.active" class="text-btn" :disabled="autoRenewing === item.id" @click="toggleAutoRenew(item)">{{ autoRenewing === item.id ? '处理中…' : item.auto_renew ? '关闭自动续订' : '开启自动续订' }}</button></div>
+              <div class="subscription-entitlement-actions"><span :class="['status', item.usage?.active ? 'success' : 'pending']">{{ item.usage?.active ? '可用' : subscriptionStatus(item.status) }}</span><button v-if="item.usage?.active && item.plan_enabled" class="text-btn" :disabled="renewing === item.id" @click="renewSubscription(item)">{{ renewing === item.id ? '续订中…' : '续订' }}</button><button v-if="item.usage?.active && item.plan_enabled" class="text-btn" :disabled="autoRenewing === item.id" @click="toggleAutoRenew(item)">{{ autoRenewing === item.id ? '处理中…' : item.auto_renew ? '关闭自动续订' : '开启自动续订' }}</button></div>
             </template>
           </article>
         </section>

@@ -900,6 +900,7 @@ class StoreService:
         self.mapper.insert_subscription_plan(plan)
         return self._row(self.mapper.find_subscription_plan(int(plan.get("id") or 0))) or plan
 
+    @Transactional()
     def update_subscription_plan(self, plan_id: int, changes: Mapping[str, Any]) -> dict[str, Any] | None:
         if not self.mapper.find_subscription_plan(int(plan_id)):
             return None
@@ -931,19 +932,30 @@ class StoreService:
         values["updated_at"] = utc_now()
         if values:
             self.mapper.update_subscription_plan(int(plan_id), values)
+            if values.get("enabled") == 0:
+                # Taking a plan off sale only stops the next purchase/renewal.
+                # Existing subscribers retain the current paid period.
+                self.mapper.disable_plan_subscription_auto_renew(int(plan_id))
         return self._row(self.mapper.find_subscription_plan(int(plan_id)))
 
+    @Transactional()
     def delete_subscription_plan(self, plan_id: int) -> bool:
         # Plans are immutable audit references once assigned. "Delete" means
         # disable, so historical subscriptions remain visible and billable
         # records never lose their plan name.
-        return bool(self.mapper.delete_subscription_plan(int(plan_id), utc_now()))
+        changed = bool(self.mapper.delete_subscription_plan(int(plan_id), utc_now()))
+        if changed:
+            self.mapper.disable_plan_subscription_auto_renew(int(plan_id))
+        return changed
 
     @staticmethod
     def _entitlement_active(row: Mapping[str, Any], now: datetime, kind: str) -> bool:
         """Return whether an entitlement can actually pay for a request now."""
         if kind == "SUBSCRIPTION":
-            if str(row.get("status") or "").upper() != "ACTIVE" or not bool(row.get("plan_enabled", True)):
+            # ``subscription_plans.enabled`` controls whether new purchases
+            # and renewals are offered. It must not revoke a paid entitlement
+            # that is still ACTIVE and inside its purchased time window.
+            if str(row.get("status") or "").upper() != "ACTIVE":
                 return False
         elif not bool(row.get("enabled")):
             return False
@@ -1132,6 +1144,8 @@ class StoreService:
         now = datetime.now(timezone.utc)
         if not row or row.get("status") != "ACTIVE" or self._subscription_datetime(row.get("ends_at")) <= now:
             return None
+        if enabled and not row.get("plan_enabled", True):
+            raise ValueError("该套餐已下架，不能开启自动续订；当前周期仍可继续使用")
         if self.mapper.set_subscription_auto_renew(int(subscription_id), int(user_id), 1 if enabled else 0) != 1:
             return None
         return self._row(self.mapper.find_user_subscription(int(subscription_id), int(user_id)))
@@ -1157,6 +1171,8 @@ class StoreService:
                 raise ValueError("套餐状态不正确")
         if "auto_renew" in values:
             values["auto_renew"] = 1 if bool(values["auto_renew"]) else 0
+            if values["auto_renew"] and not existing.get("plan_enabled", True):
+                raise ValueError("该套餐已下架，不能开启自动续订；当前周期仍可继续使用")
         if values.get("status") != "ACTIVE":
             values["auto_renew"] = 0
         self.mapper.update_user_subscription(int(subscription_id), int(user_id), values)
@@ -1172,6 +1188,9 @@ class StoreService:
         self._lock_user_billing(user_id, now)
         current = self._row(self.mapper.find_user_subscription(int(row["id"]), user_id))
         if not current or current.get("status") != "ACTIVE" or not current.get("auto_renew"):
+            return
+        if not current.get("plan_enabled", True):
+            self.mapper.set_subscription_auto_renew(int(current["id"]), user_id, 0)
             return
         current_end = self._subscription_datetime(current.get("ends_at"), "套餐结束时间")
         if current_end > now:

@@ -1,4 +1,8 @@
 from datetime import datetime, timezone
+from pathlib import Path
+from xml.etree import ElementTree
+
+import pytest
 
 from backend.common.time_utils import business_date_keys, business_day_start_utc, business_month_start_utc, business_week_start_utc
 from backend.service.store_service import StoreService
@@ -87,6 +91,70 @@ def test_subscription_list_includes_actual_used_and_remaining_amounts():
     assert usage["daily_tokens"] == {
         "limit": 1000, "used": 250, "remaining": 750, "unlimited": False,
     }
+
+
+def test_unlisted_plan_keeps_existing_subscription_active_until_its_end():
+    mapper = EntitlementMapper()
+    original = mapper.list_user_subscriptions
+    mapper.list_user_subscriptions = lambda *args: [dict(original(*args)[0], plan_enabled=0)]
+
+    item = service_with(mapper).list_user_subscriptions(7)["items"][0]
+
+    assert item["plan_enabled"] == 0
+    assert item["usage"]["active"] is True
+
+
+def test_runtime_subscription_queries_do_not_revoke_unlisted_plans():
+    root = ElementTree.parse(Path(__file__).parents[1] / "backend/mappers/StoreMapper.xml").getroot()
+    statements = {item.attrib.get("id"): "".join(item.itertext()) for item in root.findall("select")}
+
+    for statement_id in (
+        "list_active_subscription_group_candidates",
+        "find_active_subscriptions",
+        "find_active_subscription_for_plan",
+        "has_active_entitlement",
+    ):
+        assert "p.enabled = 1" not in statements[statement_id]
+
+    # Renewing at the end of the purchased period is a new purchase, so an
+    # unlisted plan must still be excluded from automatic renewal.
+    assert "p.enabled = 1" in statements["list_due_auto_renew_subscriptions"]
+
+
+def test_unlisted_plan_stops_future_renewal_without_revoking_current_period():
+    root = ElementTree.parse(Path(__file__).parents[1] / "backend/mappers/StoreMapper.xml").getroot()
+    updates = {item.attrib.get("id"): "".join(item.itertext()) for item in root.findall("update")}
+
+    stop_renewal = updates["disable_plan_subscription_auto_renew"]
+    assert "SET auto_renew = 0" in stop_renewal
+    assert "plan_id = #{plan_id}" in stop_renewal
+    assert "status = 'ACTIVE'" in stop_renewal
+
+    # This also cleans up plans that were already disabled before this fix, so
+    # their subscriptions cannot remain ACTIVE forever after the end time.
+    expiration = updates["expire_subscriptions"]
+    assert "subscription_plans WHERE enabled = 0" in expiration
+
+
+def test_unlisted_plan_cannot_turn_auto_renew_back_on():
+    class Mapper:
+        @staticmethod
+        def find_user_subscription(subscription_id, user_id):
+            return {
+                "id": subscription_id,
+                "user_id": user_id,
+                "status": "ACTIVE",
+                "auto_renew": 0,
+                "plan_enabled": 0,
+                "ends_at": "2099-01-01T00:00:00+00:00",
+            }
+
+        @staticmethod
+        def set_subscription_auto_renew(*args):
+            raise AssertionError("下架套餐不应写入自动续订")
+
+    with pytest.raises(ValueError, match="当前周期仍可继续使用"):
+        service_with(Mapper()).set_subscription_auto_renew(7, 41, True)
 
 
 def test_free_grant_list_includes_daily_and_rolling_window_usage():

@@ -106,7 +106,10 @@ class BillingController:
         enabled = body.get("enabled", False)
         if isinstance(enabled, str):
             enabled = enabled.strip().lower() in {"1", "true", "yes", "on"}
-        subscription = self.store.set_subscription_auto_renew(user["id"], subscription_id, bool(enabled))
+        try:
+            subscription = self.store.set_subscription_auto_renew(user["id"], subscription_id, bool(enabled))
+        except ValueError as exc:
+            return bad(str(exc), 409)
         if not subscription:
             return bad("套餐不存在、已到期或已停用", 409)
         return ok({"ok": True, "subscription": subscription}, "自动续订已开启" if enabled else "自动续订已关闭")

@@ -117,3 +117,13 @@ def test_admin_config_controller_returns_content_to_admin(tmp_path):
     assert response.data["ok"] is True
     assert response.data["filename"] == "application.yml"
     assert response.data["content"] == "server: {}\n"
+
+
+def test_yaml_editor_keeps_whitespace_overlay_visible_and_scrollable_in_dark_mode():
+    source = Path("frontend/src/components/AdminConfigEditor.vue").read_text(encoding="utf-8")
+
+    assert "overscroll-behavior:contain" in source
+    assert "scrollbar-gutter:stable" in source
+    assert "scrollbar-color:#5e8194 #132633" in source
+    assert ':global(html[data-theme="dark"] .yaml-visible-content){color:#f1f8fb}' in source
+    assert ':global(html[data-theme="dark"] .yaml-editor){background:transparent!important;color:transparent!important' in source

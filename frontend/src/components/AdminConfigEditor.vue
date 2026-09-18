@@ -25,7 +25,7 @@
         <span><i>→</i> 代表 Tab（YAML 中不建议使用）</span>
         <b>第 {{ cursorLine }} 行 · 第 {{ cursorColumn }} 列</b>
       </div>
-      <div class="yaml-editor-shell">
+      <div class="yaml-editor-shell" @wheel="handleEditorWheel">
         <pre class="yaml-line-numbers" aria-hidden="true" :style="gutterStyle">{{ lineNumbers }}</pre>
         <div class="yaml-editor-viewport">
           <pre class="yaml-visible-content" aria-hidden="true" :style="mirrorStyle">{{ visibleContent }}</pre>
@@ -169,6 +169,28 @@ export default {
     syncEditorScroll (event) {
       this.editorScrollTop = event.target.scrollTop
       this.editorScrollLeft = event.target.scrollLeft
+    },
+    handleEditorWheel (event) {
+      const editor = this.$refs.yamlTextarea
+      if (!editor) return
+      const scale = event.deltaMode === 1
+        ? 20
+        : event.deltaMode === 2
+          ? Math.max(1, editor.clientHeight)
+          : 1
+      const deltaX = (event.shiftKey ? event.deltaY : event.deltaX) * scale
+      const deltaY = (event.shiftKey ? 0 : event.deltaY) * scale
+      const maxTop = Math.max(0, editor.scrollHeight - editor.clientHeight)
+      const maxLeft = Math.max(0, editor.scrollWidth - editor.clientWidth)
+      const nextTop = Math.max(0, Math.min(maxTop, editor.scrollTop + deltaY))
+      const nextLeft = Math.max(0, Math.min(maxLeft, editor.scrollLeft + deltaX))
+      if (nextTop === editor.scrollTop && nextLeft === editor.scrollLeft) return
+      event.preventDefault()
+      event.stopPropagation()
+      editor.scrollTop = nextTop
+      editor.scrollLeft = nextLeft
+      this.editorScrollTop = nextTop
+      this.editorScrollLeft = nextLeft
     },
     updateCursor () {
       const editor = this.$refs.yamlTextarea

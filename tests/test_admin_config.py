@@ -125,5 +125,8 @@ def test_yaml_editor_keeps_whitespace_overlay_visible_and_scrollable_in_dark_mod
     assert "overscroll-behavior:contain" in source
     assert "scrollbar-gutter:stable" in source
     assert "scrollbar-color:#5e8194 #132633" in source
+    assert '@wheel="handleEditorWheel"' in source
+    assert "editor.scrollTop = nextTop" in source
+    assert "editor.scrollLeft = nextLeft" in source
     assert ':global(html[data-theme="dark"] .yaml-visible-content){color:#f1f8fb}' in source
     assert ':global(html[data-theme="dark"] .yaml-editor){background:transparent!important;color:transparent!important' in source

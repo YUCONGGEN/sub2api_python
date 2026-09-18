@@ -128,7 +128,14 @@
             </template>
           </div>
           <p v-if="account.can_manage && account.last_error" class="account-error">{{ account.last_error }}</p>
-          <div v-if="account.can_manage" class="account-actions"><button class="secondary-btn" :disabled="actionId === account.id" @click="testAccount(account)">测试</button><button v-if="account.has_refresh_token" class="secondary-btn" :disabled="actionId === account.id" @click="refreshAccount(account)">刷新 Token</button><button v-if="isAdmin" class="secondary-btn pricing-action" @click="openPricing(account)">修改定价<span v-if="pricingOverrideCount(account)"> · {{ pricingOverrideCount(account) }}</span></button><button class="secondary-btn" @click="openEdit(account)">编辑</button><button class="secondary-btn" @click="toggleAccount(account)">{{ account.enabled ? '停用' : '启用' }}</button><button class="text-btn danger" @click="removeAccount(account)">删除</button></div>
+          <div v-if="account.can_manage" class="account-actions">
+            <button class="secondary-btn" :disabled="actionId === account.id" @click="testAccount(account)">测试连接</button>
+            <button v-if="account.has_refresh_token" class="secondary-btn" :disabled="actionId === account.id" @click="refreshAccount(account)">刷新令牌</button>
+            <button v-if="isAdmin" class="secondary-btn pricing-action" @click="openPricing(account)"><span>模型定价</span><b v-if="pricingOverrideCount(account)">{{ pricingOverrideCount(account) }}</b></button>
+            <button class="secondary-btn" @click="openEdit(account)">编辑账号</button>
+            <button class="secondary-btn status-action" @click="toggleAccount(account)">{{ account.enabled ? '停用账号' : '启用账号' }}</button>
+            <button class="text-btn danger" @click="removeAccount(account)">删除账号</button>
+          </div>
         </article>
       </div>
       <div class="pagination" v-if="pagination.pages > 1"><button class="secondary-btn" :disabled="loading || pagination.page <= 1" @click="changePage(pagination.page - 1)">上一页</button><span>第 {{ pagination.page }} / {{ pagination.pages }} 页，共 {{ pagination.total }} 个账号</span><button class="secondary-btn" :disabled="loading || pagination.page >= pagination.pages" @click="changePage(pagination.page + 1)">下一页</button></div>
@@ -505,25 +512,48 @@ export default {
 .quota-warning { margin:0;color:#8f723d;font-size:10px;line-height:1.5; }
 .account-error { margin:9px 0 0;font-size:12px; }
 .account-actions {
-  align-items:center;
-  gap:6px;
-  margin-top:11px;
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:7px;
+  margin-top:12px;
+  padding-top:12px;
+  border-top:1px solid #e3edf2;
 }
 .account-actions .secondary-btn {
-  flex:1 1 58px;
-  min-height:31px;
-  padding:0 8px;
-  border-radius:7px;
-  background:#fff;
-  font-size:12px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:6px;
+  min-width:0;
+  min-height:36px;
+  padding:0 9px;
+  border-color:#d5e3eb;
+  border-radius:9px;
+  background:#f8fbfc;
+  color:#486a7f;
+  font-size:11px;
+  font-weight:600;
+  white-space:nowrap;
+  transition:border-color .2s,background .2s,color .2s,transform .2s;
 }
+.account-actions .secondary-btn:hover { transform:translateY(-1px);border-color:#9cbccd;background:#eef6f8;color:#285d75; }
+.account-actions .pricing-action { border-color:#a7cbd7;background:#edf7f9;color:#28677d; }
+.account-actions .pricing-action b { display:grid;place-items:center;min-width:18px;height:18px;padding:0 4px;border-radius:99px;background:#d5edf1;color:#28677d;font:9px var(--mono); }
+.account-actions .status-action { border-color:#dddfcf;background:#fafaf3;color:#6d7050; }
 .account-actions .text-btn {
-  min-height:31px;
-  padding:0 5px;
-  border:0;
-  background:transparent;
-  font-size:12px;
+  min-width:0;
+  min-height:36px;
+  padding:0 9px;
+  border:1px solid #edcfcc;
+  border-radius:9px;
+  background:#fff8f7;
+  color:#a14f4a;
+  font-size:11px;
+  font-weight:600;
+  white-space:nowrap;
+  transition:border-color .2s,background .2s,color .2s,transform .2s;
 }
+.account-actions .text-btn:hover { transform:translateY(-1px);border-color:#dda8a2;background:#fff0ee;color:#8e3732; }
 .provider-filter .secondary-btn {
   min-height:36px;
   padding:0 14px;
@@ -561,8 +591,16 @@ export default {
 }
 :global(html[data-theme="dark"] .quota-window i) { background:#294554; }
 :global(html[data-theme="dark"] .quota-reset) { border-color:#2d4959; }
+:global(html[data-theme="dark"] .account-actions) { border-color:#2d4657; }
+:global(html[data-theme="dark"] .account-actions .secondary-btn) { border-color:#3a5869;background:#1c3140;color:#b6cbd6; }
+:global(html[data-theme="dark"] .account-actions .secondary-btn:hover) { border-color:#527a8d;background:#23404f;color:#d4e5ec; }
+:global(html[data-theme="dark"] .account-actions .pricing-action) { border-color:#477485;background:#1b3a45;color:#acd2dc; }
+:global(html[data-theme="dark"] .account-actions .pricing-action b) { background:#29515d;color:#c9e2e8; }
+:global(html[data-theme="dark"] .account-actions .status-action) { border-color:#59604e;background:#30352c;color:#ced1b4; }
+:global(html[data-theme="dark"] .account-actions .text-btn) { border-color:#68474a;background:#39292d;color:#d8a5a1; }
+:global(html[data-theme="dark"] .account-actions .text-btn:hover) { border-color:#8a5a5b;background:#472f33;color:#efc0bc; }
 
 @media(max-width:1240px){.account-list{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:1050px){.account-list{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:600px){.account-list{grid-template-columns:1fr}}
+@media(max-width:600px){.account-list{grid-template-columns:1fr}.account-actions{grid-template-columns:repeat(2,minmax(0,1fr))}}
 </style>

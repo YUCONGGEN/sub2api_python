@@ -160,6 +160,7 @@ class StoreRepository:
         self._ensure_column(conn, "api_keys", "key_prefix", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column(conn, "api_keys", "key_last4", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column(conn, "upstream_subscription_accounts", "owner_user_id", "INTEGER")
+        self._ensure_column(conn, "upstream_subscription_accounts", "model_pricing_json", "TEXT NOT NULL DEFAULT '{}'")
         self._ensure_column(conn, "upstream_config_requests", "use_proxy", "INTEGER NOT NULL DEFAULT 0")
         for column, definition in {
             "billing_source": "TEXT NOT NULL DEFAULT 'WALLET'",
@@ -225,6 +226,7 @@ class StoreRepository:
             },
             "upstream_subscription_accounts": {
                 "owner_user_id": "BIGINT",
+                "model_pricing_json": "LONGTEXT NOT NULL",
             },
             "upstream_config_requests": {
                 "use_proxy": "TINYINT NOT NULL DEFAULT 0",

@@ -42,6 +42,7 @@ def account_row(owner_user_id):
         "account_ref": "account-secret",
         "credentials_encrypted": JsonCipher.encrypt({"access_token": "top-secret"}),
         "models_json": '["gpt-test"]',
+        "model_pricing_json": '{"gpt-test":{"input_price_cny":2,"output_price_cny":8,"price_multiplier":1}}',
         "enabled": 1,
         "priority": 0,
         "weight": 1,
@@ -78,6 +79,28 @@ def test_owner_and_admin_can_manage_but_other_user_cannot():
     assert service.can_manage({"id": 12, "role": "USER"}, row)
     assert service.can_manage({"id": 99, "role": "ADMIN"}, row)
     assert not service.can_manage({"id": 13, "role": "USER"}, row)
+
+
+def test_public_account_exposes_model_pricing_without_raw_json():
+    public = make_service()._public(account_row(12))
+
+    assert "model_pricing_json" not in public
+    assert public["model_pricing"]["gpt-test"]["output_price_cny"] == 8
+
+
+def test_regular_user_cannot_change_pricing_fields():
+    cleaned = SubscriptionController._user_body({"id": 12, "role": "USER"}, {
+        "name": "共享账号",
+        "input_price_cny": 9,
+        "output_price_cny": 99,
+        "price_multiplier": 3,
+        "model_pricing": {"gpt-test": {"input_price_cny": 10}},
+    })
+
+    assert cleaned["input_price_cny"] == 0
+    assert cleaned["output_price_cny"] == 0
+    assert cleaned["price_multiplier"] == 1
+    assert "model_pricing" not in cleaned
 
 
 def test_config_request_encrypts_key_and_defaults_to_direct_connection():

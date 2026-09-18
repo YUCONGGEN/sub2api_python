@@ -1103,7 +1103,7 @@ class SubscriptionGatewayService:
     async def _bill(self, user_id: int, model: str, account: dict[str, Any], usage: dict[str, int]) -> SubscriptionGatewayResponse | None:
         input_tokens = max(0, int(usage.get("input_tokens") or 0))
         output_tokens = max(0, int(usage.get("output_tokens") or 0))
-        cost = self.accounts.cost(account, input_tokens, output_tokens)
+        cost = self.accounts.cost(account, input_tokens, output_tokens, model)
         ok, _ = await asyncio.to_thread(self.store.charge, int(user_id), model, input_tokens, output_tokens, cost)
         if not ok:
             return self._json_error(402, "Insufficient balance", "insufficient_quota")

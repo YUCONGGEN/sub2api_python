@@ -25,6 +25,7 @@ class UpstreamSubscriptionAccount:
     account_ref: str = Column(nullable=False, length=255, default="")
     credentials_encrypted: str = Column(nullable=False)
     models_json: str = Column(nullable=False, default="[]")
+    model_pricing_json: str = Column(nullable=False, default="{}")
     enabled: bool = Column(nullable=False, default=True)
     priority: int = Column(nullable=False, default=0)
     weight: int = Column(nullable=False, default=1)

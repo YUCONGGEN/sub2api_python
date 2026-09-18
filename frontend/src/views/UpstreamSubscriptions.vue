@@ -128,11 +128,35 @@
             </template>
           </div>
           <p v-if="account.can_manage && account.last_error" class="account-error">{{ account.last_error }}</p>
-          <div v-if="account.can_manage" class="account-actions"><button class="secondary-btn" :disabled="actionId === account.id" @click="testAccount(account)">测试</button><button v-if="account.has_refresh_token" class="secondary-btn" :disabled="actionId === account.id" @click="refreshAccount(account)">刷新 Token</button><button class="secondary-btn" @click="openEdit(account)">编辑</button><button class="secondary-btn" @click="toggleAccount(account)">{{ account.enabled ? '停用' : '启用' }}</button><button class="text-btn danger" @click="removeAccount(account)">删除</button></div>
+          <div v-if="account.can_manage" class="account-actions"><button class="secondary-btn" :disabled="actionId === account.id" @click="testAccount(account)">测试</button><button v-if="account.has_refresh_token" class="secondary-btn" :disabled="actionId === account.id" @click="refreshAccount(account)">刷新 Token</button><button v-if="isAdmin" class="secondary-btn pricing-action" @click="openPricing(account)">修改定价<span v-if="pricingOverrideCount(account)"> · {{ pricingOverrideCount(account) }}</span></button><button class="secondary-btn" @click="openEdit(account)">编辑</button><button class="secondary-btn" @click="toggleAccount(account)">{{ account.enabled ? '停用' : '启用' }}</button><button class="text-btn danger" @click="removeAccount(account)">删除</button></div>
         </article>
       </div>
       <div class="pagination" v-if="pagination.pages > 1"><button class="secondary-btn" :disabled="loading || pagination.page <= 1" @click="changePage(pagination.page - 1)">上一页</button><span>第 {{ pagination.page }} / {{ pagination.pages }} 页，共 {{ pagination.total }} 个账号</span><button class="secondary-btn" :disabled="loading || pagination.page >= pagination.pages" @click="changePage(pagination.page + 1)">下一页</button></div>
     </section>
+
+    <div v-if="pricingAccount" class="pricing-backdrop" @click.self="closePricing">
+      <section class="pricing-dialog" role="dialog" aria-modal="true" aria-labelledby="model-pricing-title">
+        <header class="pricing-dialog-head">
+          <div><span class="eyebrow">MODEL PRICING</span><h2 id="model-pricing-title">按模型修改定价</h2><p>{{ pricingAccount.name }} · 未开启单独定价的模型继续使用账号统一价格。</p></div>
+          <button class="pricing-close" type="button" aria-label="关闭" @click="closePricing">×</button>
+        </header>
+        <div class="pricing-defaults">
+          <span><small>统一输入价</small><b>¥{{ numberText(pricingAccount.input_price_cny) }}</b></span>
+          <span><small>统一输出价</small><b>¥{{ numberText(pricingAccount.output_price_cny) }}</b></span>
+          <span><small>统一倍率</small><b>{{ numberText(pricingAccount.price_multiplier) }}×</b></span>
+        </div>
+        <div v-if="pricingRows.length" class="model-pricing-list">
+          <article v-for="row in pricingRows" :key="row.model" :class="{ custom: row.custom }">
+            <div class="model-pricing-name"><strong>{{ row.model }}</strong><label><input v-model="row.custom" type="checkbox" /><span>单独定价</span></label></div>
+            <label><span>输入价（¥/百万 Token）</span><input v-model.number="row.input_price_cny" :disabled="!row.custom" type="number" min="0" max="1000000" step="0.01" /></label>
+            <label><span>输出价（¥/百万 Token）</span><input v-model.number="row.output_price_cny" :disabled="!row.custom" type="number" min="0" max="1000000" step="0.01" /></label>
+            <label><span>价格倍率</span><input v-model.number="row.price_multiplier" :disabled="!row.custom" type="number" min="0" max="1000" step="0.01" /></label>
+          </article>
+        </div>
+        <div v-else class="empty">此账号没有可单独定价的模型 ID。</div>
+        <footer class="pricing-dialog-actions"><button class="secondary-action" type="button" @click="closePricing">取消</button><button class="primary-action" type="button" :disabled="pricingBusy || !pricingRows.length" @click="savePricing">{{ pricingBusy ? '保存中…' : '保存模型定价' }}</button></footer>
+      </section>
+    </div>
 
     <section class="panel config-requests">
       <div class="panel-head"><div><span class="eyebrow">UPSTREAM CONFIG REQUEST</span><h2>上游配置申请</h2><p>提交 URL、API Key 和模型 ID 给管理员，API Key 会加密保存且列表中只显示掩码。</p></div></div>
@@ -173,7 +197,7 @@ export default {
   name: 'UpstreamSubscriptions',
   components: { GatewayActivity },
   props: { user: { type: Object, default: null }, subscriptionContributionsEnabled: { type: Boolean, default: false } },
-  data: () => ({ accounts: [], summary: {}, gatewayMetrics: {}, quotaByAccount: {}, pagination: { page: 1, pages: 1, total: 0 }, error: '', loading: false, busy: false, actionId: null, filter: '', showForm: false, editingId: null, oauthSession: null, gatewayEnabled: false, metricsTimer: null, configRequests: [], requestLoading: false, requestBusy: false, requestForm: { url: '', api_key: '', model_id: '', use_proxy: false }, form: defaults('openai') }),
+  data: () => ({ accounts: [], summary: {}, gatewayMetrics: {}, quotaByAccount: {}, pagination: { page: 1, pages: 1, total: 0 }, error: '', loading: false, busy: false, actionId: null, filter: '', showForm: false, editingId: null, oauthSession: null, gatewayEnabled: false, metricsTimer: null, configRequests: [], requestLoading: false, requestBusy: false, requestForm: { url: '', api_key: '', model_id: '', use_proxy: false }, form: defaults('openai'), pricingAccount: null, pricingRows: [], pricingBusy: false }),
   computed: { isAdmin () { return String(this.user?.role || '').toUpperCase() === 'ADMIN' } },
   watch: { 'form.provider' (next, previous) { if (!this.editingId && !this.oauthSession && next !== previous) this.form.models = defaults(next).models } },
   created () { this.load(); this.loadConfigRequests(); if (this.isAdmin) this.metricsTimer = window.setInterval(this.refreshGatewayMetrics, 5000) },
@@ -182,6 +206,36 @@ export default {
   methods: {
     providerLabel (provider) { return provider === 'openai' ? 'OpenAI / Codex' : 'Claude / Anthropic' },
     providerCount (provider) { return Number(this.summary[provider] || 0) },
+    numberText (value) { const number = Number(value || 0); return Number.isFinite(number) ? number.toLocaleString('zh-CN', { maximumFractionDigits: 8 }) : '0' },
+    pricingOverrideCount (account) { return Object.keys(account?.model_pricing || {}).length },
+    openPricing (account) {
+      const overrides = account.model_pricing || {}
+      this.pricingAccount = account
+      this.pricingRows = (account.models || []).filter(model => model !== '*').map(model => {
+        const pricing = overrides[model]
+        return {
+          model,
+          custom: !!pricing,
+          input_price_cny: Number(pricing?.input_price_cny ?? account.input_price_cny ?? 0),
+          output_price_cny: Number(pricing?.output_price_cny ?? account.output_price_cny ?? 0),
+          price_multiplier: Number(pricing?.price_multiplier ?? account.price_multiplier ?? 1)
+        }
+      })
+    },
+    closePricing () { if (this.pricingBusy) return; this.pricingAccount = null; this.pricingRows = [] },
+    async savePricing () {
+      if (!this.pricingAccount) return
+      const modelPricing = {}
+      this.pricingRows.filter(row => row.custom).forEach(row => { modelPricing[row.model] = { input_price_cny: row.input_price_cny, output_price_cny: row.output_price_cny, price_multiplier: row.price_multiplier } })
+      this.pricingBusy = true
+      try {
+        const data = await api.updateUpstreamSubscription(this.pricingAccount.id, { model_pricing: modelPricing })
+        Object.assign(this.pricingAccount, data.account || { model_pricing: modelPricing })
+        notify(data.message || '模型定价已更新', 'success')
+        this.pricingAccount = null
+        this.pricingRows = []
+      } catch (error) { notify(error.message || '模型定价保存失败', 'error') } finally { this.pricingBusy = false }
+    },
     quotaState (account) { return this.quotaByAccount[account.id] || { loading: false, quota: null, error: '' } },
     quotaWindows (quota) { return [quota?.short_window, quota?.long_window].filter(Boolean) },
     quotaPercent (value) { return Math.min(100, Math.max(0, Number(value || 0))).toFixed(1).replace(/\.0$/, '') },
@@ -240,6 +294,30 @@ export default {
 <style scoped>
 .subscription-page{display:grid;gap:22px}.primary-action,.secondary-action,.text-action,.mode-tabs button,.provider-filter button,.account-actions button{border:1px solid var(--line,#d9dde5);background:var(--panel,#fff);color:inherit;border-radius:10px;padding:10px 15px;cursor:pointer}.primary-action{background:#17191d;color:#fff;border-color:#17191d;font-weight:700}.secondary-action{background:transparent}.text-action{padding:7px 11px}.primary-action:disabled,.account-actions button:disabled{opacity:.55;cursor:wait}.gateway-metrics{margin:0}.account-editor{display:grid;gap:18px}.mode-tabs,.provider-filter{display:flex;gap:8px;flex-wrap:wrap}.mode-tabs button.active,.provider-filter button.active{background:#17191d;color:#fff}.form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px}.form-grid label{display:grid;gap:7px}.form-grid label>span{font-size:13px;color:var(--muted,#6c7280);font-weight:600}.form-grid label>small{color:var(--muted,#6c7280);font-size:12px;line-height:1.5}.form-grid input,.form-grid select,.form-grid textarea,.oauth-step textarea{width:100%;box-sizing:border-box;border:1px solid var(--line,#d9dde5);border-radius:10px;background:var(--panel,#fff);color:inherit;padding:11px 12px;font:inherit}.span-2{grid-column:1/-1}.check-line{display:flex!important;align-items:center;grid-template-columns:auto 1fr!important}.check-line input,.compliance-check input{width:16px}.token-grid{padding-top:5px}.credential-update{border:1px solid var(--line,#d9dde5);border-radius:12px;padding:12px 14px}.credential-update summary{cursor:pointer;font-weight:700;margin-bottom:12px}.compliance-check{display:flex;gap:10px;align-items:flex-start;padding:14px;border:1px solid #e5c772;background:#fff9e7;color:#5b4810;border-radius:10px}.oauth-step{display:grid;gap:10px;padding:16px;border-radius:12px;background:#f1f5ff;border:1px solid #cbd8ff}.oauth-step p{margin:0;color:#566078}.oauth-step a{font-weight:700;color:#315cc8}.editor-actions{display:flex;gap:10px;flex-wrap:wrap}.account-list{display:grid;gap:14px}.account-card{display:grid;gap:14px;border:1px solid var(--line,#d9dde5);border-radius:14px;padding:17px}.account-main{display:flex;align-items:center;gap:12px}.provider-mark{display:grid;place-items:center;width:42px;height:42px;border-radius:12px;font-weight:900;background:#e7f1ff;color:#1856a7}.provider-mark.claude{background:#fff0e7;color:#9b4f1f}.account-title{display:flex;align-items:center;gap:9px;flex-wrap:wrap}.account-main p{margin:4px 0 0;color:var(--muted,#6c7280);font-size:13px}.status-chip{font-size:11px;border-radius:99px;padding:4px 8px;background:#e9f7ee;color:#247143}.status-chip.invalid{background:#ffe7e7;color:#a12626}.status-chip.cooldown{background:#fff3d4;color:#876211}.status-chip.disabled{background:#eceef2;color:#666}.account-models{display:flex;gap:7px;flex-wrap:wrap}.account-models span{font-size:12px;background:var(--soft,#f4f5f7);border-radius:7px;padding:5px 8px}.account-facts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:0}.account-facts div{display:grid;gap:3px}.account-facts dt{font-size:11px;color:var(--muted,#6c7280)}.account-facts dd{margin:0;font-size:13px;font-weight:650}.account-error{margin:0;padding:9px 11px;background:#fff1f1;color:#8d2929;border-radius:8px;font-size:12px;word-break:break-word}.account-actions{display:flex;gap:8px;flex-wrap:wrap}.account-actions button{padding:7px 10px;font-size:12px}.account-actions .danger{color:#b32828;border-color:#e9b8b8}.endpoint-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px}.endpoint-grid>div{display:grid;gap:8px;padding:16px;border:1px solid var(--line,#d9dde5);border-radius:12px}.endpoint-grid code{display:block;word-break:break-all;background:#17191d;color:#eaf0ff;border-radius:7px;padding:8px 10px}.endpoint-grid p{margin:0;color:var(--muted,#6c7280);line-height:1.55}.safety-note{margin:14px 0 0;padding:11px 13px;border-radius:9px;background:#fff9e7;border:1px solid #e5c772;color:#5b4810;font-size:13px;line-height:1.55}@media(max-width:850px){.form-grid,.endpoint-grid{grid-template-columns:1fr}.span-2{grid-column:auto}.account-facts{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:560px){.account-facts{grid-template-columns:1fr}.page-head{align-items:flex-start}.page-head>.primary-action{width:100%}}
 .config-requests{display:grid;gap:18px}.config-requests .panel-head p{margin:6px 0 0;color:var(--muted,#6c7280)}.request-compose{display:grid;grid-template-columns:1.4fr 1fr .8fr auto auto;gap:10px}.request-compose input{min-width:0;border:1px solid var(--line,#d9dde5);border-radius:10px;background:var(--panel,#fff);color:inherit;padding:11px 12px;font:inherit}.proxy-choice{display:flex;align-items:center;gap:7px;padding:0 5px;white-space:nowrap}.proxy-choice input{width:16px}.request-list{display:grid;gap:9px}.request-list article{display:grid;grid-template-columns:minmax(220px,1fr) minmax(120px,.45fr) auto auto auto;align-items:center;gap:12px;padding:13px;border:1px solid var(--line,#d9dde5);border-radius:11px}.request-list article>div:first-child{display:grid;gap:3px}.request-list small{color:var(--muted,#6c7280);word-break:break-all}.request-list code{word-break:break-all}.proxy-badge{font-size:12px;color:var(--muted,#6c7280);white-space:nowrap}.request-status{padding:5px 8px;border-radius:99px;background:#fff3d4;color:#876211;font-size:12px}.request-status.accepted{background:#e9f7ee;color:#247143}.request-status.rejected{background:#ffe7e7;color:#a12626}.request-actions{display:flex;gap:6px;flex-wrap:wrap}.request-actions button{border:1px solid var(--line,#d9dde5);border-radius:8px;background:transparent;color:inherit;padding:6px 9px;cursor:pointer}@media(max-width:1100px){.request-compose,.request-list article{grid-template-columns:1fr 1fr}}@media(max-width:620px){.request-compose,.request-list article{grid-template-columns:1fr}}
+.account-actions .pricing-action{border-color:#8eb7c8;background:#edf8fa;color:#32677c;font-weight:700}
+.pricing-backdrop{position:fixed;z-index:1200;inset:0;display:grid;place-items:center;padding:24px;background:#0b1721a8;backdrop-filter:blur(5px)}
+.pricing-dialog{display:grid;width:min(1040px,100%);max-height:min(820px,calc(100vh - 48px));overflow:auto;border:1px solid #cbdde7;border-radius:20px;background:#f8fbfc;box-shadow:0 30px 90px #07121d52}
+.pricing-dialog-head{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;padding:24px 26px;border-bottom:1px solid #dbe7ed;background:linear-gradient(115deg,#eaf6f8,#f3f1fa)}
+.pricing-dialog-head h2{margin:5px 0 0;color:#234e67}.pricing-dialog-head p{margin:7px 0 0;color:#718796;font-size:12px}.pricing-close{display:grid;place-items:center;width:38px;height:38px;border:1px solid #c9d9e2;border-radius:11px;background:#ffffffb8;color:#557184;font-size:24px;line-height:1;cursor:pointer}
+.pricing-defaults{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding:16px 26px;border-bottom:1px solid #dce7ed}.pricing-defaults span{display:grid;gap:5px;padding:11px 13px;border:1px solid #d7e4ea;border-radius:11px;background:#fff}.pricing-defaults small{color:#7d929f;font-size:10px}.pricing-defaults b{color:#315b73;font:600 13px var(--mono)}
+.model-pricing-list{display:grid;gap:9px;padding:18px 26px}.model-pricing-list article{display:grid;grid-template-columns:minmax(190px,1.25fr) repeat(3,minmax(150px,1fr));align-items:end;gap:10px;padding:14px;border:1px solid #d9e5eb;border-radius:13px;background:#fff}.model-pricing-list article.custom{border-color:#82b0c2;background:#f4fbfc;box-shadow:0 0 0 3px #5b9bb210}.model-pricing-name{display:grid;align-self:center;gap:8px;min-width:0}.model-pricing-name strong{overflow:hidden;color:#2c566e;font:600 12px var(--mono);text-overflow:ellipsis;white-space:nowrap}.model-pricing-name label{display:flex;align-items:center;gap:7px;color:#748b99;font-size:11px}.model-pricing-list article>label{display:grid;gap:6px;color:#6e8492;font-size:10px}.model-pricing-list input[type="number"]{width:100%;box-sizing:border-box;border:1px solid #cfdee6;border-radius:9px;background:#fff;color:#294f67;padding:9px 10px;font:500 12px var(--mono)}.model-pricing-list input:disabled{opacity:.58;background:#edf2f4}.pricing-dialog-actions{display:flex;justify-content:flex-end;gap:10px;padding:17px 26px;border-top:1px solid #dbe7ed;background:#f3f7f9}
+:global(html[data-theme="dark"] .account-actions .pricing-action){border-color:#416b7e;background:#193845;color:#add1dd}
+:global(html[data-theme="dark"] .pricing-backdrop){background:#02070bc2}
+:global(html[data-theme="dark"] .pricing-dialog){border-color:#304d5e;background:#111e28;box-shadow:0 30px 90px #020609b8}
+:global(html[data-theme="dark"] .pricing-dialog-head){border-color:#2c4656;background:linear-gradient(115deg,#172d38,#28283c)}
+:global(html[data-theme="dark"] .pricing-dialog-head h2){color:#d0e1e9}
+:global(html[data-theme="dark"] .pricing-dialog-head p){color:#8ea4b1}
+:global(html[data-theme="dark"] .pricing-close){border-color:#385566;background:#1a2c38;color:#bdd0da}
+:global(html[data-theme="dark"] .pricing-defaults){border-color:#2c4656}
+:global(html[data-theme="dark"] .pricing-defaults span){border-color:#2e4a5b;background:#172934}
+:global(html[data-theme="dark"] .pricing-defaults b){color:#c5dbe5}
+:global(html[data-theme="dark"] .model-pricing-list article){border-color:#2d4859;background:#162732}
+:global(html[data-theme="dark"] .model-pricing-list article.custom){border-color:#4d7d90;background:#17333e}
+:global(html[data-theme="dark"] .model-pricing-name strong){color:#c5dbe6}
+:global(html[data-theme="dark"] .model-pricing-list input[type="number"]){border-color:#345365;background:#13232e;color:#dbe7ed}
+:global(html[data-theme="dark"] .model-pricing-list input:disabled){background:#1c2c35;color:#8195a1}
+:global(html[data-theme="dark"] .pricing-dialog-actions){border-color:#2c4656;background:#13212b}
+@media(max-width:850px){.model-pricing-list article{grid-template-columns:1fr 1fr}.model-pricing-name{grid-column:1/-1}.pricing-defaults{grid-template-columns:1fr}.pricing-backdrop{padding:10px}.pricing-dialog{max-height:calc(100vh - 20px)}}
 /* Account pool cards follow the compact visual language used by plan management. */
 .account-list {
   grid-template-columns:repeat(4,minmax(0,1fr));

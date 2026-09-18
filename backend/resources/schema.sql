@@ -232,6 +232,7 @@ CREATE TABLE IF NOT EXISTS upstream_subscription_accounts (
   account_ref TEXT NOT NULL DEFAULT '',
   credentials_encrypted TEXT NOT NULL,
   models_json TEXT NOT NULL DEFAULT '[]',
+  model_pricing_json TEXT NOT NULL DEFAULT '{}',
   enabled INTEGER NOT NULL DEFAULT 1,
   priority INTEGER NOT NULL DEFAULT 0,
   weight INTEGER NOT NULL DEFAULT 1,

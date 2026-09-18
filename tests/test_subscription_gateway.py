@@ -71,6 +71,7 @@ def account(account_id, *, priority=0, weight=1, models=None):
         "priority": priority,
         "weight": weight,
         "models_json": json.dumps(models or ["gpt-test"]),
+        "model_pricing_json": "{}",
         "credentials_encrypted": json.dumps({"access_token": f"token-{account_id}"}),
         "expires_at": None,
         "cooldown_until": None,
@@ -345,6 +346,37 @@ def test_usage_parsing_and_cost_for_both_protocols():
     assert SubscriptionAccountService.cost(account(1), 1_000_000, 500_000) == 9.0
 
 
+def test_model_specific_pricing_overrides_account_defaults_and_falls_back():
+    row = account(1, models=["gpt-cheap", "gpt-premium"])
+    row["model_pricing_json"] = json.dumps({
+        "gpt-premium": {
+            "input_price_cny": 10,
+            "output_price_cny": 30,
+            "price_multiplier": 2,
+        },
+    })
+
+    assert SubscriptionAccountService.cost(row, 1_000_000, 500_000, "gpt-premium") == 50.0
+    assert SubscriptionAccountService.cost(row, 1_000_000, 500_000, "gpt-cheap") == 9.0
+    assert SubscriptionAccountService.pricing_for_model(row, "gpt-premium") == {
+        "input_price_cny": 10.0,
+        "output_price_cny": 30.0,
+        "price_multiplier": 2.0,
+    }
+
+
+def test_model_specific_pricing_only_accepts_models_on_the_account():
+    normalized = SubscriptionAccountService.normalize_model_pricing(
+        ["gpt-a", "gpt-b"],
+        {"gpt-a": {"input_price_cny": 1.5, "output_price_cny": 6, "price_multiplier": 1.2}},
+    )
+    assert normalized["gpt-a"]["output_price_cny"] == 6
+    with pytest.raises(ValueError, match="未配置的模型"):
+        SubscriptionAccountService.normalize_model_pricing(
+            ["gpt-a"], {"gpt-other": {"input_price_cny": 1}},
+        )
+
+
 class AsyncChunks(httpx.AsyncByteStream):
     def __init__(self, *chunks):
         self.chunks = chunks
@@ -394,7 +426,7 @@ class RecordingAccounts:
         return True
 
     @staticmethod
-    def cost(row, input_tokens, output_tokens):
+    def cost(row, input_tokens, output_tokens, model_id=None):
         return 0
 
 

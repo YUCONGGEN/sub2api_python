@@ -108,6 +108,60 @@ class SubscriptionAccountService:
             result.append(model)
         return result or list(DEFAULT_MODELS[provider])
 
+    @classmethod
+    def normalize_model_pricing(
+        cls,
+        models: list[str],
+        value: Any,
+        *,
+        default_input: float = 0,
+        default_output: float = 0,
+        default_multiplier: float = 1,
+    ) -> dict[str, dict[str, float]]:
+        if value in (None, ""):
+            return {}
+        if not isinstance(value, dict):
+            raise ValueError("模型定价必须是对象")
+        allowed = {str(model) for model in models if str(model) != "*"}
+        result: dict[str, dict[str, float]] = {}
+        for raw_model, raw_pricing in value.items():
+            model = str(raw_model or "").strip()
+            if not model or len(model) > 160 or model not in allowed:
+                raise ValueError(f"模型定价包含未配置的模型：{model or '空模型'}")
+            if not isinstance(raw_pricing, dict):
+                raise ValueError(f"模型 {model} 的定价必须是对象")
+            result[model] = {
+                "input_price_cny": cls._number(raw_pricing.get("input_price_cny"), f"{model} 输入价格", 0, 1_000_000, default_input),
+                "output_price_cny": cls._number(raw_pricing.get("output_price_cny"), f"{model} 输出价格", 0, 1_000_000, default_output),
+                "price_multiplier": cls._number(raw_pricing.get("price_multiplier"), f"{model} 价格倍率", 0, 1000, default_multiplier),
+            }
+        return result
+
+    @staticmethod
+    def _model_pricing_map(row: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        value = row.get("model_pricing")
+        if isinstance(value, dict):
+            return value
+        try:
+            parsed = json.loads(str(row.get("model_pricing_json") or "{}"))
+        except (TypeError, ValueError):
+            parsed = {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    @classmethod
+    def pricing_for_model(cls, row: dict[str, Any], model_id: str | None = None) -> dict[str, float]:
+        pricing = cls._model_pricing_map(row).get(str(model_id or ""), {})
+        if not isinstance(pricing, dict):
+            pricing = {}
+        base_multiplier = row.get("price_multiplier")
+        if base_multiplier in (None, ""):
+            base_multiplier = 1
+        return {
+            "input_price_cny": max(0.0, float(pricing.get("input_price_cny", row.get("input_price_cny") or 0) or 0)),
+            "output_price_cny": max(0.0, float(pricing.get("output_price_cny", row.get("output_price_cny") or 0) or 0)),
+            "price_multiplier": max(0.0, float(pricing.get("price_multiplier", base_multiplier))),
+        }
+
     @staticmethod
     def _number(value: Any, name: str, minimum: float, maximum: float, default: float) -> float:
         if value in (None, ""):
@@ -219,6 +273,11 @@ class SubscriptionAccountService:
         except ValueError:
             models = []
         data["models"] = models if isinstance(models, list) else []
+        try:
+            model_pricing = json.loads(str(data.pop("model_pricing_json", "{}") or "{}"))
+        except ValueError:
+            model_pricing = {}
+        data["model_pricing"] = model_pricing if isinstance(model_pricing, dict) else {}
         data["enabled"] = bool(data.get("enabled"))
         if not getattr(self, "cooldown_enabled", True) and data.get("status") == "COOLDOWN":
             data["status"] = "READY" if data["enabled"] else "DISABLED"
@@ -301,6 +360,14 @@ class SubscriptionAccountService:
         email = str(credentials.get("email") or body.get("email") or "").strip()[:255]
         account_ref = str(credentials.get("account_id") or credentials.get("chatgpt_account_id") or credentials.get("organization_id") or body.get("account_ref") or "").strip()[:255]
         now = utc_now()
+        models = self.normalize_models(provider, body.get("models"))
+        input_price = self._number(body.get("input_price_cny"), "输入价格", 0, 1_000_000, 0)
+        output_price = self._number(body.get("output_price_cny"), "输出价格", 0, 1_000_000, 0)
+        price_multiplier = self._number(body.get("price_multiplier"), "价格倍率", 0, 1000, 1)
+        model_pricing = self.normalize_model_pricing(
+            models, body.get("model_pricing"),
+            default_input=input_price, default_output=output_price, default_multiplier=price_multiplier,
+        )
         account = {
             "owner_user_id": int(owner_user_id) if owner_user_id else None,
             "provider": provider,
@@ -309,13 +376,14 @@ class SubscriptionAccountService:
             "email": email,
             "account_ref": account_ref,
             "credentials_encrypted": self.cipher.encrypt(credentials),
-            "models_json": json.dumps(self.normalize_models(provider, body.get("models")), ensure_ascii=False, separators=(",", ":")),
+            "models_json": json.dumps(models, ensure_ascii=False, separators=(",", ":")),
+            "model_pricing_json": json.dumps(model_pricing, ensure_ascii=False, separators=(",", ":")),
             "enabled": 1 if as_bool(body.get("enabled"), True) else 0,
             "priority": int(self._number(body.get("priority"), "优先级", -1000, 1000, 0)),
             "weight": int(self._number(body.get("weight"), "权重", 1, 100, 1)),
-            "input_price_cny": self._number(body.get("input_price_cny"), "输入价格", 0, 1_000_000, 0),
-            "output_price_cny": self._number(body.get("output_price_cny"), "输出价格", 0, 1_000_000, 0),
-            "price_multiplier": self._number(body.get("price_multiplier"), "价格倍率", 0, 1000, 1),
+            "input_price_cny": input_price,
+            "output_price_cny": output_price,
+            "price_multiplier": price_multiplier,
             "status": "READY" if as_bool(body.get("enabled"), True) else "DISABLED",
             "error_count": 0,
             "last_error": "",
@@ -413,8 +481,13 @@ class SubscriptionAccountService:
             if not name or len(name) > 120:
                 raise ValueError("账号名称不能为空且不能超过 120 个字符")
             changes["name"] = name
+        try:
+            existing_models = json.loads(str(existing.get("models_json") or "[]"))
+        except ValueError:
+            existing_models = []
+        models = self.normalize_models(str(existing["provider"]), body.get("models")) if "models" in body else existing_models
         if "models" in body:
-            changes["models_json"] = json.dumps(self.normalize_models(str(existing["provider"]), body.get("models")), ensure_ascii=False, separators=(",", ":"))
+            changes["models_json"] = json.dumps(models, ensure_ascii=False, separators=(",", ":"))
         if "enabled" in body:
             enabled = as_bool(body.get("enabled"))
             changes["enabled"] = 1 if enabled else 0
@@ -431,6 +504,20 @@ class SubscriptionAccountService:
             if key in body:
                 value = self._number(body.get(key), label, minimum, maximum, default)
                 changes[key] = int(value) if key in {"priority", "weight"} else value
+        if "model_pricing" in body or "models" in body:
+            raw_model_pricing = body.get("model_pricing") if "model_pricing" in body else {
+                model: pricing
+                for model, pricing in self._model_pricing_map(existing).items()
+                if model in models
+            }
+            model_pricing = self.normalize_model_pricing(
+                models,
+                raw_model_pricing,
+                default_input=float(changes.get("input_price_cny", existing.get("input_price_cny") or 0)),
+                default_output=float(changes.get("output_price_cny", existing.get("output_price_cny") or 0)),
+                default_multiplier=float(changes.get("price_multiplier", existing.get("price_multiplier") or 1)),
+            )
+            changes["model_pricing_json"] = json.dumps(model_pricing, ensure_ascii=False, separators=(",", ":"))
         supplied_credentials = body.get("credentials") if isinstance(body.get("credentials"), dict) else {}
         access_input = str(supplied_credentials.get("access_token") or body.get("access_token") or "").strip()
         refresh_input = str(supplied_credentials.get("refresh_token") or body.get("refresh_token") or "").strip()
@@ -604,19 +691,21 @@ class SubscriptionAccountService:
                 last_error = next((str(item.get("last_error") or "").strip() for item in accounts if item.get("last_error")), "")
                 if last_error:
                     detail += f"：{last_error[:180]}"
-            sample = accounts[0]
+            sample = available[0] if available else accounts[0]
+            model_pricing = self.pricing_for_model(sample, model)
             result.append({
                         "id": str(model),
                         "provider": "OpenAI Subscription" if provider == "openai" else "Claude Subscription",
                         "endpoint": "Responses" if provider == "openai" else "Messages",
                         "group": "Subscription Gateway",
                         "pricing": {
-                            "input-cny-per-million": float(sample.get("input_price_cny") or 0),
-                            "output-cny-per-million": float(sample.get("output_price_cny") or 0),
+                            "input-cny-per-million": model_pricing["input_price_cny"],
+                            "output-cny-per-million": model_pricing["output_price_cny"],
+                            "multiplier": model_pricing["price_multiplier"],
                         },
                         "currency": "CNY",
-                        "input": float(sample.get("input_price_cny") or 0),
-                        "output": float(sample.get("output_price_cny") or 0),
+                        "input": model_pricing["input_price_cny"],
+                        "output": model_pricing["output_price_cny"],
                         "description": "由已授权订阅账号池提供的标准兼容 API。",
                         "enabled": is_available,
                         "upstream_model": str(model),
@@ -693,11 +782,12 @@ class SubscriptionAccountService:
         self.pool.forget(int(row["id"]))
         return True
 
-    @staticmethod
-    def cost(row: dict[str, Any], input_tokens: int, output_tokens: int) -> float:
-        multiplier = max(0.0, float(row.get("price_multiplier") or 1))
-        input_price = max(0.0, float(row.get("input_price_cny") or 0))
-        output_price = max(0.0, float(row.get("output_price_cny") or 0))
+    @classmethod
+    def cost(cls, row: dict[str, Any], input_tokens: int, output_tokens: int, model_id: str | None = None) -> float:
+        pricing = cls.pricing_for_model(row, model_id)
+        multiplier = pricing["price_multiplier"]
+        input_price = pricing["input_price_cny"]
+        output_price = pricing["output_price_cny"]
         return round(((max(0, int(input_tokens)) * input_price + max(0, int(output_tokens)) * output_price) / 1_000_000) * multiplier, 8)
 
 

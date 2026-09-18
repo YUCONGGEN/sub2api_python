@@ -178,6 +178,7 @@ CREATE TABLE IF NOT EXISTS upstream_subscription_accounts (
   account_ref VARCHAR(255) NOT NULL DEFAULT '',
   credentials_encrypted LONGTEXT NOT NULL,
   models_json LONGTEXT NOT NULL,
+  model_pricing_json LONGTEXT NOT NULL,
   enabled TINYINT NOT NULL DEFAULT 1,
   priority INT NOT NULL DEFAULT 0,
   weight INT NOT NULL DEFAULT 1,

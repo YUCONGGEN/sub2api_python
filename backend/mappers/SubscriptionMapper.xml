@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <mapper namespace="backend.mappers.subscription_mapper.SubscriptionMapper">
-    <sql id="AccountColumns">id, owner_user_id, provider, name, auth_type, email, account_ref, credentials_encrypted, models_json, enabled, priority, weight, input_price_cny, output_price_cny, price_multiplier, status, error_count, last_error, expires_at, cooldown_until, last_used_at, compliance_confirmed_at, created_at, updated_at</sql>
+    <sql id="AccountColumns">id, owner_user_id, provider, name, auth_type, email, account_ref, credentials_encrypted, models_json, model_pricing_json, enabled, priority, weight, input_price_cny, output_price_cny, price_multiplier, status, error_count, last_error, expires_at, cooldown_until, last_used_at, compliance_confirmed_at, created_at, updated_at</sql>
     <sql id="RequestColumns">id, user_id, base_url, api_key_encrypted, model_id, use_proxy, status, admin_note, created_at, updated_at</sql>
 
     <select id="count_accounts" resultType="int">
@@ -22,12 +22,12 @@
     </select>
     <insert id="insert_account" useGeneratedKeys="true" keyProperty="account.id">
         INSERT INTO upstream_subscription_accounts(
-          owner_user_id,provider,name,auth_type,email,account_ref,credentials_encrypted,models_json,
+          owner_user_id,provider,name,auth_type,email,account_ref,credentials_encrypted,models_json,model_pricing_json,
           enabled,priority,weight,input_price_cny,output_price_cny,price_multiplier,
           status,error_count,last_error,expires_at,cooldown_until,last_used_at,
           compliance_confirmed_at,created_at,updated_at
         ) VALUES(
-          #{account.owner_user_id},#{account.provider},#{account.name},#{account.auth_type},#{account.email},#{account.account_ref},#{account.credentials_encrypted},#{account.models_json},
+          #{account.owner_user_id},#{account.provider},#{account.name},#{account.auth_type},#{account.email},#{account.account_ref},#{account.credentials_encrypted},#{account.models_json},#{account.model_pricing_json},
           #{account.enabled},#{account.priority},#{account.weight},#{account.input_price_cny},#{account.output_price_cny},#{account.price_multiplier},
           #{account.status},#{account.error_count},#{account.last_error},#{account.expires_at},#{account.cooldown_until},#{account.last_used_at},
           #{account.compliance_confirmed_at},#{account.created_at},#{account.updated_at}
@@ -42,6 +42,7 @@
             <if test="changes.account_ref != null">account_ref = #{changes.account_ref},</if>
             <if test="changes.credentials_encrypted != null">credentials_encrypted = #{changes.credentials_encrypted},</if>
             <if test="changes.models_json != null">models_json = #{changes.models_json},</if>
+            <if test="changes.model_pricing_json != null">model_pricing_json = #{changes.model_pricing_json},</if>
             <if test="changes.enabled != null">enabled = #{changes.enabled},</if>
             <if test="changes.priority != null">priority = #{changes.priority},</if>
             <if test="changes.weight != null">weight = #{changes.weight},</if>

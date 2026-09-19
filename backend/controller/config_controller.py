@@ -56,6 +56,7 @@ class ConfigController:
         password_recovery = cfg.get("password-recovery", {}) if isinstance(cfg.get("password-recovery"), dict) else {}
         contributions_enabled = str(subscription_gateway.get("user-contributions-enabled", True)).strip().lower() in {"1", "true", "yes", "on"}
         group_overview_visible = str(user_groups.get("overview-visible-to-users", True)).strip().lower() in {"1", "true", "yes", "on"}
+        group_members_visible = str(user_groups.get("member-usage-visible-to-users", True)).strip().lower() in {"1", "true", "yes", "on"}
         visualization_visible = str(data_visualization.get("visible-to-users", True)).strip().lower() in {"1", "true", "yes", "on"}
         monitoring_enabled = str(monitoring.get("enabled", True)).strip().lower() in {"1", "true", "yes", "on"}
         password_recovery_enabled = str(password_recovery.get("enabled", True)).strip().lower() in {"1", "true", "yes", "on"}
@@ -79,6 +80,7 @@ class ConfigController:
             "recharge_code_placeholder": f"输入 {prefix}-XXXX-XXXX-XXXX",
             "subscription_contributions_enabled": contributions_enabled,
             "user_group_overview_visible": group_overview_visible,
+            "user_group_members_visible": group_members_visible,
             "data_visualization_visible": visualization_visible,
             "monitoring_enabled": monitoring_enabled,
             "password_recovery_enabled": password_recovery_enabled,

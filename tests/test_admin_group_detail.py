@@ -73,12 +73,16 @@ def test_empty_group_and_missing_group(service):
     assert service.admin_group_detail(999) is None
 
 
-def test_user_group_overview_never_contains_member_records(service):
+def test_user_group_overview_only_contains_members_when_requested(service):
     result = service.user_group_overview(1)
 
     assert result['totals']['member_count'] == 7
     assert result['totals']['total_tokens'] == 1500
     assert 'members' not in result
+
+    visible = service.user_group_overview(1, 2, 5, include_members=True)
+    assert [row['id'] for row in visible['members']['items']] == [6, 7]
+    assert visible['members']['page'] == 2
 
 
 def test_pagination_clamps_and_moving_member_changes_current_group_totals(service):
@@ -114,12 +118,26 @@ def test_admin_group_detail_success_and_not_found(service):
 def test_regular_user_sees_only_own_effective_group_overview(service, monkeypatch):
     user = {'id': 7, 'role': 'USER', 'group_id': 1, 'effective_group_id': 1, 'group_source': 'ASSIGNED'}
     auth = SimpleNamespace(user_from_authorization=lambda _: user)
-    monkeypatch.setattr(auth_controller, 'get_config', lambda: {'rose': {'user-groups': {'overview-visible-to-users': True}}})
+    monkeypatch.setattr(auth_controller, 'get_config', lambda: {'rose': {'user-groups': {'overview-visible-to-users': True, 'member-usage-visible-to-users': True}}})
+
+    result = AuthController(service, auth).group_overview('token', page=1, page_size=5)
+
+    assert result.code == 200
+    assert result.data['group']['id'] == 1
+    assert result.data['totals']['member_count'] == 7
+    assert len(result.data['members']['items']) == 5
+    assert result.data['members']['items'][0]['username'] == 'user1'
+    assert all('password_hash' not in row and 'api_key' not in row for row in result.data['members']['items'])
+
+
+def test_member_usage_yaml_switch_keeps_aggregate_overview(service, monkeypatch):
+    user = {'id': 7, 'role': 'USER', 'effective_group_id': 1}
+    auth = SimpleNamespace(user_from_authorization=lambda _: user)
+    monkeypatch.setattr(auth_controller, 'get_config', lambda: {'rose': {'user-groups': {'overview-visible-to-users': True, 'member-usage-visible-to-users': False}}})
 
     result = AuthController(service, auth).group_overview('token')
 
     assert result.code == 200
-    assert result.data['group']['id'] == 1
     assert result.data['totals']['member_count'] == 7
     assert 'members' not in result.data
 
@@ -132,4 +150,4 @@ def test_yaml_switch_blocks_regular_user_but_not_admin(service, monkeypatch):
     assert AuthController(service, regular).group_overview('token').code == 403
     admin_result = AuthController(service, admin).group_overview('token')
     assert admin_result.code == 200
-    assert 'members' not in admin_result.data
+    assert 'members' in admin_result.data

@@ -303,13 +303,23 @@ class StoreService:
         return {"group": group, "totals": totals,
                 "members": self.page_result(members, total, page, page_size)}
 
-    def user_group_overview(self, group_id: int) -> dict[str, Any] | None:
-        """Return aggregate group information without exposing member records."""
+    def user_group_overview(self, group_id: int, page: int = 1, page_size: int = 5, *, include_members: bool = False) -> dict[str, Any] | None:
+        """Return one group's aggregate policy and optional read-only member usage."""
         group = self.find_user_group(group_id)
         if not group:
             return None
         totals = dict(self.mapper.user_group_totals(int(group_id)))
-        return {"group": group, "totals": totals}
+        result: dict[str, Any] = {"group": group, "totals": totals}
+        if include_members:
+            total = int(totals.get("member_count") or 0)
+            page, page_size, _, offset = self.page_window(total, page, page_size)
+            fields = ("id", "username", "email", "role", "enabled", "last_login", "requests", "total_cost", "total_tokens")
+            members = [
+                {key: row.get(key) for key in fields}
+                for row in self.mapper.user_group_members(int(group_id), offset, page_size)
+            ]
+            result["members"] = self.page_result(members, total, page, page_size)
+        return result
 
     @staticmethod
     def _normalize_mapping_ids(value: Any) -> list[int]:

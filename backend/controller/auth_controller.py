@@ -121,8 +121,18 @@ class AuthController:
             return value.strip().lower() in {"1", "true", "yes", "on"}
         return bool(value)
 
+    @staticmethod
+    def _group_members_visible(user: dict) -> bool:
+        if str(user.get("role") or "").upper() == "ADMIN":
+            return True
+        cfg = get_config().get("rose", {}).get("user-groups", {})
+        value = cfg.get("member-usage-visible-to-users", True) if isinstance(cfg, dict) else True
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
     @GetMapping("/group-overview")
-    def group_overview(self, authorization: str = RequestHeader(name="Authorization", required=False)):
+    def group_overview(self, authorization: str = RequestHeader(name="Authorization", required=False), page: int = RequestParam(name="page", required=False, default=1), page_size: int = RequestParam(name="page_size", required=False, default=5)):
         user = self.auth.user_from_authorization(authorization)
         if not user:
             return unauthorized()
@@ -131,7 +141,12 @@ class AuthController:
         group_id = user.get("effective_group_id") or user.get("group_id")
         if not group_id:
             return not_found("当前账号未加入用户分组")
-        detail = self.store.user_group_overview(int(group_id))
+        page = page if isinstance(page, (int, str)) else 1
+        page_size = page_size if isinstance(page_size, (int, str)) else 5
+        detail = self.store.user_group_overview(
+            int(group_id), page, page_size,
+            include_members=self._group_members_visible(user),
+        )
         if detail is None:
             return not_found("所在分组不存在或已删除")
         return ok({

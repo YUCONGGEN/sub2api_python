@@ -125,7 +125,7 @@ export const api = {
   createUpstreamConfigRequest: body => client.post('/api/upstream-subscriptions/config-requests', body),
   revealUpstreamConfigRequest: id => client.get(`/api/upstream-subscriptions/config-requests/${id}/secret`),
   updateUpstreamConfigRequest: (id, body) => client.patch(`/api/upstream-subscriptions/config-requests/${id}`, body),
-  myGroupOverview: () => client.get('/api/auth/group-overview'),
+  myGroupOverview: (params = {}) => client.get('/api/auth/group-overview', { params }),
   users: (keyword, params = {}) => client.get('/api/admin/users', { params: { keyword, ...params } }),
   userGroups: (params = {}) => client.get('/api/admin/user-groups', { params }),
   userGroupDetail: (id, params = {}) => client.get(`/api/admin/user-groups/${encodeURIComponent(id)}`, { params }),

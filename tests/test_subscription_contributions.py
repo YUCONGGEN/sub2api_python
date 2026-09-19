@@ -193,3 +193,24 @@ def test_quota_endpoint_blocks_regular_user_when_yaml_switch_is_disabled():
 
     assert denied.code == 403
     assert denied.message == "订阅剩余量当前仅管理员可见"
+
+
+def test_regular_user_can_read_other_shared_account_quota_without_forcing_refresh():
+    controller = SubscriptionController.__new__(SubscriptionController)
+    user = {"id": 7, "role": "USER"}
+    controller.auth = type("Auth", (), {"user_from_authorization": lambda self, token: user})()
+    controller.accounts = make_service()
+    controller.accounts.find_public = lambda account_id: account_row(12)
+    calls = []
+
+    class Gateway:
+        async def query_account_quota(self, account_id, force=False):
+            calls.append((account_id, force))
+            return {"plan_type": "pro", "long_window": {"remaining_percent": 80}}
+
+    controller.gateway = Gateway()
+    result = asyncio.run(controller.account_quota(9, refresh="true", authorization="Bearer user-token"))
+
+    assert result.code == 200
+    assert result.data["quota"]["long_window"]["remaining_percent"] == 80
+    assert calls == [(9, False)]

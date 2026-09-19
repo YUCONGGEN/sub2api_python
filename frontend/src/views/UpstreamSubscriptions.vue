@@ -109,8 +109,8 @@
           <p class="account-summary">{{ providerLabel(account.provider) }} · {{ account.owner_label || '系统账号' }}<br>{{ account.can_manage ? (account.email || '未提供邮箱') + ' · ' + account.credential_mask : '凭据仅账号所有者和管理员可见' }}</p>
           <div class="account-models"><span v-for="model in account.models" :key="model">{{ model }}</span></div>
           <dl v-if="account.can_manage" class="account-facts"><div v-if="isAdmin"><dt>优先级 / 权重</dt><dd>{{ account.priority }} / {{ account.weight }}</dd></div><div><dt>错误次数</dt><dd>{{ account.error_count || 0 }}</dd></div><div><dt>Token 过期</dt><dd>{{ displayTime(account.expires_at) }}</dd></div><div><dt>最近使用</dt><dd>{{ displayTime(account.last_used_at) }}</dd></div></dl>
-          <div v-if="quotaVisible && account.provider === 'openai' && account.can_manage" class="account-quota">
-            <div class="account-quota-head"><div><small>CODEX SUBSCRIPTION</small><strong>订阅剩余量</strong></div><button type="button" :disabled="quotaState(account).loading" @click="loadAccountQuota(account, true)">{{ quotaState(account).loading ? '查询中…' : '刷新' }}</button></div>
+          <div v-if="quotaVisible && account.provider === 'openai'" class="account-quota">
+            <div class="account-quota-head"><div><small>CODEX SUBSCRIPTION</small><strong>订阅剩余量</strong></div><button v-if="account.can_manage" type="button" :disabled="quotaState(account).loading" @click="loadAccountQuota(account, true)">{{ quotaState(account).loading ? '查询中…' : '刷新' }}</button><span v-else class="quota-readonly">只读 · 随页面刷新</span></div>
             <div v-if="quotaState(account).loading && !quotaState(account).quota" class="quota-loading">正在安全查询订阅窗口…</div>
             <div v-else-if="quotaState(account).error && !quotaState(account).quota" class="quota-error">{{ quotaState(account).error }}</div>
             <template v-else-if="quotaState(account).quota">
@@ -166,7 +166,7 @@
     </div>
 
     <section class="panel config-requests">
-      <div class="panel-head"><div><span class="eyebrow">SHARE ACCOUNT TOKEN</span><h2>分享自己账号的 Token</h2><p>可分享 DeepSeek、Kimi、Claude、GLM、MiniMax 等账号的 Token 或 API Key。凭据会加密发送给管理员，审核后加入共享账号池。</p><div class="share-provider-tags"><span>DeepSeek</span><span>Kimi</span><span>Claude</span><span>GLM</span><span>MiniMax</span><span>其他兼容平台</span></div></div></div>
+      <div class="panel-head"><div><span class="eyebrow">SHARE ACCOUNT TOKEN</span><h2>分享自己账号的 Token</h2><p>可分享 DeepSeek、Kimi、Claude、GLM、MiniMax 等账号的 Token 或 API Key。</p><div class="share-provider-tags"><span>DeepSeek</span><span>Kimi</span><span>Claude</span><span>GLM</span><span>MiniMax</span><span>其他兼容平台</span></div></div></div>
       <div class="request-compose">
         <input v-model.trim="requestForm.url" type="url" placeholder="官方 API 地址，如 https://api.deepseek.com/v1" />
         <input v-model.trim="requestForm.api_key" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="账号 Token / API Key（输入内容可见）" />
@@ -266,7 +266,7 @@ export default {
       const previous = this.quotaState(account)
       this.setQuotaState(account.id, { ...previous, loading: true, error: '' })
       try {
-        const data = await api.upstreamSubscriptionQuota(account.id, refresh)
+        const data = await api.upstreamSubscriptionQuota(account.id, refresh && account.can_manage)
         const quota = data.quota || null
         if (quota?.account_disabled) {
           account.enabled = false
@@ -281,7 +281,7 @@ export default {
         if (refresh && !quiet) notify(message, 'error')
       }
     },
-    loadAccountQuotas () { if (!this.quotaVisible) return; this.accounts.filter(account => account.provider === 'openai' && account.can_manage).forEach(account => this.loadAccountQuota(account, true, true)) },
+    loadAccountQuotas () { if (!this.quotaVisible) return; this.accounts.filter(account => account.provider === 'openai').forEach(account => this.loadAccountQuota(account, !!account.can_manage, true)) },
     statusClass (account) { return account.enabled ? String(account.status || 'READY').toLowerCase() : 'disabled' },
     statusText (account) { if (!account.enabled) return '已停用'; return ({ READY: '可用', INVALID: '凭据失效', COOLDOWN: '冷却中', DISABLED: '已停用' })[account.status] || account.status },
     displayTime (value) { if (!value) return '—'; const date = new Date(value); return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN') },
@@ -468,6 +468,7 @@ export default {
   letter-spacing:.08em;
 }
 .account-quota-head strong { color:#294d65;font-size:12px; }
+.quota-readonly { color:#78909e;font-size:9px;white-space:nowrap; }
 .account-quota-head button {
   padding:4px 7px;
   border:1px solid #c8dce7;
@@ -601,6 +602,7 @@ export default {
   background:#233c4c;
   color:#c1d7e3;
 }
+:global(html[data-theme="dark"] .quota-readonly) { color:#91a9b7; }
 :global(html[data-theme="dark"] .quota-window i) { background:#294554; }
 :global(html[data-theme="dark"] .quota-reset) { border-color:#2d4959; }
 :global(html[data-theme="dark"] .account-actions) { border-color:#2d4657; }

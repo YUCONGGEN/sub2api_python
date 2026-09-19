@@ -98,6 +98,16 @@ def test_public_config_exposes_user_group_overview_visibility(monkeypatch):
     assert config_controller.ConfigController().public_config().data["user_group_overview_visible"] is False
 
 
+def test_public_config_exposes_group_member_usage_visibility(monkeypatch):
+    monkeypatch.setattr(config_controller, "get_config", lambda: {"rose": {}})
+    assert config_controller.ConfigController().public_config().data["user_group_members_visible"] is True
+
+    monkeypatch.setattr(config_controller, "get_config", lambda: {
+        "rose": {"user-groups": {"member-usage-visible-to-users": False}}
+    })
+    assert config_controller.ConfigController().public_config().data["user_group_members_visible"] is False
+
+
 def test_public_config_exposes_data_visualization_visibility(monkeypatch):
     monkeypatch.setattr(config_controller, "get_config", lambda: {"rose": {}})
     assert config_controller.ConfigController().public_config().data["data_visualization_visible"] is True

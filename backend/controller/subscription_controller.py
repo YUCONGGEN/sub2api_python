@@ -218,13 +218,16 @@ class SubscriptionController:
             return error
         if not self.accounts.quota_visible(user):
             return forbidden("订阅剩余量当前仅管理员可见")
-        row, denied = self._managed(user, account_id)
-        if denied:
-            return denied
+        row = self.accounts.find_public(account_id)
+        if not row:
+            return not_found("订阅账号不存在")
         if row.get("provider") != "openai":
             return bad("只有 OpenAI / Codex 订阅支持用量查询")
         try:
-            quota = await self.gateway.query_account_quota(account_id, force=str(refresh).lower() in {"1", "true", "yes", "on"})
+            # Everyone covered by the YAML visibility switch can read cached
+            # quota. Only the owner/admin may explicitly bypass that cache.
+            force = str(refresh).lower() in {"1", "true", "yes", "on"} and self.accounts.can_manage(user, row)
+            quota = await self.gateway.query_account_quota(account_id, force=force)
         except ValueError as exc:
             return bad(str(exc), 502)
         return ok({"ok": True, "quota": quota})

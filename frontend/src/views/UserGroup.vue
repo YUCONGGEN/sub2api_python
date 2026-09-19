@@ -4,7 +4,7 @@
       <div>
         <span class="eyebrow">MY ACCESS GROUP</span>
         <h1>{{ detail ? detail.group.name : '我的分组' }}</h1>
-        <p>查看当前生效分组的访问策略和汇总使用情况。</p>
+        <p>查看当前生效分组的访问策略、汇总用量和成员使用数据。</p>
       </div>
       <button class="secondary-btn" :disabled="loading" @click="load">{{ loading ? '加载中…' : '刷新' }}</button>
     </div>
@@ -36,7 +36,23 @@
           <span v-if="!detail.group.allowed_models.length" class="status pending">未开放模型</span>
         </div>
         <p class="group-description">{{ detail.group.description || '暂无分组说明' }}</p>
-        <p class="privacy-note">此页仅提供分组汇总信息，不显示成员名单，也不提供用户查看或管理操作。</p>
+        <p class="privacy-note">组内成员数据仅供查看，不提供用户详情入口、编辑、停用或其他管理操作。</p>
+      </div>
+
+      <div v-if="detail.members" class="panel group-member-directory">
+        <div class="panel-head"><div><span class="eyebrow">MEMBER DIRECTORY</span><h2>组内人员用量</h2></div><span class="status">只读</span></div>
+        <p class="member-note">展示当前基础分组成员的累计调用数据；凭据、密码、API Key、钱包和管理入口不会显示。</p>
+        <div v-if="detail.members.items.length" class="table-wrap">
+          <table><thead><tr><th>账户</th><th>状态</th><th>累计花费</th><th>累计 Token</th><th>请求数</th><th>最近登录</th></tr></thead>
+            <tbody><tr v-for="member in detail.members.items" :key="member.id">
+              <td><strong>@{{ member.username }}</strong><small>{{ member.email || '未设置邮箱' }}</small></td>
+              <td><span :class="['status', member.enabled ? 'success' : 'pending']">{{ member.enabled ? '正常' : '停用' }}</span></td>
+              <td class="member-value">¥{{ money(member.total_cost) }}</td><td class="member-value">{{ number(member.total_tokens) }}</td><td>{{ number(member.requests) }}</td><td>{{ date(member.last_login) }}</td>
+            </tr></tbody>
+          </table>
+        </div>
+        <div v-else class="empty compact-empty">该分组暂无成员</div>
+        <div v-if="detail.members.pages > 1" class="pagination"><button class="secondary-btn" :disabled="page <= 1 || loading" @click="load(page - 1)">上一页</button><span>第 {{ page }} / {{ detail.members.pages }} 页 · 共 {{ detail.members.total }} 人</span><button class="secondary-btn" :disabled="page >= detail.members.pages || loading" @click="load(page + 1)">下一页</button></div>
       </div>
     </template>
   </section>
@@ -47,7 +63,7 @@ import { api } from '../api'
 
 export default {
   name: 'UserGroup',
-  data: () => ({ detail: null, loading: true, error: '' }),
+  data: () => ({ detail: null, loading: true, error: '', page: 1 }),
   computed: {
     sourceLabel () {
       if (this.detail?.group_source !== 'SUBSCRIPTION') return '基础分组'
@@ -60,13 +76,14 @@ export default {
   },
   created () { this.load() },
   methods: {
-    async load () {
+    async load (page = this.page) {
       this.loading = true
       this.error = ''
-      try { this.detail = await api.myGroupOverview() } catch (error) { this.detail = null; this.error = error.message || '分组概况加载失败' } finally { this.loading = false }
+      try { this.detail = await api.myGroupOverview({ page, page_size: 5 }); this.page = this.detail?.members?.page || 1 } catch (error) { this.detail = null; this.error = error.message || '分组概况加载失败' } finally { this.loading = false }
     },
     number (value) { return Number(value || 0).toLocaleString('zh-CN') },
-    money (value) { return Number(value || 0).toLocaleString('zh-CN', { minimumFractionDigits: 4, maximumFractionDigits: 4 }) }
+    money (value) { return Number(value || 0).toLocaleString('zh-CN', { minimumFractionDigits: 4, maximumFractionDigits: 4 }) },
+    date (value) { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '从未登录' }
   }
 }
 </script>
@@ -85,6 +102,10 @@ export default {
 .model-list { display:flex;flex-wrap:wrap;gap:9px; }
 .group-description { margin:0; }
 .privacy-note { margin:0;padding:14px 16px;border-left:3px solid var(--accent);background:var(--soft);color:var(--muted); }
+.group-member-directory { margin-top:20px; }
+.member-note { color:var(--muted); }
+.group-member-directory td small { display:block;margin-top:5px;color:var(--muted); }
+.member-value { white-space:nowrap;font-variant-numeric:tabular-nums; }
 .group-overview-feedback { min-height:160px;display:flex;align-items:center;justify-content:center;gap:18px; }
 @media (max-width:1000px) { .group-overview-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media (max-width:680px) { .policy-facts { grid-template-columns:1fr; } }

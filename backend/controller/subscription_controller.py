@@ -93,6 +93,7 @@ class SubscriptionController:
             "gateway_metrics": metrics,
             "is_admin": self._admin(user),
             "contributions_enabled": True,
+            "quota_visible": self.accounts.quota_visible(user),
         })
 
     @GetMapping("/gateway-metrics")
@@ -215,6 +216,8 @@ class SubscriptionController:
         error = self._available(user)
         if error:
             return error
+        if not self.accounts.quota_visible(user):
+            return forbidden("订阅剩余量当前仅管理员可见")
         row, denied = self._managed(user, account_id)
         if denied:
             return denied

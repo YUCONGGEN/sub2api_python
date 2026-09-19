@@ -1,10 +1,11 @@
 import re
 
+from springbootai import get_config
 from springbootai.annotations import Autowired, DeleteMapping, GetMapping, PatchMapping, PostMapping, RequestBody, RequestHeader, RequestMapping, RestController, RequestParam, PathVariable
 
 from backend.service.store_service import StoreService
 from backend.service.auth_service import AuthService
-from backend.common.response import bad, ok, unauthorized
+from backend.common.response import bad, forbidden, not_found, ok, unauthorized
 
 
 @RestController
@@ -57,6 +58,36 @@ class AuthController:
         if not user:
             return unauthorized()
         return ok({"ok": True, "user": self.store.public_user(user)})
+
+    @staticmethod
+    def _group_overview_visible(user: dict) -> bool:
+        if str(user.get("role") or "").upper() == "ADMIN":
+            return True
+        cfg = get_config().get("rose", {}).get("user-groups", {})
+        value = cfg.get("overview-visible-to-users", True) if isinstance(cfg, dict) else True
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    @GetMapping("/group-overview")
+    def group_overview(self, authorization: str = RequestHeader(name="Authorization", required=False)):
+        user = self.auth.user_from_authorization(authorization)
+        if not user:
+            return unauthorized()
+        if not self._group_overview_visible(user):
+            return forbidden("所在分组概况当前仅管理员可见")
+        group_id = user.get("effective_group_id") or user.get("group_id")
+        if not group_id:
+            return not_found("当前账号未加入用户分组")
+        detail = self.store.user_group_overview(int(group_id))
+        if detail is None:
+            return not_found("所在分组不存在或已删除")
+        return ok({
+            "ok": True,
+            **detail,
+            "group_source": user.get("group_source") or "ASSIGNED",
+            "group_source_plan_name": user.get("group_source_plan_name"),
+        })
 
     @PostMapping("/rotate-key")
     def rotate_key(self, authorization: str = RequestHeader(name="Authorization", required=False)):

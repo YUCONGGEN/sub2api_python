@@ -173,6 +173,12 @@ python app.py
 
 主要配置位于 `rose.subscription-gateway`，可以控制总开关、OAuth/请求超时、连接池和单次请求尝试的账号数。账号池由 SpringBootAI 管理的平滑加权轮询服务调度：优先选择最高优先级，同优先级按权重轮询；带会话粘连键的请求优先沿用原健康账号。账号支持模型白名单、可配置冷却与自动 Token 刷新；401/403 始终会将凭据标记为失效。默认关闭临时冷却，429/网络错误仍会记录并在当前请求内切换池内下一个账号，但不会阻止后续请求再次调度该账号。
 
+`rose.subscription-gateway.quota-visible-to-users` 控制普通用户是否能查看自己贡献账号的订阅剩余量，默认为 `true`。设为 `false` 后，前端不再展示用量卡片，后端同时禁止普通用户访问用量接口；管理员始终可查看。也可通过 `ROSE_SUBSCRIPTION_QUOTA_VISIBLE_TO_USERS` 环境变量覆盖。
+
+`rose.user-groups.overview-visible-to-users` 控制普通用户是否可查看“我的分组”，默认为 `true`。页面仅显示当前生效分组的策略与全组汇总数据，后端不会向普通用户返回成员名单或用户操作信息。可用 `ROSE_USER_GROUP_OVERVIEW_VISIBLE_TO_USERS` 环境变量覆盖。
+
+`rose.data-visualization.visible-to-users` 控制普通用户是否可查看匿名的全站请求趋势、Token/费用趋势、活跃用户和模型用量，默认为 `true`。普通用户的接口不查询也不返回用户排行、计费来源和订单数据。可用 `ROSE_DATA_VISUALIZATION_VISIBLE_TO_USERS` 环境变量覆盖。
+
 OpenAI 订阅上游有时会以 HTTP 200 的 SSE `response.failed` 返回“Selected model is at capacity”。网关会在任何正文、推理增量或工具参数尚未发给客户端时自动退避重试；一旦已经输出语义内容则绝不重放，避免重复回答或重复执行工具。默认重试 2 次、退避 1 秒，可用 `ROSE_SUBSCRIPTION_CAPACITY_RETRIES` 和 `ROSE_SUBSCRIPTION_CAPACITY_RETRY_BASE_SECONDS` 调整。重试耗尽时返回 `503 upstream_capacity`，并带 `Retry-After` 和 `X-Rose-Error-Source: upstream_capacity`。
 
 订阅网关默认启用 `trust-env`：Windows/macOS 会读取操作系统代理，Linux 会读取 `HTTP_PROXY`、`HTTPS_PROXY` 和 `NO_PROXY`。如果部署环境可以直接访问上游，可设置 `ROSE_SUBSCRIPTION_TRUST_ENV=false` 强制直连。

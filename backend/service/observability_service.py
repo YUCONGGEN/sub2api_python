@@ -172,10 +172,10 @@ class ObservabilityService:
         rows = self.mapper.list_admin_events(level, (page - 1) * page_size, page_size)
         return _page_result([dict(row) for row in rows], total, page, page_size)
 
-    def analytics(self) -> dict[str, Any]:
+    def public_analytics(self) -> dict[str, Any]:
+        """Return only anonymous aggregate series safe for regular users."""
         now = datetime.now(timezone.utc)
         start = business_day_start_utc(now - timedelta(days=13)).isoformat()
-        today_start = business_day_start_utc(now).isoformat()
         days = business_date_keys(14, now)
         daily_rows = {}
         for value in self.mapper.admin_daily_usage(start, 30) or []:
@@ -188,6 +188,13 @@ class ObservabilityService:
         return {
             "daily": [{"day": day, "requests": 0, "total_tokens": 0, "total_cost": 0, "failed_requests": 0, **daily_rows.get(day, {})} for day in days],
             "activity": [{"day": day, "active_users": 0, "requests": 0, **activity_rows.get(day, {})} for day in days],
+        }
+
+    def analytics(self) -> dict[str, Any]:
+        now = datetime.now(timezone.utc)
+        today_start = business_day_start_utc(now).isoformat()
+        return {
+            **self.public_analytics(),
             "today_users": [dict(row) for row in (self.mapper.admin_today_user_usage(today_start, 10) or [])],
             "users": [dict(row) for row in (self.mapper.admin_user_usage(10) or [])],
             "statuses": [dict(row) for row in (self.mapper.admin_status_usage() or [])],

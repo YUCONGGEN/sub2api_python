@@ -172,8 +172,18 @@ rose:
     session-affinity-ttl-seconds: ${ROSE_SUBSCRIPTION_SESSION_AFFINITY_TTL_SECONDS:3600}
     # 管理后台订阅用量缓存；查询不进入正常模型转发链路。
     quota-cache-seconds: ${ROSE_SUBSCRIPTION_QUOTA_CACHE_SECONDS:300}
+    # 普通用户是否可查看自己贡献账号的订阅剩余量；管理员始终可见。
+    quota-visible-to-users: ${ROSE_SUBSCRIPTION_QUOTA_VISIBLE_TO_USERS:true}
     # 只看每周窗口；剩余量低于该百分比时停用账号，等待管理员处理。5 小时窗口不参与判断。
     weekly-quota-disable-threshold-percent: ${ROSE_SUBSCRIPTION_WEEKLY_DISABLE_THRESHOLD_PERCENT:2}
+  user-groups:
+    # true：普通用户可查看自己当前生效分组的策略和汇总用量，不包含成员名单或操作权限。
+    # false：隐藏普通用户的“我的分组”入口并禁止访问概况接口；管理员始终可见。
+    overview-visible-to-users: ${ROSE_USER_GROUP_OVERVIEW_VISIBLE_TO_USERS:true}
+  data-visualization:
+    # true：普通用户可查看 4 个全站匿名汇总图表（请求趋势、Token/费用、活跃用户、模型用量）。
+    # 普通用户始终不会获得用户排行、计费来源或订单数据；false 时隐藏入口并禁止访问。
+    visible-to-users: ${ROSE_DATA_VISUALIZATION_VISIBLE_TO_USERS:true}
   proxy:
     enabled: true
     default-model: ${ROSE_PROXY_MODEL:gpt-5.6-sol}

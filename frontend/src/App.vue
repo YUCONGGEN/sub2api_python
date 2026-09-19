@@ -44,6 +44,12 @@
           <router-link to="/profile"
             ><span class="nav-index">07</span>个人资料</router-link
           >
+          <router-link v-if="user && user.role !== 'ADMIN' && dataVisualizationVisible" to="/visualization"
+            ><span class="nav-index">08</span>数据可视化</router-link
+          >
+          <router-link v-if="user && user.role !== 'ADMIN' && userGroupOverviewVisible" to="/my-group"
+            ><span class="nav-index">09</span>我的分组</router-link
+          >
           <router-link v-if="user && user.role === 'ADMIN'" to="/admin"
             ><span class="nav-index">08</span>管理后台</router-link
           >
@@ -53,7 +59,7 @@
               (user.role === 'ADMIN' || subscriptionContributionsEnabled)
             "
             to="/subscriptions"
-            ><span class="nav-index">09</span>共享账号池</router-link
+            ><span class="nav-index">10</span>共享账号池</router-link
           >
         </nav>
         <div class="sidebar-bottom">
@@ -129,6 +135,8 @@ export default {
     codexConfig: null,
     modelOptions: [],
     subscriptionContributionsEnabled: false,
+    userGroupOverviewVisible: true,
+    dataVisualizationVisible: true,
     monitoringEnabled: true,
     theme: "light",
     mobileMenuOpen: false,
@@ -151,6 +159,8 @@ export default {
           "/admin": "管理后台",
           "/admin/upstream-subscriptions": "订阅账号",
           "/subscriptions": "共享账号池",
+          "/my-group": "我的分组",
+          "/visualization": "数据可视化",
           "/docs": "配置教程",
           "/monitoring": "模型监控",
           "/keys": "API 密钥",
@@ -204,6 +214,10 @@ export default {
         if (Array.isArray(data.models)) this.modelOptions = data.models;
         this.subscriptionContributionsEnabled =
           data.subscription_contributions_enabled === true;
+        this.userGroupOverviewVisible =
+          data.user_group_overview_visible !== false;
+        this.dataVisualizationVisible =
+          data.data_visualization_visible !== false;
         this.monitoringEnabled = data.monitoring_enabled !== false;
         if (!this.monitoringEnabled) {
           this.systemStatus = { text: "监控已关闭", level: "checking" };

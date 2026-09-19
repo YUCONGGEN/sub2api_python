@@ -88,6 +88,26 @@ def test_example_config_has_no_regular_api_models():
         assert f"    # - id: {model}\n" in text
 
 
+def test_public_config_exposes_user_group_overview_visibility(monkeypatch):
+    monkeypatch.setattr(config_controller, "get_config", lambda: {"rose": {}})
+    assert config_controller.ConfigController().public_config().data["user_group_overview_visible"] is True
+
+    monkeypatch.setattr(config_controller, "get_config", lambda: {
+        "rose": {"user-groups": {"overview-visible-to-users": False}}
+    })
+    assert config_controller.ConfigController().public_config().data["user_group_overview_visible"] is False
+
+
+def test_public_config_exposes_data_visualization_visibility(monkeypatch):
+    monkeypatch.setattr(config_controller, "get_config", lambda: {"rose": {}})
+    assert config_controller.ConfigController().public_config().data["data_visualization_visible"] is True
+
+    monkeypatch.setattr(config_controller, "get_config", lambda: {
+        "rose": {"data-visualization": {"visible-to-users": False}}
+    })
+    assert config_controller.ConfigController().public_config().data["data_visualization_visible"] is False
+
+
 def test_group_editor_uses_complete_monitoring_catalog_but_model_plaza_stays_filtered():
     root = Path(__file__).resolve().parents[1]
     admin = (root / "frontend/src/views/Admin.vue").read_text(encoding="utf-8")

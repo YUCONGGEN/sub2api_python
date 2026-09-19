@@ -303,6 +303,14 @@ class StoreService:
         return {"group": group, "totals": totals,
                 "members": self.page_result(members, total, page, page_size)}
 
+    def user_group_overview(self, group_id: int) -> dict[str, Any] | None:
+        """Return aggregate group information without exposing member records."""
+        group = self.find_user_group(group_id)
+        if not group:
+            return None
+        totals = dict(self.mapper.user_group_totals(int(group_id)))
+        return {"group": group, "totals": totals}
+
     @staticmethod
     def _normalize_mapping_ids(value: Any) -> list[int]:
         if not isinstance(value, (list, tuple, set)):
@@ -1612,9 +1620,8 @@ class StoreService:
             "recent_pagination": recent,
         }
 
-    def admin_summary(self) -> dict[str, Any]:
-        self.mapper.expire_recharge_codes(utc_now())
-        totals = dict(self.mapper.admin_totals())
+    def model_usage_summary(self) -> list[dict[str, Any]]:
+        """Aggregate per-model usage without returning users, billing, or orders."""
         month_start = business_month_start_utc().isoformat()
         model_rows = [dict(row) for row in self.mapper.admin_model_usage(month_start)]
         configured_models = get_config().get("rose", {}).get("models", []) or []
@@ -1640,6 +1647,14 @@ class StoreService:
                 }
         for row in model_rows:
             model_usage[str(row.get("model"))] = row
+        return sorted(
+            model_usage.values(),
+            key=lambda item: (-int(item.get("total_tokens", 0)), item["model"]),
+        )
+
+    def admin_summary(self) -> dict[str, Any]:
+        self.mapper.expire_recharge_codes(utc_now())
+        totals = dict(self.mapper.admin_totals())
         return {
             "users": self.mapper.count_users(""),
             "active_users": self.mapper.count_active_users(),
@@ -1648,10 +1663,7 @@ class StoreService:
             "total_requests": totals.get("total_requests", 0),
             "total_recharge": self.mapper.sum_paid_orders(),
             "active_recharge_codes": self.mapper.count_active_recharge_codes(),
-            "model_usage": sorted(
-                model_usage.values(),
-                key=lambda item: (-int(item.get("total_tokens", 0)), item["model"]),
-            ),
+            "model_usage": self.model_usage_summary(),
         }
 
     def export_usage(self, *, start_at: str = "", end_at: str = "", user_id: int | None = None, model: str = "", status: str = "", limit: int = 50000) -> list[dict[str, Any]]:

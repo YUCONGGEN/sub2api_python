@@ -109,7 +109,7 @@
           <p class="account-summary">{{ providerLabel(account.provider) }} · {{ account.owner_label || '系统账号' }}<br>{{ account.can_manage ? (account.email || '未提供邮箱') + ' · ' + account.credential_mask : '凭据仅账号所有者和管理员可见' }}</p>
           <div class="account-models"><span v-for="model in account.models" :key="model">{{ model }}</span></div>
           <dl v-if="account.can_manage" class="account-facts"><div v-if="isAdmin"><dt>优先级 / 权重</dt><dd>{{ account.priority }} / {{ account.weight }}</dd></div><div><dt>错误次数</dt><dd>{{ account.error_count || 0 }}</dd></div><div><dt>Token 过期</dt><dd>{{ displayTime(account.expires_at) }}</dd></div><div><dt>最近使用</dt><dd>{{ displayTime(account.last_used_at) }}</dd></div></dl>
-          <div v-if="account.provider === 'openai' && account.can_manage" class="account-quota">
+          <div v-if="quotaVisible && account.provider === 'openai' && account.can_manage" class="account-quota">
             <div class="account-quota-head"><div><small>CODEX SUBSCRIPTION</small><strong>订阅剩余量</strong></div><button type="button" :disabled="quotaState(account).loading" @click="loadAccountQuota(account, true)">{{ quotaState(account).loading ? '查询中…' : '刷新' }}</button></div>
             <div v-if="quotaState(account).loading && !quotaState(account).quota" class="quota-loading">正在安全查询订阅窗口…</div>
             <div v-else-if="quotaState(account).error && !quotaState(account).quota" class="quota-error">{{ quotaState(account).error }}</div>
@@ -214,7 +214,7 @@ export default {
   name: 'UpstreamSubscriptions',
   components: { GatewayActivity },
   props: { user: { type: Object, default: null }, subscriptionContributionsEnabled: { type: Boolean, default: false } },
-  data: () => ({ providers: PROVIDERS, accounts: [], summary: {}, gatewayMetrics: {}, quotaByAccount: {}, pagination: { page: 1, pages: 1, total: 0 }, error: '', loading: false, busy: false, actionId: null, filter: '', showForm: false, editingId: null, oauthSession: null, gatewayEnabled: false, metricsTimer: null, configRequests: [], requestPagination: { page: 1, page_size: 5, pages: 1, total: 0 }, requestLoading: false, requestBusy: false, requestForm: { url: '', api_key: '', model_id: '', use_proxy: false }, form: defaults('openai'), pricingAccount: null, pricingRows: [], pricingBusy: false }),
+  data: () => ({ providers: PROVIDERS, accounts: [], summary: {}, gatewayMetrics: {}, quotaByAccount: {}, pagination: { page: 1, pages: 1, total: 0 }, error: '', loading: false, busy: false, actionId: null, filter: '', showForm: false, editingId: null, oauthSession: null, gatewayEnabled: false, quotaVisible: true, metricsTimer: null, configRequests: [], requestPagination: { page: 1, page_size: 5, pages: 1, total: 0 }, requestLoading: false, requestBusy: false, requestForm: { url: '', api_key: '', model_id: '', use_proxy: false }, form: defaults('openai'), pricingAccount: null, pricingRows: [], pricingBusy: false }),
   computed: { isAdmin () { return String(this.user?.role || '').toUpperCase() === 'ADMIN' }, otherProviderCount () { return PROVIDERS.filter(item => item.id !== 'openai').reduce((sum, item) => sum + this.providerCount(item.id), 0) } },
   watch: { 'form.provider' (next, previous) { if (!this.editingId && !this.oauthSession && next !== previous) { const fresh = defaults(next); this.form.models = fresh.models; this.form.mode = fresh.mode } } },
   created () { this.load(); this.loadConfigRequests(); if (this.isAdmin) this.metricsTimer = window.setInterval(this.refreshGatewayMetrics, 5000) },
@@ -261,7 +261,7 @@ export default {
     resetCreditCount (quota) { const value = quota?.reset_credits?.available_count; return value === null || value === undefined ? '未提供' : `${Number(value).toLocaleString('zh-CN')} 次` },
     setQuotaState (accountId, value) { this.quotaByAccount = { ...this.quotaByAccount, [accountId]: value } },
     async loadAccountQuota (account, refresh = false, quiet = false) {
-      if (account.provider !== 'openai') return
+      if (!this.quotaVisible || account.provider !== 'openai') return
       const previous = this.quotaState(account)
       this.setQuotaState(account.id, { ...previous, loading: true, error: '' })
       try {
@@ -280,12 +280,12 @@ export default {
         if (refresh && !quiet) notify(message, 'error')
       }
     },
-    loadAccountQuotas () { this.accounts.filter(account => account.provider === 'openai' && account.can_manage).forEach(account => this.loadAccountQuota(account, true, true)) },
+    loadAccountQuotas () { if (!this.quotaVisible) return; this.accounts.filter(account => account.provider === 'openai' && account.can_manage).forEach(account => this.loadAccountQuota(account, true, true)) },
     statusClass (account) { return account.enabled ? String(account.status || 'READY').toLowerCase() : 'disabled' },
     statusText (account) { if (!account.enabled) return '已停用'; return ({ READY: '可用', INVALID: '凭据失效', COOLDOWN: '冷却中', DISABLED: '已停用' })[account.status] || account.status },
     displayTime (value) { if (!value) return '—'; const date = new Date(value); return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN') },
     payload () { return { provider: this.form.provider, name: this.form.name, models: this.form.models, priority: this.form.priority, weight: this.form.weight, input_price_cny: this.form.input_price_cny, output_price_cny: this.form.output_price_cny, price_multiplier: this.form.price_multiplier, enabled: this.form.enabled, compliance_confirmed: this.form.compliance_confirmed } },
-    async load () { this.loading = true; this.error = ''; try { const data = await api.upstreamSubscriptions({ provider: this.filter, page: this.pagination.page, page_size: 12 }); this.accounts = data.accounts || []; this.summary = data.summary || {}; this.gatewayMetrics = data.gateway_metrics || {}; this.pagination = data.pagination || this.pagination; this.gatewayEnabled = !!data.gateway_enabled; this.loadAccountQuotas() } catch (error) { this.error = error.message || '请检查后端服务后重试'; notify(this.error, 'error') } finally { this.loading = false } },
+    async load () { this.loading = true; this.error = ''; try { const data = await api.upstreamSubscriptions({ provider: this.filter, page: this.pagination.page, page_size: 12 }); this.accounts = data.accounts || []; this.summary = data.summary || {}; this.gatewayMetrics = data.gateway_metrics || {}; this.pagination = data.pagination || this.pagination; this.gatewayEnabled = !!data.gateway_enabled; this.quotaVisible = data.quota_visible !== false; if (!this.quotaVisible) this.quotaByAccount = {}; this.loadAccountQuotas() } catch (error) { this.error = error.message || '请检查后端服务后重试'; notify(this.error, 'error') } finally { this.loading = false } },
     async refreshGatewayMetrics () { if (!this.isAdmin) return; try { const data = await api.upstreamGatewayMetrics(); this.gatewayMetrics = data.gateway_metrics || this.gatewayMetrics } catch (error) {} },
     requestStatus (status) { return ({ PENDING: '待处理', ACCEPTED: '已处理', REJECTED: '已拒绝' })[status] || status },
     async loadConfigRequests (page = this.requestPagination.page) { this.requestLoading = true; try { const requestedPage = Math.max(1, Number(page || 1)); const data = await api.upstreamConfigRequests({ page: requestedPage, page_size: this.requestPagination.page_size }); const rows = data.requests || []; this.requestPagination = data.pagination || { ...this.requestPagination, page: requestedPage }; this.configRequests = this.isAdmin ? await Promise.all(rows.map(async item => { try { const secret = await api.revealUpstreamConfigRequest(item.id); return { ...item, api_key: secret.request.api_key } } catch (error) { return item } })) : rows } catch (error) { notify(error.message || '配置申请加载失败', 'error') } finally { this.requestLoading = false } },

@@ -65,12 +65,15 @@ class SubscriptionAccountService:
         # Keep the historical behavior for directly constructed instances
         # (including tests); application configuration is applied at startup.
         self.cooldown_enabled = True
+        self.user_contributions_enabled = True
+        self.quota_visible_to_users = True
 
     @PostConstruct
     def init(self) -> None:
         cfg = get_config().get("rose", {}).get("subscription-gateway", {})
         self.cooldown_enabled = as_bool(cfg.get("account-cooldown-enabled"), True)
         self.user_contributions_enabled = as_bool(cfg.get("user-contributions-enabled"), True)
+        self.quota_visible_to_users = as_bool(cfg.get("quota-visible-to-users"), True)
         self.logger.info("订阅账号临时冷却 enabled=%s", self.cooldown_enabled)
 
     def _is_cooling(self, row: dict[str, Any], now: datetime | None = None) -> bool:
@@ -297,6 +300,10 @@ class SubscriptionAccountService:
 
     def contributions_available(self, user: dict[str, Any] | None) -> bool:
         return self._is_admin(user) or bool(getattr(self, "user_contributions_enabled", True))
+
+    def quota_visible(self, user: dict[str, Any] | None) -> bool:
+        """Admins always see quota; regular users follow the YAML switch."""
+        return self._is_admin(user) or bool(getattr(self, "quota_visible_to_users", True))
 
     def can_manage(self, user: dict[str, Any] | None, row: dict[str, Any] | None) -> bool:
         if not user or not row:

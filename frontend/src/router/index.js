@@ -8,6 +8,7 @@ const router = new Router({ mode: 'history', routes: [
   { path: '/login', component: () => import('../views/Login.vue'), meta: { public: true, guestOnly: true } },
   { path: '/register', component: () => import('../views/Register.vue'), meta: { public: true, guestOnly: true } },
   { path: '/dashboard', component: () => import('../views/Dashboard.vue') },
+  { path: '/visualization', component: () => import('../views/DataVisualization.vue'), meta: { title: '数据可视化' } },
   { path: '/models', component: () => import('../views/Models.vue') },
   { path: '/billing', component: () => import('../views/Billing.vue') },
   { path: '/admin', component: () => import('../views/Admin.vue'), meta: { admin: true } },
@@ -19,6 +20,7 @@ const router = new Router({ mode: 'history', routes: [
   { path: '/keys', component: () => import('../views/Keys.vue') },
   { path: '/monitoring', component: () => import('../views/MonitoringPanel.vue') },
   { path: '/profile', component: () => import('../views/ProfilePanel.vue') },
+  { path: '/my-group', component: () => import('../views/UserGroup.vue'), meta: { title: '我的分组' } },
   { path: '*', redirect: '/dashboard' }
 ] })
 router.beforeEach(async (to, from, next) => {

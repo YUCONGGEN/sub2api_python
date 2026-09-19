@@ -152,3 +152,29 @@ def test_admin_daily_charts_always_include_the_current_beijing_day():
     assert analytics["activity"][-1]["active_users"] == 0
     assert analytics["today_users"] == []
     assert EmptyAnalyticsMapper.today_start == business_day_start_utc().isoformat()
+
+
+def test_public_analytics_contains_only_anonymous_time_series():
+    class PublicOnlyMapper(EmptyAnalyticsMapper):
+        @staticmethod
+        def admin_today_user_usage(*args):
+            raise AssertionError("public analytics must not query user rankings")
+
+        @staticmethod
+        def admin_user_usage(*args):
+            raise AssertionError("public analytics must not query user rankings")
+
+        @staticmethod
+        def admin_billing_usage(*args):
+            raise AssertionError("public analytics must not query billing sources")
+
+        @staticmethod
+        def admin_order_status(*args):
+            raise AssertionError("public analytics must not query orders")
+
+    service = ObservabilityService.__new__(ObservabilityService)
+    service.mapper = PublicOnlyMapper()
+
+    analytics = service.public_analytics()
+
+    assert set(analytics) == {"daily", "activity"}

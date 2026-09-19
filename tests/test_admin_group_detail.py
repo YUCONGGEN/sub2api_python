@@ -7,6 +7,8 @@ from xml.etree import ElementTree
 import pytest
 
 from backend.controller.admin_controller import AdminController
+from backend.controller.auth_controller import AuthController
+from backend.controller import auth_controller
 from backend.service.store_service import StoreService
 
 
@@ -71,6 +73,14 @@ def test_empty_group_and_missing_group(service):
     assert service.admin_group_detail(999) is None
 
 
+def test_user_group_overview_never_contains_member_records(service):
+    result = service.user_group_overview(1)
+
+    assert result['totals']['member_count'] == 7
+    assert result['totals']['total_tokens'] == 1500
+    assert 'members' not in result
+
+
 def test_pagination_clamps_and_moving_member_changes_current_group_totals(service):
     assert service.admin_group_detail(1, 999, 999)['members']['page'] == 2
     assert service.admin_group_detail(1, -1, 0)['members']['page'] == 1
@@ -99,3 +109,27 @@ def test_admin_group_detail_success_and_not_found(service):
     controller = AdminController(auth, None, None)
     assert controller.user_group_detail(1, 'token', 1, 5).data['totals']['total_tokens'] == 1500
     assert controller.user_group_detail(999, 'token', 1, 5).code == 404
+
+
+def test_regular_user_sees_only_own_effective_group_overview(service, monkeypatch):
+    user = {'id': 7, 'role': 'USER', 'group_id': 1, 'effective_group_id': 1, 'group_source': 'ASSIGNED'}
+    auth = SimpleNamespace(user_from_authorization=lambda _: user)
+    monkeypatch.setattr(auth_controller, 'get_config', lambda: {'rose': {'user-groups': {'overview-visible-to-users': True}}})
+
+    result = AuthController(service, auth).group_overview('token')
+
+    assert result.code == 200
+    assert result.data['group']['id'] == 1
+    assert result.data['totals']['member_count'] == 7
+    assert 'members' not in result.data
+
+
+def test_yaml_switch_blocks_regular_user_but_not_admin(service, monkeypatch):
+    monkeypatch.setattr(auth_controller, 'get_config', lambda: {'rose': {'user-groups': {'overview-visible-to-users': False}}})
+    regular = SimpleNamespace(user_from_authorization=lambda _: {'id': 7, 'role': 'USER', 'effective_group_id': 1})
+    admin = SimpleNamespace(user_from_authorization=lambda _: {'id': 1, 'role': 'ADMIN', 'effective_group_id': 1})
+
+    assert AuthController(service, regular).group_overview('token').code == 403
+    admin_result = AuthController(service, admin).group_overview('token')
+    assert admin_result.code == 200
+    assert 'members' not in admin_result.data

@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 
@@ -56,6 +57,7 @@ def make_service(repository=None):
     service.repository = repository or RequestRepository()
     service.cipher = JsonCipher()
     service.user_contributions_enabled = True
+    service.quota_visible_to_users = True
     service.cooldown_enabled = True
     return service
 
@@ -141,3 +143,38 @@ def test_runtime_gateway_metrics_are_admin_only():
 
     assert denied.code == 403
     assert denied.data is None
+
+
+def test_quota_visibility_defaults_to_users_and_always_allows_admin():
+    service = make_service()
+
+    assert service.quota_visible({"id": 7, "role": "USER"}) is True
+    service.quota_visible_to_users = False
+    assert service.quota_visible({"id": 7, "role": "USER"}) is False
+    assert service.quota_visible({"id": 1, "role": "ADMIN"}) is True
+
+
+def test_quota_visibility_reads_disabled_yaml_switch(monkeypatch):
+    service = make_service()
+    service.logger = type("Logger", (), {"info": lambda *args: None})()
+    monkeypatch.setattr(
+        "backend.service.subscription_account_service.get_config",
+        lambda: {"rose": {"subscription-gateway": {"quota-visible-to-users": False}}},
+    )
+
+    service.init()
+
+    assert service.quota_visible_to_users is False
+
+
+def test_quota_endpoint_blocks_regular_user_when_yaml_switch_is_disabled():
+    controller = SubscriptionController.__new__(SubscriptionController)
+    controller.auth = type("Auth", (), {"user_from_authorization": lambda self, token: {"id": 7, "role": "USER"}})()
+    controller.accounts = make_service()
+    controller.accounts.quota_visible_to_users = False
+    controller.gateway = type("Gateway", (), {})()
+
+    denied = asyncio.run(controller.account_quota(9, authorization="Bearer user-token"))
+
+    assert denied.code == 403
+    assert denied.message == "订阅剩余量当前仅管理员可见"

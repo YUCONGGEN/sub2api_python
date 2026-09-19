@@ -806,10 +806,10 @@ def test_trae_chat_bridge_sanitizes_actual_upstream_request(monkeypatch, limit_f
 @pytest.mark.parametrize("model", ["gpt-5.6-sol", "gpt-6-astra"])
 @pytest.mark.parametrize("chat", [False, True])
 @pytest.mark.parametrize("stream", [False, True])
-@pytest.mark.parametrize("explicit_effort", [None, "low"])
+@pytest.mark.parametrize("explicit_effort", [None, "low", "none", "turbo"])
 @pytest.mark.parametrize("configured_effort", ["high", "medium"])
 def test_gpt_effective_effort_is_sent_upstream_and_displayed_in_activity(monkeypatch, model, chat, stream, explicit_effort, configured_effort):
-    expected_effort = explicit_effort or configured_effort
+    expected_effort = explicit_effort if explicit_effort in {"minimal", "low", "medium", "high", "xhigh", "max"} else configured_effort
     completed = {
         "id": "resp_high", "model": model, "status": "completed",
         "output": [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "hello"}]}],
@@ -1116,14 +1116,14 @@ def test_native_responses_preserves_astra_reasoning_mode():
     assert outgoing["reasoning"] == {"mode": "pro", "effort": "high"}
 
 
-@pytest.mark.parametrize("effort", [False, 0, "invalid", "turbo"])
-def test_native_responses_rejects_invalid_reasoning_before_account_use(effort):
+@pytest.mark.parametrize("effort", [None, "none", False, 0, "invalid", "turbo", "ultra"])
+def test_native_responses_replaces_non_reasoning_and_invalid_effort_with_default(effort):
     gateway = SubscriptionGatewayService(None, None)
-    result = asyncio.run(gateway.proxy_openai({
+    gateway.gpt_default_reasoning_effort = "high"
+    outgoing = gateway._prepare_openai_subscription_payload({
         "model": "gpt-6-astra", "input": "hello", "reasoning_effort": effort,
-    }, 9))
-    assert result.status_code == 400
-    assert b"reasoning effort" in (result.body or b"")
+    })
+    assert outgoing["reasoning"]["effort"] == "high"
 
 
 @pytest.mark.parametrize("policy, supplied, expected", [

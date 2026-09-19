@@ -26,7 +26,6 @@ from backend.common.codex_client import (
 from backend.common.reasoning import (
     DEFAULT_GPT_REASONING_EFFORT,
     configured_gpt_reasoning_effort,
-    validated_reasoning_effort,
     with_responses_reasoning,
 )
 from backend.common.subscription_providers import (
@@ -909,13 +908,8 @@ class SubscriptionGatewayService:
         reasoning = normalized.get("reasoning")
         if reasoning is not None and not isinstance(reasoning, dict):
             raise ValueError("reasoning must be a JSON object")
-        # Validate before applying the configured default so malformed client
-        # input cannot be silently promoted to a valid shared-account request.
-        explicit_effort = validated_reasoning_effort(normalized)
         outgoing = with_responses_reasoning(normalized, self.gpt_default_reasoning_effort)
         outgoing = dict(outgoing)
-        if explicit_effort is not None:
-            outgoing["reasoning"] = {**dict(outgoing.get("reasoning") or {}), "effort": explicit_effort}
 
         raw_max_tokens = outgoing.get("max_output_tokens")
         if raw_max_tokens is None:

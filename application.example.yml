@@ -177,7 +177,7 @@ rose:
   proxy:
     enabled: true
     default-model: ${ROSE_PROXY_MODEL:gpt-5.6-sol}
-    # GPT 请求未指定推理强度时使用此档位；修改后重启后端生效。
+    # GPT 请求缺少强度，或传入 none/非法档位时使用此档位；修改后重启后端生效。
     default-gpt-reasoning-effort: high
     demo-mode-when-key-missing: true
     # 上游转发连接池。客户端按事件循环复用 TCP/TLS 连接，避免每次

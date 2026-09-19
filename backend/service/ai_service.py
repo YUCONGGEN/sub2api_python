@@ -15,7 +15,7 @@ from springbootai.ai.core import ChatClientBuilder, Message, ChatResponse, Gener
 from springbootai.ai.providers import OpenAIChatModel
 
 from backend.common.multimodal import parse_dsml_tool_calls, text_content as multimodal_text_content
-from backend.common.reasoning import DEFAULT_GPT_REASONING_EFFORT, configured_gpt_reasoning_effort, default_gpt_reasoning_effort, requested_reasoning_effort
+from backend.common.reasoning import DEFAULT_GPT_REASONING_EFFORT, configured_gpt_reasoning_effort, effective_gpt_reasoning_effort, requested_reasoning_effort
 from backend.service.store_service import StoreService
 
 
@@ -1038,11 +1038,12 @@ class AiGatewayService:
             "top_logprobs", "modalities", "prediction", "service_tier",
         }
         options = {key: payload[key] for key in allowed if key in payload and payload[key] is not None}
-        requested_reasoning = requested_reasoning_effort(payload)
+        resolved_model = model if model is not None else payload.get("model")
+        requested_reasoning = effective_gpt_reasoning_effort(payload, resolved_model, default_effort)
         if requested_reasoning is None:
-            # Use the resolved upstream name (not a public alias), including
-            # requests that omit model and use the configured default model.
-            requested_reasoning = default_gpt_reasoning_effort(model if model is not None else payload.get("model"), default_effort) or reasoning_effort
+            requested_reasoning = requested_reasoning_effort(payload)
+            if requested_reasoning is None:
+                requested_reasoning = reasoning_effort
         if requested_reasoning is not None and requested_reasoning != "":
             options["reasoning_effort"] = str(requested_reasoning)
         if streaming:

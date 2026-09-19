@@ -242,11 +242,11 @@ rose:
     default-gpt-reasoning-effort: high
 ```
 
-例如改为 `medium` 可调整全局缺省档位。配置启动时读取，不在每次请求时读取文件。省略、`null` 或空值回退 `high`；其他档位须确认所有适用模型均支持，通常可选 `low`、`medium`、`high`。请求明确指定的档位优先于此配置。
+例如改为 `medium` 可调整全局缺省档位。配置启动时读取，不在每次请求时读取文件。配置值必须是有效的正向推理档位，通常可选 `low`、`medium`、`high`、`xhigh`、`max`。
 
-- GPT-5 系列推理模型（含 Sol、Terra、Luna、Codex）和 `gpt-6-astra` 在请求未指定强度、值为 `null` 或空字符串时，由网关使用上述配置（默认 **`high`**）。普通 API 上游按实际上游模型名判断；非 GPT、GPT-4/4o、`chat-latest` 及图像/音频模型不自动添加。
+- GPT-5 系列推理模型（含 Sol、Terra、Luna、Codex）和 `gpt-6-astra` 在请求未指定强度、值为 `null`、空字符串、`none`、非字符串或未知档位时，由网关使用上述配置（默认 **`high`**）。普通 API 上游按实际上游模型名判断；非 GPT、GPT-4/4o、`chat-latest` 及图像/音频模型不自动添加。
 - 此规则同时适用于 Chat Completions 和 Responses，流式与非流式一致。Chat 使用 `reasoning_effort`，订阅 Responses 上游实际发送 `reasoning: {effort: "high"}`；后台执行/账号池排队记录读取这份转发参数，显示“高”，不是只修改显示文字。用户组排队尚未解析请求时，不虚构模型或档位。
-- 调用方明确指定的 `none`、`low`、`medium`、`high`、`xhigh` 等值原样保留，由上游校验模型是否支持；嵌套 `reasoning.effort` 优先于 `reasoning_effort` 和兼容别名 `reasoning-effort`，`summary` 等其他推理字段保留。普通 API 的 GPT 默认值也使用这项配置；非 GPT 仍保留各模型配置的默认强度。
+- 调用方明确指定的 `minimal`、`low`、`medium`、`high`、`xhigh`、`max` 会规范为小写后保留；本站策略将 `none` 视为没有有效推理强度，将 `ultra` 等非 OpenAI API 档位视为未知值，二者都回退到 YAML 默认值。嵌套 `reasoning.effort` 优先于 `reasoning_effort` 和兼容别名 `reasoning-effort`，`summary` 等其他推理字段保留。普通 API 的 GPT 默认值也使用这项配置；非 GPT 仍保留各模型配置的默认强度。
 - 这是本项目的默认策略，不代表上游原生默认值。只在转发前处理请求字段，不增加网络探测、数据库查询或 SSE 缓冲；更高推理强度本身可能增加上游生成耗时和 Token 使用量。
 
 ## 部署前清空数据（不可恢复）

@@ -11,12 +11,13 @@ from backend.service.ai_service import AiGatewayService, ReliableOpenAIChatModel
 from backend.service.subscription_gateway_service import SubscriptionGatewayService
 
 
-@pytest.mark.parametrize("value, expected", [(None, "high"), ("", "high"), ("  ", "high"), ("medium", "medium"), ("LOW", "low"), ("none", "none")])
+@pytest.mark.parametrize("value, expected", [(None, "high"), ("", "high"), ("  ", "high"), ("medium", "medium"), ("LOW", "low")])
 def test_reasoning_default_is_configurable(value, expected):
     assert configured_gpt_reasoning_effort({}) == "high"
     assert configured_gpt_reasoning_effort({"rose": {"proxy": {"default-gpt-reasoning-effort": value}}}) == expected
-    with pytest.raises(ValueError, match="default-gpt-reasoning-effort"):
-        configured_gpt_reasoning_effort({"rose": {"proxy": {"default-gpt-reasoning-effort": "typo"}}})
+    for invalid in ("none", "ultra", "typo"):
+        with pytest.raises(ValueError, match="default-gpt-reasoning-effort"):
+            configured_gpt_reasoning_effort({"rose": {"proxy": {"default-gpt-reasoning-effort": invalid}}})
 
 
 def test_both_services_load_same_yaml_default_at_startup(monkeypatch):
@@ -80,7 +81,7 @@ def test_missing_effort_normalizes_without_mutating_input(fields):
     assert with_responses_reasoning(outgoing) == outgoing
 
 
-@pytest.mark.parametrize("effort", ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"])
+@pytest.mark.parametrize("effort", ["minimal", "low", "medium", "high", "xhigh", "max"])
 def test_explicit_effort_is_not_replaced(effort):
     for fields in (
         {"reasoning_effort": effort},
@@ -104,21 +105,29 @@ def test_nested_effort_wins_over_conflicting_aliases():
 
 
 @pytest.mark.parametrize("fields", [
-    {"reasoning": "invalid"}, {"reasoning": []}, {"reasoning": False},
+    {"reasoning_effort": None}, {"reasoning_effort": "none"}, {"reasoning_effort": "ultra"},
     {"reasoning_effort": False}, {"reasoning_effort": 0}, {"reasoning_effort": "invalid"},
+    {"reasoning": {"effort": "none", "summary": "auto"}},
 ])
-def test_invalid_values_are_not_silently_changed_to_high(fields):
+def test_missing_none_and_invalid_efforts_fall_back_to_high(fields):
     payload = {"model": "gpt-6-astra", **fields}
     outgoing = with_responses_reasoning(payload)
-    if "reasoning" in fields:
-        assert outgoing == payload
-    else:
-        assert outgoing["reasoning"]["effort"] == fields["reasoning_effort"]
+    assert outgoing["reasoning"]["effort"] == "high"
+    if isinstance(fields.get("reasoning"), dict) and "summary" in fields["reasoning"]:
+        assert outgoing["reasoning"]["summary"] == "auto"
+
+
+@pytest.mark.parametrize("reasoning", ["invalid", [], False])
+def test_malformed_reasoning_container_remains_for_boundary_validation(reasoning):
+    payload = {"model": "gpt-6-astra", "reasoning": reasoning}
+    assert with_responses_reasoning(payload) == payload
 
 
 def test_api_options_preserve_explicit_effort_and_use_resolved_upstream_name():
     assert AiGatewayService._request_options({"model": "gpt-5.6-sol"}) == {"reasoning_effort": "high"}
-    assert AiGatewayService._request_options({"model": "gpt-5.6-sol", "reasoning_effort": "none"}) == {"reasoning_effort": "none"}
+    assert AiGatewayService._request_options({"model": "gpt-5.6-sol", "reasoning_effort": "none"}) == {"reasoning_effort": "high"}
+    assert AiGatewayService._request_options({"model": "gpt-5.6-sol", "reasoning_effort": "turbo"}) == {"reasoning_effort": "high"}
+    assert AiGatewayService._request_options({"model": "gpt-5.6-sol", "reasoning_effort": " XHIGH "}) == {"reasoning_effort": "xhigh"}
     assert AiGatewayService._request_options({"model": "gpt-6-astra", "reasoning": {"effort": "low"}}) == {"reasoning_effort": "low"}
     assert AiGatewayService._request_options({"model": "gpt-6-astra"}, model="deepseek-v4-flash") == {}
     assert AiGatewayService._request_options({"model": "custom-alias"}, model="gpt-5.6-sol") == {"reasoning_effort": "high"}

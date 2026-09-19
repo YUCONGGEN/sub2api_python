@@ -138,15 +138,15 @@ rose:
     # 可单独配置签名密钥；留空时复用 jwt.secret_key。两者至少一个必须不少于 32 位。
     token-secret: ${ROSE_PASSWORD_RECOVERY_TOKEN_SECRET:}
     smtp:
-      # QQ 邮箱使用 smtp.qq.com:465 + SSL；password 必须填写 SMTP 授权码而非 QQ 密码。
+      # 与考试系统一致，QQ 邮箱使用 smtp.qq.com:587 + STARTTLS；password 必须填写 SMTP 授权码。
       # 授权码只放服务器环境变量，禁止直接写入 YAML 或提交 GitHub。
       # SMTP 使用独立 IPv4 TCP 直连，不读取系统 HTTP/HTTPS/日本代理设置。
       use-proxy: false
       host: ${ROSE_PASSWORD_RECOVERY_SMTP_HOST:smtp.qq.com}
       # 可选直连 IPv4；TLS 主机名仍使用 host。服务器 DNS 命中不可用海外节点时再设置。
       connect-host: ${ROSE_PASSWORD_RECOVERY_SMTP_CONNECT_HOST:}
-      port: ${ROSE_PASSWORD_RECOVERY_SMTP_PORT:465}
-      ssl: ${ROSE_PASSWORD_RECOVERY_SMTP_SSL:true}
+      port: ${ROSE_PASSWORD_RECOVERY_SMTP_PORT:587}
+      ssl: ${ROSE_PASSWORD_RECOVERY_SMTP_SSL:false}
       username: ${ROSE_PASSWORD_RECOVERY_SMTP_USERNAME:}
       password: ${ROSE_PASSWORD_RECOVERY_SMTP_PASSWORD:}
       sender: ${ROSE_PASSWORD_RECOVERY_SMTP_SENDER:}

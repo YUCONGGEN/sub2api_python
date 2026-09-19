@@ -123,7 +123,8 @@ def test_regular_user_sees_only_own_effective_group_overview(service, monkeypatc
     result = AuthController(service, auth).group_overview('token', page=1, page_size=5)
 
     assert result.code == 200
-    assert result.data['group']['id'] == 1
+    assert result.data['group'] == {'id': 1, 'name': 'Test group'}
+    assert 'group_source' not in result.data
     assert result.data['totals']['member_count'] == 7
     assert len(result.data['members']['items']) == 5
     assert result.data['members']['items'][0]['username'] == 'user1'
@@ -151,3 +152,5 @@ def test_yaml_switch_blocks_regular_user_but_not_admin(service, monkeypatch):
     admin_result = AuthController(service, admin).group_overview('token')
     assert admin_result.code == 200
     assert 'members' in admin_result.data
+    assert admin_result.data['group']['allowed_models'] == ['*']
+    assert admin_result.data['group_source'] == 'ASSIGNED'

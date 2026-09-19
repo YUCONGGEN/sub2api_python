@@ -196,12 +196,14 @@ class AuthController:
         )
         if detail is None:
             return not_found("所在分组不存在或已删除")
-        return ok({
-            "ok": True,
-            **detail,
-            "group_source": user.get("group_source") or "ASSIGNED",
-            "group_source_plan_name": user.get("group_source_plan_name"),
-        })
+        is_admin = str(user.get("role") or "").upper() == "ADMIN"
+        if not is_admin:
+            group = detail.get("group") or {}
+            detail["group"] = {key: group.get(key) for key in ("id", "name")}
+            return ok({"ok": True, **detail})
+        return ok({"ok": True, **detail,
+                   "group_source": user.get("group_source") or "ASSIGNED",
+                   "group_source_plan_name": user.get("group_source_plan_name")})
 
     @PostMapping("/rotate-key")
     def rotate_key(self, authorization: str = RequestHeader(name="Authorization", required=False)):

@@ -31,7 +31,7 @@
         </div>
         <form @submit.prevent="submit" novalidate>
           <label>账户名<input v-model.trim="form.username" autocomplete="username" minlength="3" maxlength="32" placeholder="至少 3 位字符" /></label>
-          <label>邮箱 <span class="optional">可选</span><input v-model.trim="form.email" type="email" autocomplete="email" placeholder="仅用于账户资料，暂不发送通知" /></label>
+          <label>邮箱 <span class="optional">可选</span><input v-model.trim="form.email" type="email" autocomplete="email" placeholder="用于密码找回和账户通知" /></label>
           <label>密码<input v-model="form.password" type="password" autocomplete="new-password" minlength="6" placeholder="至少 6 位字符" /></label>
           <div class="password-meter"><span :class="strengthClass"></span></div>
           <small class="password-hint">{{ strengthText }}</small>

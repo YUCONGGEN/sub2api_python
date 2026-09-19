@@ -53,10 +53,12 @@ class ConfigController:
         user_groups = cfg.get("user-groups", {}) if isinstance(cfg.get("user-groups"), dict) else {}
         data_visualization = cfg.get("data-visualization", {}) if isinstance(cfg.get("data-visualization"), dict) else {}
         monitoring = cfg.get("monitoring", {}) if isinstance(cfg.get("monitoring"), dict) else {}
+        password_recovery = cfg.get("password-recovery", {}) if isinstance(cfg.get("password-recovery"), dict) else {}
         contributions_enabled = str(subscription_gateway.get("user-contributions-enabled", True)).strip().lower() in {"1", "true", "yes", "on"}
         group_overview_visible = str(user_groups.get("overview-visible-to-users", True)).strip().lower() in {"1", "true", "yes", "on"}
         visualization_visible = str(data_visualization.get("visible-to-users", True)).strip().lower() in {"1", "true", "yes", "on"}
         monitoring_enabled = str(monitoring.get("enabled", True)).strip().lower() in {"1", "true", "yes", "on"}
+        password_recovery_enabled = str(password_recovery.get("enabled", True)).strip().lower() in {"1", "true", "yes", "on"}
         if isinstance(models, dict):
             models = [{"id": key, **(value if isinstance(value, dict) else {})} for key, value in models.items()]
         model_options = []
@@ -79,6 +81,7 @@ class ConfigController:
             "user_group_overview_visible": group_overview_visible,
             "data_visualization_visible": visualization_visible,
             "monitoring_enabled": monitoring_enabled,
+            "password_recovery_enabled": password_recovery_enabled,
             # Public metadata only. The bearer token is intentionally omitted.
             "codex": {
                 "model": codex.get("model") or "gpt-5.6-sol",

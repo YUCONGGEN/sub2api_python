@@ -7,6 +7,7 @@ const router = new Router({ mode: 'history', routes: [
   { path: '/', redirect: '/dashboard' },
   { path: '/login', component: () => import('../views/Login.vue'), meta: { public: true, guestOnly: true } },
   { path: '/register', component: () => import('../views/Register.vue'), meta: { public: true, guestOnly: true } },
+  { path: '/reset-password', component: () => import('../views/ResetPassword.vue'), meta: { public: true, guestOnly: true } },
   { path: '/dashboard', component: () => import('../views/Dashboard.vue') },
   { path: '/visualization', component: () => import('../views/DataVisualization.vue'), meta: { title: '数据可视化' } },
   { path: '/models', component: () => import('../views/Models.vue') },

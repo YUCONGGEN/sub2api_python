@@ -2,8 +2,8 @@
   <section class="page">
     <div class="page-head"><div><div class="eyebrow">BILLING / WALLET</div><h1>余额与充值</h1><p>充值后余额可直接用于已配置模型的 API 调用。</p></div></div>
     <div v-if="loadError" class="data-error" role="alert"><strong>部分充值数据加载失败</strong><span>{{ loadError }}</span><button class="secondary-btn" @click="load">重试</button></div>
-    <div class="billing-layout"><div class="balance-hero"><span>可用余额</span><strong>¥{{ Number(balance).toFixed(4) }}</strong><div><span>充值到账后即时可用</span><span>支持兑换码充值</span></div></div>
-      <div class="panel recharge-panel"><div class="panel-head"><div><span class="eyebrow">ADD FUNDS</span><h2>选择充值金额</h2></div><span class="soft-label">最低 ¥{{ minimum }}</span></div><div class="amount-grid"><button v-for="amount in amounts" :key="amount" :class="{ active: form.amount === amount }" @click="form.amount = amount">¥{{ amount }}</button></div><div class="payment-options"><button class="active" @click="form.provider = 'WECHAT_PERSONAL'"><span class="pay-icon wechat">W</span>微信支付</button></div><button class="primary-btn full" :disabled="loading || !wechatAvailable" @click="createOrder">{{ loading ? '创建订单…' : wechatAvailable ? '创建充值订单' : '监听失效，暂不可用' }}</button><small v-if="!wechatAvailable" class="payment-unavailable">{{ wechatReason || '支付监听器当前不可用' }}</small></div>
+    <div :class="['billing-layout', { 'billing-layout-wallet-only': !paymentMethods.length }]"><div class="balance-hero"><span>可用余额</span><strong>¥{{ Number(balance).toFixed(4) }}</strong><div><span>充值到账后即时可用</span><span>支持兑换码充值</span></div></div>
+      <div v-if="paymentMethods.length" class="panel recharge-panel"><div class="panel-head"><div><span class="eyebrow">ADD FUNDS</span><h2>选择充值金额</h2></div><span class="soft-label">最低 ¥{{ minimum }}</span></div><div class="amount-grid"><button v-for="amount in amounts" :key="amount" :class="{ active: form.amount === amount }" @click="form.amount = amount">¥{{ amount }}</button></div><div class="payment-options"><button v-for="method in paymentMethods" :key="method.provider" :class="{ active: form.provider === method.provider }" @click="form.provider = method.provider"><span :class="['pay-icon', method.provider === 'ALIPAY' ? 'alipay' : 'wechat']">{{ method.provider === 'ALIPAY' ? 'A' : 'W' }}</span>{{ method.label }}</button></div><button class="primary-btn full" :disabled="loading || !currentPaymentAvailable" @click="createOrder">{{ loading ? '创建订单…' : currentPaymentAvailable ? '创建充值订单' : '监听失效，暂不可用' }}</button><small v-if="form.provider === 'WECHAT_PERSONAL' && !wechatAvailable" class="payment-unavailable">{{ wechatReason || '支付监听器当前不可用' }}</small></div>
     </div>
     <div class="panel code-redeem"><div class="panel-head"><div><span class="eyebrow">REDEEM</span><h2>兑换码充值</h2></div></div><div class="custom-amount"><input v-model.trim="code" :placeholder="codePlaceholder" /><button class="secondary-btn" @click="redeem">兑换</button></div></div>
     <div class="panel subscription-panel">
@@ -58,7 +58,7 @@ import { notify, askConfirm, focusDialog, trapDialogFocus } from '../ui'
 export default {
   props: { rechargeCodePlaceholder: { type: String, default: '' } },
   data: () => ({
-    plans: {}, subscriptionPlans: [], subscriptionPlanPagination: { page: 1, pages: 1, total: 0 }, entitlements: [], entitlementPagination: { page: 1, pages: 1, total: 0 }, subscribing: 0, orders: [], orderPagination: { page: 1, pages: 1, total: 0 }, order: null, checkout: {}, wechatAvailable: false, wechatReason: '', listenerTimer: null,
+    plans: {}, paymentMethods: [], subscriptionPlans: [], subscriptionPlanPagination: { page: 1, pages: 1, total: 0 }, entitlements: [], entitlementPagination: { page: 1, pages: 1, total: 0 }, subscribing: 0, orders: [], orderPagination: { page: 1, pages: 1, total: 0 }, order: null, checkout: {}, wechatAvailable: false, wechatReason: '', listenerTimer: null,
     amounts: [10, 30, 100, 300, 1000],
     form: { amount: 10, provider: 'WECHAT_PERSONAL' },
     loading: false, pageLoading: false, loadError: '', cancelling: false, balance: 0, code: '', pollTimer: null, pollBusy: false, paymentModalOpen: false, dialogReturnFocus: null, renewing: 0, autoRenewing: 0,
@@ -67,9 +67,10 @@ export default {
   computed: {
     minimum () { return Number(this.plans.min_recharge || 10) },
     providerLabel () { return this.labels[this.order?.provider] || '支付' },
-    codePlaceholder () { return this.rechargeCodePlaceholder || '输入兑换码' }
+    codePlaceholder () { return this.rechargeCodePlaceholder || '输入兑换码' },
+    currentPaymentAvailable () { return this.form.provider !== 'WECHAT_PERSONAL' || this.wechatAvailable }
   },
-  created () { this.load(); this.startListenerPolling(); document.addEventListener('visibilitychange', this.handleVisibilityChange) },
+  created () { this.load(); document.addEventListener('visibilitychange', this.handleVisibilityChange) },
   beforeDestroy () { this.stopOrderPolling(); this.stopListenerPolling(); document.removeEventListener('visibilitychange', this.handleVisibilityChange) },
   methods: {
     startListenerPolling () { this.stopListenerPolling(); if (document.hidden) return; this.loadListenerStatus(); this.listenerTimer = window.setInterval(() => this.loadListenerStatus(), 15000) },
@@ -79,7 +80,7 @@ export default {
       this.pageLoading = true; this.loadError = ''
       const results = await Promise.allSettled([api.plans({ page: this.subscriptionPlanPagination.page, page_size: 5 }), api.orders({ page: this.orderPagination.page, page_size: 5 }), api.dashboard({ page: 1, page_size: 5 }), api.entitlements({ page: this.entitlementPagination.page, page_size: 5 })])
       const [planResult, orderResult, dashboardResult, entitlementResult] = results
-      if (planResult.status === 'fulfilled') { const p = planResult.value; this.plans = p; this.subscriptionPlans = p.subscription_plans || []; this.subscriptionPlanPagination = p.subscription_plans_pagination || this.subscriptionPlanPagination }
+      if (planResult.status === 'fulfilled') { const p = planResult.value; this.plans = p; this.paymentMethods = p.payment_methods || []; this.subscriptionPlans = p.subscription_plans || []; this.subscriptionPlanPagination = p.subscription_plans_pagination || this.subscriptionPlanPagination; if (this.paymentMethods.length && !this.paymentMethods.some(item => item.provider === this.form.provider)) this.form.provider = this.paymentMethods[0].provider; if (this.paymentMethods.some(item => item.provider === 'WECHAT_PERSONAL')) this.startListenerPolling(); else this.stopListenerPolling() }
       if (orderResult.status === 'fulfilled') { const o = orderResult.value; this.orders = o.orders || []; this.orderPagination = o.pagination || this.orderPagination; this.syncCurrentOrder(this.orders) }
       if (dashboardResult.status === 'fulfilled') this.balance = (dashboardResult.value.user && dashboardResult.value.user.balance) || 0
       if (entitlementResult.status === 'fulfilled') { const e = entitlementResult.value; this.entitlements = e.entitlements || []; this.entitlementPagination = e.pagination || this.entitlementPagination }

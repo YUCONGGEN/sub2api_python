@@ -36,18 +36,41 @@
 
       <section class="codex-auth-panel" aria-labelledby="login-title">
         <div class="codex-auth-panel-head">
-          <span>WELCOME BACK</span>
-          <h2 id="login-title">登录控制台</h2>
-          <p>使用你的 {{ appName }} 账户继续。</p>
+          <span>{{ recoveryOpen ? 'ACCOUNT RECOVERY' : 'WELCOME BACK' }}</span>
+          <h2 id="login-title">{{ recoveryOpen ? '找回登录密码' : '登录控制台' }}</h2>
+          <p>{{ recoveryOpen ? '优先使用账户绑定邮箱找回；没有邮箱时可联系管理员。' : `使用你的 ${appName} 账户继续。` }}</p>
         </div>
-        <form @submit.prevent="submit">
+        <form v-if="!recoveryOpen" @submit.prevent="submit">
           <label>账户名<input v-model.trim="form.username" autocomplete="username" placeholder="输入账户名" /></label>
           <label>密码<input v-model="form.password" type="password" autocomplete="current-password" placeholder="输入密码" /></label>
+          <button v-if="passwordRecoveryEnabled" type="button" class="auth-text-action" @click="openRecovery">忘记密码？</button>
           <button class="codex-auth-submit" :disabled="loading">{{ loading ? '正在验证…' : '继续' }}<b aria-hidden="true">→</b></button>
           <p v-if="error" class="form-error" role="alert">{{ error }}</p>
         </form>
-        <div class="login-note">管理员账户由服务端 YAML/环境变量配置。</div>
-        <div class="register-line">还没有账户？<router-link to="/register">创建一个账户</router-link></div>
+        <form v-else-if="recoveryStage === 'account'" @submit.prevent="requestRecovery">
+          <label>账户名<input v-model.trim="recovery.username" autocomplete="username" placeholder="输入需要找回的账户名" /></label>
+          <button class="codex-auth-submit" :disabled="recoveryLoading || !recovery.username">{{ recoveryLoading ? '正在发送…' : '发送找回邮件' }}<b aria-hidden="true">→</b></button>
+          <p v-if="recoveryError" class="form-error" role="alert">{{ recoveryError }}</p>
+        </form>
+        <form v-else-if="recoveryStage === 'contact'" @submit.prevent="contactAdmin">
+          <p class="recovery-notice">该账号未填写邮箱，请联系管理员找回密码。</p>
+          <label>账户名<input :value="recovery.username" disabled /></label>
+          <label>姓名<input v-model.trim="recovery.name" maxlength="64" placeholder="请填写真实姓名（必填）" /></label>
+          <label>公司或学校 <span class="optional">可选</span><input v-model.trim="recovery.organization" maxlength="128" placeholder="用于管理员核实身份" /></label>
+          <button class="codex-auth-submit" :disabled="recoveryLoading || recovery.name.length < 2">{{ recoveryLoading ? '正在发送…' : '发送给管理员' }}<b aria-hidden="true">→</b></button>
+          <p v-if="recoveryError" class="form-error" role="alert">{{ recoveryError }}</p>
+        </form>
+        <div v-else class="recovery-result" role="status">
+          <div class="recovery-result-mark">✓</div>
+          <h3>{{ recoveryStage === 'email-sent' ? '邮件已发送' : '申请已提交' }}</h3>
+          <p>{{ recoveryMessage }}</p>
+          <p v-if="maskedEmail" class="recovery-email">发送至 {{ maskedEmail }}</p>
+        </div>
+        <template v-if="!recoveryOpen">
+          <div class="login-note">管理员账户由服务端 YAML/环境变量配置。</div>
+          <div class="register-line">还没有账户？<router-link to="/register">创建一个账户</router-link></div>
+        </template>
+        <div v-else class="register-line"><button type="button" class="auth-back-action" @click="closeRecovery">← 返回登录</button></div>
       </section>
     </main>
 
@@ -56,7 +79,21 @@
 </template>
 <script>
 import { api } from '../api'
-export default { props: { appName: String }, data: () => ({ form: { username: '', password: '' }, loading: false, error: '' }), methods: { async submit () { this.error = ''; this.loading = true; try { const data = await api.login(this.form); if (!data.ok) throw new Error(data.message); window.sessionStorage.removeItem('rose_fresh_api_key'); localStorage.setItem('rose_token', data.token); this.$router.push('/dashboard') } catch (e) { this.error = e.message } finally { this.loading = false } } } }
+export default {
+  props: { appName: String, passwordRecoveryEnabled: { type: Boolean, default: true } },
+  data: () => ({
+    form: { username: '', password: '' }, loading: false, error: '', recoveryOpen: false,
+    recoveryStage: 'account', recoveryLoading: false, recoveryError: '', recoveryMessage: '', maskedEmail: '',
+    recovery: { username: '', name: '', organization: '' }
+  }),
+  methods: {
+    async submit () { this.error = ''; this.loading = true; try { const data = await api.login(this.form); if (!data.ok) throw new Error(data.message); window.sessionStorage.removeItem('rose_fresh_api_key'); localStorage.setItem('rose_token', data.token); this.$router.push('/dashboard') } catch (e) { this.error = e.message } finally { this.loading = false } },
+    openRecovery () { this.recoveryOpen = true; this.recoveryStage = 'account'; this.recoveryError = ''; this.recovery.username = this.form.username },
+    closeRecovery () { this.recoveryOpen = false; this.recoveryStage = 'account'; this.recoveryError = ''; this.recoveryMessage = ''; this.maskedEmail = '' },
+    async requestRecovery () { this.recoveryLoading = true; this.recoveryError = ''; try { const data = await api.requestPasswordRecovery({ username: this.recovery.username }); if (data.channel === 'contact_admin') { this.recoveryStage = 'contact'; this.recoveryMessage = data.message || '' } else { this.recoveryStage = 'email-sent'; this.maskedEmail = data.masked_email || ''; this.recoveryMessage = data.message || '找回邮件已发送，通常会在 1 分钟左右到达，请耐心等待。' } } catch (e) { this.recoveryError = e.message } finally { this.recoveryLoading = false } },
+    async contactAdmin () { this.recoveryLoading = true; this.recoveryError = ''; try { const data = await api.contactPasswordRecovery(this.recovery); this.recoveryStage = 'contact-sent'; this.recoveryMessage = data.message || '申请已发送给管理员，请等待管理员核实处理。' } catch (e) { this.recoveryError = e.message } finally { this.recoveryLoading = false } }
+  }
+}
 </script>
 
 

@@ -31,6 +31,7 @@ class BillingController:
             "demo_mode": self.payment.demo_mode(),
             "personal_wechat_available": listener["available"],
             "personal_wechat_status": listener,
+            "payment_methods": self.payment.public_payment_methods(),
             "official_tokens": 1_000_000,
             "models": [
                 {**model, "unit": "CNY / 1M tokens"}
@@ -143,6 +144,8 @@ class BillingController:
         minimum = float(get_config().get("rose", {}).get("billing", {}).get("min-recharge", 10))
         if not math.isfinite(amount) or provider not in {"WECHAT", "WECHAT_PERSONAL", "ALIPAY"} or amount < minimum:
             return bad(f"请选择支付渠道，最低充值 {minimum:g} 元")
+        if not self.payment.payment_method_visible(provider):
+            return bad("该支付渠道当前未开放", 403)
         amount = round(amount, 2)
         if provider == "WECHAT_PERSONAL":
             listener = self.payment.personal_listener_status()

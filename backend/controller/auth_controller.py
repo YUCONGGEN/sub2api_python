@@ -5,6 +5,7 @@ from springbootai.annotations import Autowired, DeleteMapping, GetMapping, Patch
 
 from backend.service.store_service import StoreService
 from backend.service.auth_service import AuthService
+from backend.service.password_recovery_service import PasswordRecoveryService
 from backend.common.response import bad, forbidden, not_found, ok, unauthorized
 
 
@@ -15,6 +16,7 @@ class AuthController:
     def __init__(self, store: StoreService, auth: AuthService):
         self.store = store
         self.auth = auth
+        self.password_recovery = PasswordRecoveryService(store)
 
     @PostMapping("/login")
     def login(self, body: dict = RequestBody(), user_agent: str = RequestHeader(name="User-Agent", required=False), forwarded_for: str = RequestHeader(name="X-Forwarded-For", required=False)):
@@ -25,6 +27,56 @@ class AuthController:
             return unauthorized("账户或密码错误")
         self.store.update_login(user["id"])
         return ok({"ok": True, "token": self.auth.issue_token(user, user_agent, str(forwarded_for or "").split(",")[0].strip()), "user": self.store.public_user(user)})
+
+    @PostMapping("/password-recovery/request")
+    def request_password_recovery(self, body: dict = RequestBody()):
+        username = str(body.get("username", "")).strip()
+        if not username:
+            return bad("请填写账户名")
+        try:
+            return ok({"ok": True, **self.password_recovery.request_reset(username)})
+        except PermissionError as exc:
+            return forbidden(str(exc))
+        except ValueError as exc:
+            return bad(str(exc), 429)
+        except RuntimeError as exc:
+            return bad(str(exc), 503)
+
+    @PostMapping("/password-recovery/contact")
+    def contact_password_recovery(self, body: dict = RequestBody()):
+        username = str(body.get("username", "")).strip()
+        name = str(body.get("name", "")).strip()
+        organization = str(body.get("organization", "")).strip()
+        if not username:
+            return bad("请填写账户名")
+        if len(name) < 2 or len(name) > 64:
+            return bad("请填写 2-64 个字符的姓名")
+        if len(organization) > 128:
+            return bad("公司或学校不能超过 128 个字符")
+        try:
+            result = self.password_recovery.contact_admin(username, name, organization)
+            return ok({"ok": True, **result})
+        except PermissionError as exc:
+            return forbidden(str(exc))
+        except ValueError as exc:
+            return bad(str(exc), 429)
+        except RuntimeError as exc:
+            return bad(str(exc), 503)
+
+    @PostMapping("/password-recovery/reset")
+    def reset_password(self, body: dict = RequestBody()):
+        token = str(body.get("token", "")).strip()
+        new_password = str(body.get("new_password", ""))
+        if len(new_password) < 6 or len(new_password) > 128:
+            return bad("新密码长度需为 6-128 位")
+        if not self.password_recovery.enabled():
+            return forbidden("密码找回功能当前未开启")
+        try:
+            user = self.password_recovery.verify_token(token)
+        except (ValueError, RuntimeError) as exc:
+            return bad(str(exc), 400)
+        self.store.update_password(user["id"], self.store.hash_password(new_password))
+        return ok({"ok": True}, "密码已重置，请使用新密码登录")
 
     @PostMapping("/register")
     def register(self, body: dict = RequestBody(), user_agent: str = RequestHeader(name="User-Agent", required=False), forwarded_for: str = RequestHeader(name="X-Forwarded-For", required=False)):

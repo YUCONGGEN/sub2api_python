@@ -117,6 +117,7 @@
         :recharge-code-placeholder="rechargeCodePlaceholder"
         :codex-config="codexConfig"
         :model-options="modelOptions"
+        :password-recovery-enabled="passwordRecoveryEnabled"
       />
     </div>
   </div>
@@ -138,6 +139,7 @@ export default {
     userGroupOverviewVisible: true,
     dataVisualizationVisible: true,
     monitoringEnabled: true,
+    passwordRecoveryEnabled: true,
     theme: "light",
     mobileMenuOpen: false,
     healthTimer: null,
@@ -219,6 +221,7 @@ export default {
         this.dataVisualizationVisible =
           data.data_visualization_visible !== false;
         this.monitoringEnabled = data.monitoring_enabled !== false;
+        this.passwordRecoveryEnabled = data.password_recovery_enabled !== false;
         if (!this.monitoringEnabled) {
           this.systemStatus = { text: "监控已关闭", level: "checking" };
           if (this.$route.path === "/monitoring") this.$router.replace("/dashboard");

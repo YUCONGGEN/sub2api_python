@@ -122,6 +122,30 @@ rose:
     admin-email: ${ROSE_ADMIN_EMAIL:admin@example.com}
     # 管理员初始余额为 0；充值和兑换码到账后才增加余额。
     initial-balance: ${ROSE_INITIAL_BALANCE:0}
+  password-recovery:
+    # true：登录页显示“忘记密码”。已绑定邮箱的用户收到一次性重置链接；
+    # 未绑定邮箱的用户可填写姓名和公司/学校，向管理员发送人工找回申请。
+    enabled: ${ROSE_PASSWORD_RECOVERY_ENABLED:true}
+    # 重置链接有效期（分钟）以及同一账号再次发送邮件前的等待时间（秒）。
+    reset-token-minutes: ${ROSE_PASSWORD_RECOVERY_TOKEN_MINUTES:15}
+    request-cooldown-seconds: ${ROSE_PASSWORD_RECOVERY_COOLDOWN_SECONDS:60}
+    # 前端显示的预计送达时间，仅用于提示，不会延迟实际发送。
+    mail-delivery-hint-seconds: ${ROSE_PASSWORD_RECOVERY_DELIVERY_HINT_SECONDS:60}
+    # 邮件中的重置链接地址。生产环境应指向实际前端登录站点。
+    frontend-base-url: ${ROSE_PASSWORD_RECOVERY_FRONTEND_BASE_URL:http://www.yucg.cn:8240}
+    # 接收人工找回申请的管理员邮箱。
+    admin-email: ${ROSE_PASSWORD_RECOVERY_ADMIN_EMAIL:admin@example.com}
+    # 可单独配置签名密钥；留空时复用 jwt.secret_key。两者至少一个必须不少于 32 位。
+    token-secret: ${ROSE_PASSWORD_RECOVERY_TOKEN_SECRET:}
+    smtp:
+      # QQ 邮箱使用 smtp.qq.com:465 + SSL；password 必须填写 SMTP 授权码而非 QQ 密码。
+      # 授权码只放服务器环境变量，禁止直接写入 YAML 或提交 GitHub。
+      host: ${ROSE_PASSWORD_RECOVERY_SMTP_HOST:smtp.qq.com}
+      port: ${ROSE_PASSWORD_RECOVERY_SMTP_PORT:465}
+      ssl: ${ROSE_PASSWORD_RECOVERY_SMTP_SSL:true}
+      username: ${ROSE_PASSWORD_RECOVERY_SMTP_USERNAME:}
+      password: ${ROSE_PASSWORD_RECOVERY_SMTP_PASSWORD:}
+      sender: ${ROSE_PASSWORD_RECOVERY_SMTP_SENDER:}
   subscription-gateway:
     # 允许普通用户贡献自己的订阅账号及提交第三方 URL/API Key/Model ID 申请。
     user-contributions-enabled: ${ROSE_SUBSCRIPTION_USER_CONTRIBUTIONS_ENABLED:true}
@@ -310,6 +334,8 @@ rose:
     notify-base-url: ${PAYMENT_NOTIFY_BASE_URL:http://localhost:8241}
     wechat:
       enabled: ${WECHAT_PAY_ENABLED:false}
+      # 是否在普通用户充值页显示该支付方式；默认隐藏。
+      visible-to-users: ${WECHAT_PAY_VISIBLE_TO_USERS:false}
       gateway: ${WECHAT_PAY_GATEWAY:https://api.mch.weixin.qq.com}
       app-id: ${WECHAT_APP_ID:}
       mch-id: ${WECHAT_MCH_ID:}
@@ -321,6 +347,8 @@ rose:
       platform-cert-serial-no: ${WECHAT_PLATFORM_CERT_SERIAL_NO:}
     alipay:
       enabled: ${ALIPAY_ENABLED:false}
+      # 是否在普通用户充值页显示该支付方式；默认隐藏。
+      visible-to-users: ${ALIPAY_VISIBLE_TO_USERS:false}
       app-id: ${ALIPAY_APP_ID:}
       seller-id: ${ALIPAY_SELLER_ID:}
       private-key: ${ALIPAY_PRIVATE_KEY:}
@@ -330,6 +358,8 @@ rose:
       gateway: ${ALIPAY_GATEWAY:https://openapi.alipay.com/gateway.do}
     personal-wechat:
       enabled: ${PERSONAL_WECHAT_ENABLED:true}
+      # 是否显示个人微信充值区；默认隐藏，不影响兑换码、套餐和历史权益。
+      visible-to-users: ${PERSONAL_WECHAT_VISIBLE_TO_USERS:false}
       asset-dir: ${PERSONAL_WECHAT_QR_DIR:./wexin_pay}
       fallback-asset-dir: ./weixin_pay
       tail-min: 0.01

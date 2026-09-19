@@ -1434,6 +1434,7 @@ html[data-theme="dark"] .health-bars span.idle{background:#1b303c!important}
 .codex-auth-submit b{font-size:20px;font-weight:400}
 .codex-auth-submit:disabled{opacity:.52;cursor:not-allowed}
 .codex-auth-panel .form-error{margin:0;padding:10px 12px;border:1px solid #d8a1aa;border-radius:10px;background:#fff0f2;color:#9e3142;font-size:12px}
+.auth-text-action,.auth-back-action{width:max-content;padding:0;border:0;background:transparent;color:#4f4c73;font-size:11px;font-weight:700;text-decoration:underline;text-underline-offset:3px}.auth-text-action{justify-self:end;margin-top:-7px}.auth-back-action{color:#111116}.recovery-notice{margin:0;padding:11px 13px;border:1px solid #d3b570;border-radius:10px;background:#fff8e4;color:#775514;font-size:12px;line-height:1.55}.recovery-result{padding:12px 4px 4px;text-align:center}.recovery-result-mark{display:grid;place-items:center;width:46px;height:46px;margin:0 auto 15px;border-radius:50%;background:#e8f4df;color:#497a31;font-size:22px}.recovery-result h3{margin:0 0 9px;font-size:20px}.recovery-result p{margin:0;color:#626176;font-size:12px;line-height:1.7}.recovery-result .recovery-email{margin-top:8px;color:#353348;font:11px var(--mono)}
 .codex-auth-panel .login-note{margin-top:18px;color:#77768a;font-size:11px;text-align:center}
 .codex-auth-panel .register-line{margin-top:22px;padding-top:18px;border-top:1px solid #c9c8d7;color:#6e6d7e;font-size:12px;text-align:center}
 .codex-auth-panel .register-line a{color:#111116;font-weight:700;text-decoration:none}
@@ -1480,6 +1481,7 @@ html[data-theme="dark"] .codex-auth-panel form input:not([type="checkbox"]){bord
 html[data-theme="dark"] .codex-auth-panel form input:not([type="checkbox"]):focus{border-color:#7787b4;background:#182b38;box-shadow:0 0 0 4px #7787b41c}
 html[data-theme="dark"] .codex-auth-panel .check-line{color:#93a6b4!important}
 html[data-theme="dark"] .codex-auth-panel .check-line input{accent-color:#cbd7df}
+html[data-theme="dark"] .auth-text-action,html[data-theme="dark"] .auth-back-action{color:#dbe6ed}html[data-theme="dark"] .recovery-notice{border-color:#705b30;background:#342d1c;color:#e8cf92}html[data-theme="dark"] .recovery-result-mark{background:#213a2c;color:#91d6a5}html[data-theme="dark"] .recovery-result h3{color:#edf3f7}html[data-theme="dark"] .recovery-result p,html[data-theme="dark"] .recovery-result .recovery-email{color:#aebdca}
 html[data-theme="dark"] .codex-auth-panel .register-line{border-color:#29404f;color:#8fa2b0}
 html[data-theme="dark"] .codex-auth-panel .register-line a{color:#dbe6ed}
 html[data-theme="dark"] .codex-auth-footer{color:#91a2b180}
@@ -1523,6 +1525,7 @@ html[data-theme="dark"] .codex-auth-footer-left>a{border-color:#ffffff12;backgro
 }
 
 /* Profile card ordering: quick links sit beside password settings on desktop. */
+.billing-layout.billing-layout-wallet-only{grid-template-columns:minmax(0,1fr)}
 .profile-layout>.preference-panel{grid-column:auto}
 
 /* Administrator-managed user groups and per-member policy controls. */

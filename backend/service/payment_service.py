@@ -54,6 +54,27 @@ class PaymentService:
     def config() -> dict[str, Any]:
         return get_config().get("rose", {}).get("payment", {})
 
+    @classmethod
+    def public_payment_methods(cls) -> list[dict[str, str]]:
+        """Return payment channels explicitly exposed to normal users."""
+        cfg = cls.config()
+        definitions = (
+            ("WECHAT_PERSONAL", "personal-wechat", "微信支付"),
+            ("WECHAT", "wechat", "微信商户支付"),
+            ("ALIPAY", "alipay", "支付宝"),
+        )
+        methods: list[dict[str, str]] = []
+        for provider, key, label in definitions:
+            item = cfg.get(key, {}) if isinstance(cfg.get(key), dict) else {}
+            if _as_bool(item.get("enabled", False)) and _as_bool(item.get("visible-to-users", False)):
+                methods.append({"provider": provider, "label": label})
+        return methods
+
+    @classmethod
+    def payment_method_visible(cls, provider: str) -> bool:
+        value = str(provider or "").upper()
+        return any(item["provider"] == value for item in cls.public_payment_methods())
+
     @staticmethod
     def application_name() -> str:
         cfg = get_config().get("rose", {}).get("application", {})

@@ -224,9 +224,11 @@ class SubscriptionController:
         if row.get("provider") != "openai":
             return bad("只有 OpenAI / Codex 订阅支持用量查询")
         try:
-            # Everyone covered by the YAML visibility switch can read cached
-            # quota. Only the owner/admin may explicitly bypass that cache.
-            force = str(refresh).lower() in {"1", "true", "yes", "on"} and self.accounts.can_manage(user, row)
+            # Regular users, including the account owner, always share the
+            # configured quota cache. Only administrators may explicitly
+            # bypass it, preventing browser reloads from querying upstream
+            # more than once within the default five-minute window.
+            force = str(refresh).lower() in {"1", "true", "yes", "on"} and self._admin(user)
             quota = await self.gateway.query_account_quota(account_id, force=force)
         except ValueError as exc:
             return bad(str(exc), 502)

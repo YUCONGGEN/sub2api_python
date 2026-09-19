@@ -214,3 +214,23 @@ def test_regular_user_can_read_other_shared_account_quota_without_forcing_refres
     assert result.code == 200
     assert result.data["quota"]["long_window"]["remaining_percent"] == 80
     assert calls == [(9, False)]
+
+
+def test_regular_account_owner_cannot_bypass_five_minute_quota_cache():
+    controller = SubscriptionController.__new__(SubscriptionController)
+    user = {"id": 7, "role": "USER"}
+    controller.auth = type("Auth", (), {"user_from_authorization": lambda self, token: user})()
+    controller.accounts = make_service()
+    controller.accounts.find_public = lambda account_id: account_row(7)
+    calls = []
+
+    class Gateway:
+        async def query_account_quota(self, account_id, force=False):
+            calls.append((account_id, force))
+            return {"plan_type": "pro"}
+
+    controller.gateway = Gateway()
+    result = asyncio.run(controller.account_quota(9, refresh="true", authorization="Bearer owner-token"))
+
+    assert result.code == 200
+    assert calls == [(9, False)]

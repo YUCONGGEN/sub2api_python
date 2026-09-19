@@ -110,7 +110,7 @@
           <div class="account-models"><span v-for="model in account.models" :key="model">{{ model }}</span></div>
           <dl v-if="account.can_manage" class="account-facts"><div v-if="isAdmin"><dt>优先级 / 权重</dt><dd>{{ account.priority }} / {{ account.weight }}</dd></div><div><dt>错误次数</dt><dd>{{ account.error_count || 0 }}</dd></div><div><dt>Token 过期</dt><dd>{{ displayTime(account.expires_at) }}</dd></div><div><dt>最近使用</dt><dd>{{ displayTime(account.last_used_at) }}</dd></div></dl>
           <div v-if="quotaVisible && account.provider === 'openai'" class="account-quota">
-            <div class="account-quota-head"><div><small>CODEX SUBSCRIPTION</small><strong>订阅剩余量</strong></div><button v-if="account.can_manage" type="button" :disabled="quotaState(account).loading" @click="loadAccountQuota(account, true)">{{ quotaState(account).loading ? '查询中…' : '刷新' }}</button><span v-else class="quota-readonly">只读 · 随页面刷新</span></div>
+            <div class="account-quota-head"><div><small>CODEX SUBSCRIPTION</small><strong>订阅剩余量</strong></div><button v-if="isAdmin && account.can_manage" type="button" :disabled="quotaState(account).loading" @click="loadAccountQuota(account, true)">{{ quotaState(account).loading ? '查询中…' : '刷新' }}</button><span v-else class="quota-readonly">随页面查询 · 5 分钟缓存</span></div>
             <div v-if="quotaState(account).loading && !quotaState(account).quota" class="quota-loading">正在安全查询订阅窗口…</div>
             <div v-else-if="quotaState(account).error && !quotaState(account).quota" class="quota-error">{{ quotaState(account).error }}</div>
             <template v-else-if="quotaState(account).quota">
@@ -266,7 +266,7 @@ export default {
       const previous = this.quotaState(account)
       this.setQuotaState(account.id, { ...previous, loading: true, error: '' })
       try {
-        const data = await api.upstreamSubscriptionQuota(account.id, refresh && account.can_manage)
+        const data = await api.upstreamSubscriptionQuota(account.id, refresh && this.isAdmin && account.can_manage)
         const quota = data.quota || null
         if (quota?.account_disabled) {
           account.enabled = false
@@ -281,7 +281,7 @@ export default {
         if (refresh && !quiet) notify(message, 'error')
       }
     },
-    loadAccountQuotas () { if (!this.quotaVisible) return; this.accounts.filter(account => account.provider === 'openai').forEach(account => this.loadAccountQuota(account, !!account.can_manage, true)) },
+    loadAccountQuotas () { if (!this.quotaVisible) return; this.accounts.filter(account => account.provider === 'openai').forEach(account => this.loadAccountQuota(account, this.isAdmin && !!account.can_manage, true)) },
     statusClass (account) { return account.enabled ? String(account.status || 'READY').toLowerCase() : 'disabled' },
     statusText (account) { if (!account.enabled) return '已停用'; return ({ READY: '可用', INVALID: '凭据失效', COOLDOWN: '冷却中', DISABLED: '已停用' })[account.status] || account.status },
     displayTime (value) { if (!value) return '—'; const date = new Date(value); return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN') },

@@ -205,7 +205,7 @@ rose:
     # 管理后台订阅用量缓存；查询不进入正常模型转发链路。
     quota-cache-seconds: ${ROSE_SUBSCRIPTION_QUOTA_CACHE_SECONDS:300}
     # true：普通用户可只读查看共享 OpenAI/Codex 账号的订阅剩余量；管理员始终可见。
-    # 普通用户读取缓存，只有账号所有者和管理员可强制刷新上游。
+    # 普通用户（包括账号所有者）随页面查询并复用 5 分钟缓存；只有管理员可强制刷新上游。
     quota-visible-to-users: ${ROSE_SUBSCRIPTION_QUOTA_VISIBLE_TO_USERS:true}
     # 只看每周窗口；剩余量低于该百分比时停用账号，等待管理员处理。5 小时窗口不参与判断。
     weekly-quota-disable-threshold-percent: ${ROSE_SUBSCRIPTION_WEEKLY_DISABLE_THRESHOLD_PERCENT:2}

@@ -178,6 +178,11 @@ class PasswordRecoveryService:
     def _send_mail(self, recipient: str, subject: str, content: str) -> None:
         cfg = self.config()
         smtp_cfg = cfg.get("smtp", {}) if isinstance(cfg.get("smtp"), dict) else {}
+        # smtplib opens a direct TCP socket and never consumes HTTP(S) proxy
+        # environment variables. ``use-proxy`` is kept in YAML as an explicit,
+        # self-documenting guarantee for operators.
+        if _as_bool(smtp_cfg.get("use-proxy", False), False):
+            raise RuntimeError("密码找回邮件不允许通过代理发送")
         host = str(smtp_cfg.get("host") or "smtp.qq.com").strip()
         port = int(smtp_cfg.get("port", 465) or 465)
         username = str(smtp_cfg.get("username") or "").strip()

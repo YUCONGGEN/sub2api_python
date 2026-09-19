@@ -75,3 +75,12 @@ def test_all_payment_methods_are_hidden_by_default_and_individually_enabled():
         assert [item["provider"] for item in PaymentService.public_payment_methods()] == ["WECHAT_PERSONAL", "ALIPAY"]
         assert PaymentService.payment_method_visible("wechat_personal") is True
         assert PaymentService.payment_method_visible("wechat") is False
+
+
+def test_password_recovery_mail_rejects_proxy_mode():
+    service = PasswordRecoveryService(RecoveryStore())
+    config = recovery_config()
+    config["rose"]["password-recovery"]["smtp"]["use-proxy"] = True
+    with patch("backend.service.password_recovery_service.get_config", return_value=config):
+        with pytest.raises(RuntimeError, match="不允许通过代理"):
+            service._send_mail("user@example.test", "subject", "content")

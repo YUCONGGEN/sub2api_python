@@ -34,13 +34,60 @@ class AuthController:
         if not username:
             return bad("请填写账户名")
         try:
-            return ok({"ok": True, **self.password_recovery.request_reset(username)})
+            # Backward-compatible route: new requests use the same guarded
+            # verification-code flow, so callers cannot bypass duplicate-send
+            # protection through the legacy endpoint.
+            return ok({"ok": True, **self.password_recovery.request_code(username)})
         except PermissionError as exc:
             return forbidden(str(exc))
         except ValueError as exc:
             return bad(str(exc), 429)
         except RuntimeError as exc:
             return bad(str(exc), 503)
+
+    @PostMapping("/password-recovery/lookup")
+    def lookup_password_recovery(self, body: dict = RequestBody()):
+        username = str(body.get("username", "")).strip()
+        if not username:
+            return bad("请填写账户名")
+        try:
+            return ok({"ok": True, **self.password_recovery.lookup_account(username)})
+        except PermissionError as exc:
+            return forbidden(str(exc))
+
+    @PostMapping("/password-recovery/request-code")
+    def request_password_recovery_code(self, body: dict = RequestBody()):
+        username = str(body.get("username", "")).strip()
+        if not username:
+            return bad("请填写账户名")
+        try:
+            return ok({"ok": True, **self.password_recovery.request_code(username)})
+        except PermissionError as exc:
+            return forbidden(str(exc))
+        except ValueError as exc:
+            return bad(str(exc), 429)
+        except RuntimeError as exc:
+            return bad(str(exc), 503)
+
+    @PostMapping("/password-recovery/verify-code")
+    def verify_password_recovery_code(self, body: dict = RequestBody()):
+        username = str(body.get("username", "")).strip()
+        code = str(body.get("code", "")).strip()
+        new_password = str(body.get("new_password", ""))
+        if not username:
+            return bad("请填写账户名")
+        if not re.fullmatch(r"\d{6}", code):
+            return bad("请输入 6 位数字验证码")
+        if len(new_password) < 6 or len(new_password) > 128:
+            return bad("新密码长度需为 6-128 位")
+        try:
+            user = self.password_recovery.verify_code(username, code)
+        except PermissionError as exc:
+            return forbidden(str(exc))
+        except (ValueError, RuntimeError) as exc:
+            return bad(str(exc), 400)
+        self.store.update_password(user["id"], self.store.hash_password(new_password))
+        return ok({"ok": True}, "密码已重置，请使用新密码登录")
 
     @PostMapping("/password-recovery/contact")
     def contact_password_recovery(self, body: dict = RequestBody()):

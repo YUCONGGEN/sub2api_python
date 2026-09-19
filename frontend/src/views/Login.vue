@@ -47,13 +47,28 @@
           <button class="codex-auth-submit" :disabled="loading">{{ loading ? '正在验证…' : '继续' }}<b aria-hidden="true">→</b></button>
           <p v-if="error" class="form-error" role="alert">{{ error }}</p>
         </form>
-        <form v-else-if="recoveryStage === 'account'" @submit.prevent="requestRecovery">
+        <form v-else-if="recoveryStage === 'account'" @submit.prevent="lookupRecovery">
           <label>账户名<input v-model.trim="recovery.username" autocomplete="username" placeholder="输入需要找回的账户名" /></label>
-          <button class="codex-auth-submit" :disabled="recoveryLoading || !recovery.username">{{ recoveryLoading ? '正在发送…' : '发送找回邮件' }}<b aria-hidden="true">→</b></button>
+          <button class="codex-auth-submit" :disabled="recoveryLoading || !recovery.username">{{ recoveryLoading ? '正在查询…' : '下一步' }}<b aria-hidden="true">→</b></button>
+          <p v-if="recoveryError" class="form-error" role="alert">{{ recoveryError }}</p>
+        </form>
+        <form v-else-if="recoveryStage === 'email-ready'" @submit.prevent="sendRecoveryCode">
+          <p class="recovery-notice">已找到该账户绑定的邮箱：</p>
+          <p class="recovery-email">{{ maskedEmail }}</p>
+          <p class="recovery-delivery-hint">发送后邮件投递和邮箱同步可能需要约 1 分钟，请耐心等待，不要重复点击。</p>
+          <button class="codex-auth-submit" :disabled="recoveryLoading">{{ recoveryLoading ? '正在发送…' : '发送验证码' }}<b aria-hidden="true">→</b></button>
+          <p v-if="recoveryError" class="form-error" role="alert">{{ recoveryError }}</p>
+        </form>
+        <form v-else-if="recoveryStage === 'code-sent'" @submit.prevent="resetWithCode">
+          <p class="recovery-notice">验证码已发送至 {{ maskedEmail }}。邮件投递和邮箱同步可能需要约 1 分钟，请耐心等待并检查垃圾邮件。</p>
+          <label>验证码<input v-model.trim="recovery.code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="输入 6 位数字验证码" /></label>
+          <label>新密码<input v-model="recovery.newPassword" type="password" autocomplete="new-password" placeholder="6-128 位新密码" /></label>
+          <label>确认新密码<input v-model="recovery.confirmPassword" type="password" autocomplete="new-password" placeholder="再次输入新密码" /></label>
+          <button class="codex-auth-submit" :disabled="recoveryLoading || recovery.code.length !== 6 || recovery.newPassword.length < 6">{{ recoveryLoading ? '正在验证…' : '验证并重置密码' }}<b aria-hidden="true">→</b></button>
           <p v-if="recoveryError" class="form-error" role="alert">{{ recoveryError }}</p>
         </form>
         <form v-else-if="recoveryStage === 'contact'" @submit.prevent="contactAdmin">
-          <p class="recovery-notice">该账号未填写邮箱，请联系管理员找回密码。</p>
+          <p class="recovery-notice">账户不存在或未填写邮箱，请填写以下信息联系管理员。</p>
           <label>账户名<input :value="recovery.username" disabled /></label>
           <label>姓名<input v-model.trim="recovery.name" maxlength="64" placeholder="请填写真实姓名（必填）" /></label>
           <label>公司或学校 <span class="optional">可选</span><input v-model.trim="recovery.organization" maxlength="128" placeholder="用于管理员核实身份" /></label>
@@ -62,9 +77,8 @@
         </form>
         <div v-else class="recovery-result" role="status">
           <div class="recovery-result-mark">✓</div>
-          <h3>{{ recoveryStage === 'email-sent' ? '邮件已发送' : '申请已提交' }}</h3>
+          <h3>{{ recoveryStage === 'password-reset' ? '密码已重置' : '申请已提交' }}</h3>
           <p>{{ recoveryMessage }}</p>
-          <p v-if="maskedEmail" class="recovery-email">发送至 {{ maskedEmail }}</p>
         </div>
         <template v-if="!recoveryOpen">
           <div class="login-note">管理员账户由服务端 YAML/环境变量配置。</div>
@@ -84,13 +98,15 @@ export default {
   data: () => ({
     form: { username: '', password: '' }, loading: false, error: '', recoveryOpen: false,
     recoveryStage: 'account', recoveryLoading: false, recoveryError: '', recoveryMessage: '', maskedEmail: '',
-    recovery: { username: '', name: '', organization: '' }
+    recovery: { username: '', name: '', organization: '', code: '', newPassword: '', confirmPassword: '' }
   }),
   methods: {
     async submit () { this.error = ''; this.loading = true; try { const data = await api.login(this.form); if (!data.ok) throw new Error(data.message); window.sessionStorage.removeItem('rose_fresh_api_key'); localStorage.setItem('rose_token', data.token); this.$router.push('/dashboard') } catch (e) { this.error = e.message } finally { this.loading = false } },
-    openRecovery () { this.recoveryOpen = true; this.recoveryStage = 'account'; this.recoveryError = ''; this.recovery.username = this.form.username },
-    closeRecovery () { this.recoveryOpen = false; this.recoveryStage = 'account'; this.recoveryError = ''; this.recoveryMessage = ''; this.maskedEmail = '' },
-    async requestRecovery () { this.recoveryLoading = true; this.recoveryError = ''; try { const data = await api.requestPasswordRecovery({ username: this.recovery.username }); if (data.channel === 'contact_admin') { this.recoveryStage = 'contact'; this.recoveryMessage = data.message || '' } else { this.recoveryStage = 'email-sent'; this.maskedEmail = data.masked_email || ''; this.recoveryMessage = data.message || '找回邮件已发送，通常会在 1 分钟左右到达，请耐心等待。' } } catch (e) { this.recoveryError = e.message } finally { this.recoveryLoading = false } },
+    openRecovery () { this.recoveryOpen = true; this.recoveryStage = 'account'; this.recoveryError = ''; this.recoveryMessage = ''; this.maskedEmail = ''; this.recovery = { username: this.form.username, name: '', organization: '', code: '', newPassword: '', confirmPassword: '' } },
+    closeRecovery () { this.recoveryOpen = false; this.recoveryStage = 'account'; this.recoveryError = ''; this.recoveryMessage = ''; this.maskedEmail = ''; this.recovery = { username: '', name: '', organization: '', code: '', newPassword: '', confirmPassword: '' } },
+    async lookupRecovery () { this.recoveryLoading = true; this.recoveryError = ''; try { const data = await api.lookupPasswordRecovery({ username: this.recovery.username }); this.recoveryMessage = data.message || ''; if (data.email_available) { this.maskedEmail = data.masked_email || ''; this.recoveryStage = 'email-ready' } else { this.recoveryStage = 'contact' } } catch (e) { this.recoveryError = e.message } finally { this.recoveryLoading = false } },
+    async sendRecoveryCode () { this.recoveryLoading = true; this.recoveryError = ''; try { const data = await api.requestPasswordRecoveryCode({ username: this.recovery.username }); if (!data.email_available) { this.recoveryStage = 'contact'; this.recoveryMessage = data.message || ''; return } this.maskedEmail = data.masked_email || this.maskedEmail; this.recoveryStage = 'code-sent'; this.recoveryMessage = data.message || '' } catch (e) { this.recoveryError = e.message } finally { this.recoveryLoading = false } },
+    async resetWithCode () { this.recoveryError = ''; if (this.recovery.newPassword !== this.recovery.confirmPassword) { this.recoveryError = '两次输入的新密码不一致'; return } this.recoveryLoading = true; try { const data = await api.verifyPasswordRecoveryCode({ username: this.recovery.username, code: this.recovery.code, new_password: this.recovery.newPassword }); this.form.username = this.recovery.username; this.form.password = ''; this.recoveryStage = 'password-reset'; this.recoveryMessage = data.message || '密码已重置，请返回登录。' } catch (e) { this.recoveryError = e.message } finally { this.recoveryLoading = false } },
     async contactAdmin () { this.recoveryLoading = true; this.recoveryError = ''; try { const data = await api.contactPasswordRecovery(this.recovery); this.recoveryStage = 'contact-sent'; this.recoveryMessage = data.message || '申请已发送给管理员，请等待管理员核实处理。' } catch (e) { this.recoveryError = e.message } finally { this.recoveryLoading = false } }
   }
 }

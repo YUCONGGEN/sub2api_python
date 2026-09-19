@@ -123,11 +123,14 @@ rose:
     # 管理员初始余额为 0；充值和兑换码到账后才增加余额。
     initial-balance: ${ROSE_INITIAL_BALANCE:0}
   password-recovery:
-    # true：登录页显示“忘记密码”。已绑定邮箱的用户收到一次性重置链接；
-    # 未绑定邮箱的用户可填写姓名和公司/学校，向管理员发送人工找回申请。
+    # true：登录页显示“忘记密码”。先按用户名查询；已绑定邮箱的用户收到验证码，
+    # 未绑定邮箱或用户名不正确时，可填写姓名和公司/学校，向管理员发送人工找回申请。
     enabled: ${ROSE_PASSWORD_RECOVERY_ENABLED:true}
     # 重置链接有效期（分钟）以及同一账号再次发送邮件前的等待时间（秒）。
     reset-token-minutes: ${ROSE_PASSWORD_RECOVERY_TOKEN_MINUTES:15}
+    # 邮箱验证码有效期（分钟）以及最多允许输错的次数。验证成功后立即失效。
+    verification-code-minutes: ${ROSE_PASSWORD_RECOVERY_CODE_MINUTES:5}
+    verification-code-max-attempts: ${ROSE_PASSWORD_RECOVERY_CODE_MAX_ATTEMPTS:5}
     request-cooldown-seconds: ${ROSE_PASSWORD_RECOVERY_COOLDOWN_SECONDS:60}
     # 前端显示的预计送达时间，仅用于提示，不会延迟实际发送。
     mail-delivery-hint-seconds: ${ROSE_PASSWORD_RECOVERY_DELIVERY_HINT_SECONDS:60}

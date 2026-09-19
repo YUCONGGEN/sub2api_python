@@ -1,4 +1,4 @@
-"""Password recovery mail delivery and short-lived reset-link signing."""
+"""Password recovery mail delivery, verification codes and legacy reset links."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import json
 import logging
+import secrets
 import socket
 import smtplib
 import threading
@@ -77,6 +78,8 @@ class PasswordRecoveryService:
 
     _attempts: dict[str, float] = {}
     _attempt_lock = threading.Lock()
+    _codes: dict[int, dict] = {}
+    _code_lock = threading.Lock()
 
     def __init__(self, store: StoreService):
         self.store = store
@@ -91,6 +94,12 @@ class PasswordRecoveryService:
 
     def delivery_hint_seconds(self) -> int:
         return max(1, min(600, int(self.config().get("mail-delivery-hint-seconds", 60) or 60)))
+
+    def code_minutes(self) -> int:
+        return max(5, min(30, int(self.config().get("verification-code-minutes", 5) or 5)))
+
+    def code_max_attempts(self) -> int:
+        return max(1, min(10, int(self.config().get("verification-code-max-attempts", 5) or 5)))
 
     def _token_secret(self) -> bytes:
         configured = str(self.config().get("token-secret", "")).strip()
@@ -162,6 +171,108 @@ class PasswordRecoveryService:
         visible = local[:2] if len(local) > 2 else local[:1]
         return f"{visible}{'*' * max(3, len(local) - len(visible))}@{domain}"
 
+    def lookup_account(self, username: str) -> dict:
+        """Return only the recovery route and a masked address."""
+        if not self.enabled():
+            raise PermissionError("密码找回功能当前未开启")
+        user = self.store.find_by_username(username)
+        email = str((user or {}).get("email") or "").strip()
+        if not user or not user.get("enabled") or not email:
+            return {
+                "email_available": False,
+                "channel": "contact_admin",
+                "message": "账户不存在或未填写邮箱，请填写身份信息联系管理员。",
+            }
+        return {
+            "email_available": True,
+            "channel": "email",
+            "masked_email": self.mask_email(email),
+            "message": "已找到绑定邮箱，请确认后发送验证码。",
+        }
+
+    def _code_digest(self, user_id: int, code: str) -> str:
+        payload = f"password-recovery-code:{int(user_id)}:{str(code)}".encode("utf-8")
+        return hmac.new(self._token_secret(), payload, hashlib.sha256).hexdigest()
+
+    def request_code(self, username: str) -> dict:
+        if not self.enabled():
+            raise PermissionError("密码找回功能当前未开启")
+        user = self.store.find_by_username(username)
+        email = str((user or {}).get("email") or "").strip()
+        if not user or not user.get("enabled") or not email:
+            return {
+                "channel": "contact_admin",
+                "email_available": False,
+                "message": "账户不存在或未填写邮箱，请填写身份信息联系管理员。",
+            }
+        cooldown = max(30, min(3600, int(self.config().get("request-cooldown-seconds", 60) or 60)))
+        user_id = int(user["id"])
+        with self._code_lock:
+            active = type(self)._codes.get(user_id)
+            if active and float(active.get("expires_at") or 0) >= time.time():
+                raise ValueError(f"验证码已经发送，{self.code_minutes()} 分钟内无需重复发送")
+            type(self)._codes.pop(user_id, None)
+        self._rate_limit(f"code:{user_id}", cooldown)
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        now = time.time()
+        with self._code_lock:
+            type(self)._codes[user_id] = {
+                "digest": self._code_digest(user_id, code),
+                "expires_at": now + self.code_minutes() * 60,
+                "attempts_left": self.code_max_attempts(),
+                "session_version": int(user.get("session_version") or 0),
+                "email_digest": hashlib.sha256(email.lower().encode("utf-8")).hexdigest(),
+            }
+            if len(type(self)._codes) > 4096:
+                type(self)._codes = {key: value for key, value in type(self)._codes.items() if float(value.get("expires_at") or 0) >= now}
+        try:
+            self._send_mail(
+                email,
+                "登录密码找回验证码",
+                f"你好，{user['username']}：\n\n你的密码找回验证码是：{code}\n\n"
+                f"验证码在 {self.code_minutes()} 分钟内有效，请勿转发给他人。"
+                "如果不是你本人操作，请忽略本邮件。",
+            )
+        except Exception:
+            with self._code_lock:
+                type(self)._codes.pop(user_id, None)
+            raise
+        return {
+            "channel": "email_code",
+            "email_available": True,
+            "masked_email": self.mask_email(email),
+            "delivery_hint_seconds": self.delivery_hint_seconds(),
+            "expires_in_seconds": self.code_minutes() * 60,
+            "message": "验证码邮件已发送，通常会在 1 分钟左右到达，请耐心等待并检查垃圾邮件。",
+        }
+
+    def verify_code(self, username: str, code: str) -> dict:
+        if not self.enabled():
+            raise PermissionError("密码找回功能当前未开启")
+        user = self.store.find_by_username(username)
+        if not user or not user.get("enabled"):
+            raise ValueError("验证码不正确或已过期")
+        user_id = int(user["id"])
+        now = time.time()
+        with self._code_lock:
+            challenge = type(self)._codes.get(user_id)
+            if not challenge or float(challenge.get("expires_at") or 0) < now:
+                type(self)._codes.pop(user_id, None)
+                raise ValueError("验证码不正确或已过期")
+            email_digest = hashlib.sha256(str(user.get("email") or "").strip().lower().encode("utf-8")).hexdigest()
+            valid_context = (
+                int(challenge.get("session_version") or 0) == int(user.get("session_version") or 0)
+                and hmac.compare_digest(str(challenge.get("email_digest") or ""), email_digest)
+            )
+            valid_code = hmac.compare_digest(str(challenge.get("digest") or ""), self._code_digest(user_id, code))
+            if not valid_context or not valid_code:
+                challenge["attempts_left"] = int(challenge.get("attempts_left") or 1) - 1
+                if challenge["attempts_left"] <= 0 or not valid_context:
+                    type(self)._codes.pop(user_id, None)
+                raise ValueError("验证码不正确或已过期")
+            type(self)._codes.pop(user_id, None)
+        return user
+
     def request_reset(self, username: str) -> dict:
         if not self.enabled():
             raise PermissionError("密码找回功能当前未开启")
@@ -199,6 +310,8 @@ class PasswordRecoveryService:
         if not recipient:
             raise RuntimeError("管理员接收邮箱未配置")
         user = self.store.find_by_username(username)
+        if user and user.get("enabled") and str(user.get("email") or "").strip():
+            raise ValueError("该账号已绑定邮箱，请使用邮箱验证码找回密码")
         account_state = "账号存在但未绑定邮箱" if user and not str(user.get("email") or "").strip() else "请管理员核实账号"
         self._send_mail(
             recipient,

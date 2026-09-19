@@ -14,6 +14,10 @@
     </div>
     <div v-else-if="loading" class="panel group-overview-feedback" role="status">正在加载所在分组…</div>
     <template v-else-if="detail">
+      <div class="panel current-group-identity">
+        <span class="eyebrow">CURRENT GROUP</span>
+        <div><small>当前所在分组</small><strong>{{ detail.group.name || '未命名分组' }}</strong></div>
+      </div>
       <div class="group-overview-metrics">
         <article class="panel"><span class="eyebrow">GROUP MEMBERS</span><h2>{{ number(detail.totals.member_count) }} <small>人</small></h2><p>分组成员总数</p></article>
         <article class="panel"><span class="eyebrow">TOTAL SPEND</span><h2>¥{{ money(detail.totals.total_cost) }}</h2><p>全组累计调用费用</p></article>
@@ -62,6 +66,10 @@ export default {
 
 <style scoped>
 .group-overview-metrics { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:18px;margin-bottom:20px; }
+.current-group-identity { display:flex;align-items:center;justify-content:space-between;gap:18px;margin-bottom:20px;padding:18px 22px; }
+.current-group-identity div { display:flex;align-items:baseline;gap:12px; }
+.current-group-identity small { color:var(--muted); }
+.current-group-identity strong { color:var(--text);font-size:clamp(20px,2vw,30px);font-family:'Playfair Display',Georgia,serif; }
 .group-overview-metrics .panel { min-width:0; }
 .group-overview-metrics h2 { font-size:clamp(22px,2.2vw,34px);overflow-wrap:anywhere;font-variant-numeric:tabular-nums; }
 .group-overview-metrics h2 small { font-size:14px; }
@@ -72,4 +80,5 @@ export default {
 .member-value { white-space:nowrap;font-variant-numeric:tabular-nums; }
 .group-overview-feedback { min-height:160px;display:flex;align-items:center;justify-content:center;gap:18px; }
 @media (max-width:1000px) { .group-overview-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media (max-width:680px) { .current-group-identity { align-items:flex-start;flex-direction:column; }.current-group-identity div { align-items:flex-start;flex-direction:column;gap:5px; } }
 </style>

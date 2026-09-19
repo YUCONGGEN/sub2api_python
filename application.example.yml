@@ -151,7 +151,8 @@ rose:
       password: ${ROSE_PASSWORD_RECOVERY_SMTP_PASSWORD:}
       sender: ${ROSE_PASSWORD_RECOVERY_SMTP_SENDER:}
   subscription-gateway:
-    # 允许普通用户贡献自己的订阅账号及提交第三方 URL/API Key/Model ID 申请。
+    # 允许普通用户贡献自己的订阅账号，并向管理员分享 DeepSeek、Kimi、Claude 等
+    # 第三方账号的 URL、Token/API Key 与 Model ID。
     user-contributions-enabled: ${ROSE_SUBSCRIPTION_USER_CONTRIBUTIONS_ENABLED:true}
     # 可接入自己有权使用的 OpenAI、Claude、Grok、Kimi、GLM 与 MiniMax 账号。凭据在数据库中
     # 使用独立密钥加密；生产环境必须设置为随机值，修改后旧凭据需要重新授权。

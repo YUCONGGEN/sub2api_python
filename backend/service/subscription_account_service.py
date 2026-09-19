@@ -424,10 +424,13 @@ class SubscriptionAccountService:
         if not bool(getattr(self, "user_contributions_enabled", True)):
             raise ValueError("用户贡献功能当前已关闭")
         base_url = self._normalize_request_url(body.get("url") or body.get("base_url"))
-        api_key = str(body.get("api_key") or "").strip()
+        # ``token`` is the public name used by the sharing UI. Keep
+        # ``api_key`` as a backwards-compatible alias for existing clients
+        # and rows created by the former "upstream config request" form.
+        api_key = str(body.get("token") or body.get("api_key") or "").strip()
         model_id = str(body.get("model_id") or "").strip()
         if not api_key or len(api_key) > 8192:
-            raise ValueError("API Key 不能为空且不能超过 8192 个字符")
+            raise ValueError("账号 Token/API Key 不能为空且不能超过 8192 个字符")
         if not model_id or len(model_id) > 200:
             raise ValueError("Model ID 不能为空且不能超过 200 个字符")
         now = utc_now()
@@ -449,7 +452,7 @@ class SubscriptionAccountService:
     def list_config_requests(self, user: dict[str, Any], status: str = "", page: int = 1, page_size: int = 20) -> dict[str, Any]:
         normalized = str(status or "").strip().upper()
         if normalized and normalized not in {"PENDING", "ACCEPTED", "REJECTED"}:
-            raise ValueError("申请状态不正确")
+            raise ValueError("Token 分享状态不正确")
         owner_filter = 0 if self._is_admin(user) else int(user["id"])
         result = self.repository.list_config_requests(owner_filter, normalized, page, page_size)
         result["items"] = [self._public_config_request(row) for row in result["items"]]

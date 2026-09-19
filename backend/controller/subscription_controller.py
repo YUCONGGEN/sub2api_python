@@ -251,7 +251,7 @@ class SubscriptionController:
             request = self.accounts.create_config_request(int(user["id"]), body)
         except ValueError as exc:
             return bad(str(exc))
-        return ok({"ok": True, "request": request}, "配置申请已加密发送给管理员")
+        return ok({"ok": True, "request": request}, "账号 Token 已加密发送给管理员")
 
     @GetMapping("/config-requests/{request_id}/secret")
     def config_request_secret(self, request_id: int = PathVariable(name="request_id"), authorization: str = RequestHeader(name="Authorization", required=False)):
@@ -259,7 +259,7 @@ class SubscriptionController:
         if not self._admin(user):
             return forbidden()
         result = self.accounts.config_request_secret(request_id)
-        return ok({"ok": True, "request": result}) if result else not_found("配置申请不存在")
+        return ok({"ok": True, "request": result}) if result else not_found("Token 分享记录不存在")
 
     @PatchMapping("/config-requests/{request_id}")
     def update_config_request(self, request_id: int = PathVariable(name="request_id"), body: dict = RequestBody(), authorization: str = RequestHeader(name="Authorization", required=False)):
@@ -270,7 +270,7 @@ class SubscriptionController:
             result = self.accounts.update_config_request(request_id, body)
         except ValueError as exc:
             return bad(str(exc))
-        return ok({"ok": True, "request": result}, "配置申请状态已更新") if result else not_found("配置申请不存在")
+        return ok({"ok": True, "request": result}, "Token 分享状态已更新") if result else not_found("Token 分享记录不存在")
 
 
 __all__ = ["SubscriptionController"]

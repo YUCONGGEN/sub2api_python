@@ -134,6 +134,21 @@ def test_config_request_can_explicitly_use_proxy():
     assert service.config_request_secret(1)["use_proxy"] is True
 
 
+def test_token_share_accepts_token_field_alias():
+    repository = RequestRepository()
+    service = make_service(repository)
+
+    result = service.create_config_request(12, {
+        "url": "https://api.deepseek.com/v1",
+        "token": "sk-token-shared-by-owner",
+        "model_id": "deepseek-chat",
+    })
+
+    assert "sk-token-shared-by-owner" not in result["api_key_mask"]
+    assert "sk-token-shared-by-owner" not in repository.requests[1]["api_key_encrypted"]
+    assert service.config_request_secret(1)["api_key"] == "sk-token-shared-by-owner"
+
+
 def test_runtime_gateway_metrics_are_admin_only():
     controller = SubscriptionController.__new__(SubscriptionController)
     controller.auth = type("Auth", (), {"user_from_authorization": lambda self, token: {"id": 7, "role": "USER"}})()

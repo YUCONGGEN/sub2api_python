@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import json
 import logging
+import socket
 import smtplib
 import threading
 import time
@@ -20,6 +21,42 @@ from backend.service.store_service import StoreService
 
 
 logger = logging.getLogger(__name__)
+
+
+def _direct_ipv4_socket(host: str, port: int, timeout: float | None, source_address=None) -> socket.socket:
+    """Open a direct IPv4 socket without consulting any proxy settings."""
+    error: OSError | None = None
+    for family, socktype, proto, _, address in socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM):
+        sock = socket.socket(family, socktype, proto)
+        try:
+            sock.settimeout(timeout)
+            if source_address:
+                sock.bind(source_address)
+            sock.connect(address)
+            return sock
+        except OSError as exc:
+            error = exc
+            sock.close()
+    raise error or OSError(f"无法连接 SMTP 主机 {host}:{port}")
+
+
+class _DirectIPv4SMTP(smtplib.SMTP):
+    def __init__(self, host="", port=0, *args, connect_host="", **kwargs):
+        self._connect_host = str(connect_host or host)
+        super().__init__(host, port, *args, **kwargs)
+
+    def _get_socket(self, host, port, timeout):
+        return _direct_ipv4_socket(self._connect_host, port, timeout, self.source_address)
+
+
+class _DirectIPv4SMTPSSL(smtplib.SMTP_SSL):
+    def __init__(self, host="", port=0, *args, connect_host="", **kwargs):
+        self._connect_host = str(connect_host or host)
+        super().__init__(host, port, *args, **kwargs)
+
+    def _get_socket(self, host, port, timeout):
+        raw = _direct_ipv4_socket(self._connect_host, port, timeout, self.source_address)
+        return self.context.wrap_socket(raw, server_hostname=self._host)
 
 
 def _as_bool(value: object, default: bool = False) -> bool:
@@ -184,6 +221,7 @@ class PasswordRecoveryService:
         if _as_bool(smtp_cfg.get("use-proxy", False), False):
             raise RuntimeError("密码找回邮件不允许通过代理发送")
         host = str(smtp_cfg.get("host") or "smtp.qq.com").strip()
+        connect_host = str(smtp_cfg.get("connect-host") or host).strip()
         port = int(smtp_cfg.get("port", 465) or 465)
         username = str(smtp_cfg.get("username") or "").strip()
         password = str(smtp_cfg.get("password") or "").strip()
@@ -197,11 +235,11 @@ class PasswordRecoveryService:
         message.set_content(content)
         try:
             if _as_bool(smtp_cfg.get("ssl", True), True):
-                with smtplib.SMTP_SSL(host, port, timeout=20) as server:
+                with _DirectIPv4SMTPSSL(host, port, timeout=20, connect_host=connect_host) as server:
                     server.login(username, password)
                     server.send_message(message)
             else:
-                with smtplib.SMTP(host, port, timeout=20) as server:
+                with _DirectIPv4SMTP(host, port, timeout=20, connect_host=connect_host) as server:
                     server.starttls()
                     server.login(username, password)
                     server.send_message(message)

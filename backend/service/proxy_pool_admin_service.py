@@ -839,13 +839,13 @@ class ProxyPoolAdminService:
             self._sync_lock.release()
 
     @Scheduled(fixed_rate=60000, initial_delay=30000)
-    def scheduled_pool_sync(self) -> None:
+    async def scheduled_pool_sync(self) -> None:
         if not self.enabled or not self.profile_path:
             return
         if time.monotonic() - self._last_sync_attempt < self.sync_interval_seconds:
             return
         try:
-            asyncio.run(self.synchronize_pool())
+            await self.synchronize_pool()
         except Exception as exc:
             self.logger.warning("代理订阅自动同步失败，保留原节点池: %s", exc)
 

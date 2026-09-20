@@ -722,13 +722,20 @@ class ProxyPoolAdminService:
                         raise ValueError("订阅地址未保留，请删除后重新添加")
                     url = str(self.cipher.decrypt(encrypted).get("url") or "")
                     raw, headers = await self._download_details(url)
-                    proxies = normalize_subscription(raw, provider_name)
-                    proxies = self._filter_compatible_proxies(proxies)
+                    raw_hash = hashlib.sha256(raw).hexdigest()
+                    existing = self.provider_dir / filename
+                    if str(item.get("subscription_content_hash") or "") == raw_hash and existing.is_file():
+                        cached = yaml.safe_load(existing.read_text(encoding="utf-8"))
+                        proxies = [entry for entry in (cached.get("proxies") or []) if isinstance(entry, dict)]
+                    else:
+                        proxies = normalize_subscription(raw, provider_name)
+                        proxies = self._filter_compatible_proxies(proxies)
                     if not proxies:
                         raise ValueError("订阅中的节点均未通过 Mihomo 配置校验")
                     item.update(
                         status="validated", node_count=len(proxies), last_error="",
                         last_checked_at=now, updated_at=now,
+                        subscription_content_hash=raw_hash,
                         **self._subscription_usage(headers),
                     )
                 except Exception as exc:

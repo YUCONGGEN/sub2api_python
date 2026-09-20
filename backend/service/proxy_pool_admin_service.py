@@ -74,8 +74,10 @@ class ProxyPoolAdminService:
     }
 
     @Autowired
-    def __init__(self, cipher: CredentialCipherService):
-        self.cipher = cipher
+    def __init__(self, credential_cipher_service: CredentialCipherService):
+        # SpringBootAI resolves constructor dependencies by bean name when a
+        # postponed annotation has not yet been evaluated.
+        self.cipher = credential_cipher_service
         self.enabled = False
         self.monitor_config_path = Path("monitor.json")
         self.monitor_state_path = Path("state.json")

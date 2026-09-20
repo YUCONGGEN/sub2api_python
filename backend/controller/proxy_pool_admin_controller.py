@@ -13,9 +13,9 @@ from backend.service.proxy_pool_admin_service import ProxyPoolAdminDisabled, Pro
 @RequestMapping("/api/admin/proxy-pool")
 class ProxyPoolAdminController:
     @Autowired
-    def __init__(self, auth: AuthService, proxy_pool: ProxyPoolAdminService):
+    def __init__(self, auth: AuthService, proxy_pool_admin_service: ProxyPoolAdminService):
         self.auth = auth
-        self.proxy_pool = proxy_pool
+        self.proxy_pool = proxy_pool_admin_service
 
     def _admin(self, authorization: str | None) -> bool:
         user = self.auth.user_from_authorization(authorization)

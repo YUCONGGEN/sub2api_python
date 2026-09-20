@@ -16,7 +16,7 @@
 
       <section class="proxy-card node-card">
         <div class="card-head"><div><span class="eyebrow">POOL STATUS</span><h3>节点状态</h3><small v-if="snapshot.monitor && snapshot.monitor.sync && snapshot.monitor.sync.synced_at">最近同步 {{ formatTime(snapshot.monitor.sync.synced_at) }} · {{ snapshot.monitor.sync.candidate_count || 0 }} 个候选节点</small></div><div class="node-head-actions"><span>{{ nodes.length }} 个健康池节点</span><button class="secondary-btn" :disabled="poolSyncing" @click="syncPool">{{ poolSyncing ? '同步中…' : '同步订阅节点' }}</button></div></div>
-        <div class="node-grid"><article v-for="node in nodes" :key="node.name" :class="{ excluded: !node.eligible }"><i :class="node.status"></i><div><strong>{{ node.name }}</strong><span>{{ node.subscription_name || node.source || '未知来源' }} · {{ node.country || 'OTHER' }} · {{ node.eligible ? statusLabel(node.status) : '未参与当前策略' }}</span><small>当前连接 {{ node.active_connections || 0 }} 个 · 流量 {{ bytes(node.active_traffic_bytes || 0) }}</small><small>所属订阅共享：已用 {{ bytes(node.subscription_used_bytes) }} · 剩余 {{ bytes(node.subscription_remaining_bytes) }}</small></div><b>{{ node.delay_ms ? `${node.delay_ms} ms` : '—' }}</b></article></div>
+        <div class="node-grid"><article v-for="node in nodes" :key="node.name" :class="{ excluded: !node.eligible }"><i :class="node.status"></i><div><strong :title="nodeDisplayName(node)">{{ nodeDisplayName(node) }}</strong><span>{{ node.subscription_name || node.source || '未知来源' }} · {{ node.country || 'OTHER' }} · {{ node.eligible ? statusLabel(node.status) : '未参与当前策略' }}</span><small>当前连接 {{ node.active_connections || 0 }} 个 · 流量 {{ bytes(node.active_traffic_bytes || 0) }}</small><small>所属订阅共享：已用 {{ bytes(node.subscription_used_bytes) }} · 剩余 {{ bytes(node.subscription_remaining_bytes) }}</small></div><b>{{ node.delay_ms ? `${node.delay_ms} ms` : '—' }}</b></article></div>
       </section>
 
       <div class="proxy-grid">
@@ -86,7 +86,7 @@ export default {
     subscriptions () { return this.snapshot.subscriptions || [] },
     nodes () { return this.snapshot.nodes || [] },
     countryOptions () { return this.snapshot.country_options || [] },
-    activeNode () { return this.nodes.find(node => node.status === 'active')?.name || this.snapshot.monitor?.last_check?.node || '' },
+    activeNode () { const node = this.nodes.find(item => item.status === 'active'); return node ? this.nodeDisplayName(node) : '' },
     readyCount () { return this.nodes.filter(node => node.status === 'ready').length }
   },
   created () { this.load() },
@@ -167,6 +167,7 @@ export default {
     statusLabel (value) { return ({ active: '当前使用', ready: '备用可用', probation: '恢复确认中', quarantined: '已隔离', unknown: '待检查' })[value] || value },
     sourceStateLabel (item) { return !item.enabled ? '已停用' : item.status === 'validated' ? '可访问' : item.status === 'imported' ? '历史导入' : '异常' },
     sourceStateClass (item) { return !item.enabled ? 'disabled' : item.status === 'validated' ? 'ok' : item.status === 'imported' ? 'imported' : 'bad' },
+    nodeDisplayName (node) { const raw = String(node?.name || '').trim(); const marker = raw.indexOf('｜'); const nodeName = marker >= 0 ? raw.slice(marker + 1).trim() : raw; const subscriptionName = String(node?.subscription_name || '').trim(); return subscriptionName ? (nodeName ? `${subscriptionName}｜${nodeName}` : subscriptionName) : (nodeName || '未知节点') },
     bytes (value) { if (value === null || value === undefined || value === '') return '未提供'; const size = Number(value); if (!Number.isFinite(size)) return '未提供'; const units = ['B', 'KB', 'MB', 'GB', 'TB']; let current = Math.max(0, size); let index = 0; while (current >= 1024 && index < units.length - 1) { current /= 1024; index += 1 } return `${current.toFixed(index ? 2 : 0)} ${units[index]}` },
     formatExpiry (value) { const stamp = Number(value); if (!Number.isFinite(stamp) || stamp <= 0) return '未提供'; const date = new Date(stamp > 1e12 ? stamp : stamp * 1000); return Number.isNaN(date.getTime()) ? '未提供' : date.toLocaleString('zh-CN', { hour12: false }) },
     formatTime (value) { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '尚未检查' }

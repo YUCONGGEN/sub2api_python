@@ -93,6 +93,15 @@ rose:
     max-bytes: ${ROSE_ADMIN_CONFIG_MAX_BYTES:1048576}
     # 重启只会调用项目内置 restart_backend.sh；这里仅控制接口返回后的延迟。
     restart-delay-seconds: ${ROSE_ADMIN_CONFIG_RESTART_DELAY_SECONDS:1}
+  proxy-pool-admin:
+    # 管理员代理订阅管理。默认关闭；启用时必须明确指向服务器上的受控代理池文件。
+    # 页面只显示订阅名称、域名和节点数，完整订阅 URL 使用项目凭据密钥加密保存。
+    enabled: ${ROSE_PROXY_POOL_ADMIN_ENABLED:false}
+    monitor-config-path: ${ROSE_PROXY_POOL_MONITOR_CONFIG:./data/proxy-pool/monitor.json}
+    monitor-state-path: ${ROSE_PROXY_POOL_MONITOR_STATE:./data/proxy-pool/state.json}
+    subscription-registry-path: ${ROSE_PROXY_POOL_SUBSCRIPTION_REGISTRY:./data/proxy-pool/subscriptions.json}
+    max-subscription-bytes: ${ROSE_PROXY_POOL_MAX_SUBSCRIPTION_BYTES:2097152}
+    request-timeout-seconds: ${ROSE_PROXY_POOL_REQUEST_TIMEOUT_SECONDS:15}
   conversation:
     # 隐私模式：只记录调用元数据、Token、费用、状态和耗时，绝不保存
     # 用户问题、模型回答、原始 JSON、错误正文或图片。

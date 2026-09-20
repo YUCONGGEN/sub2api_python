@@ -14,6 +14,7 @@
       <button :class="{ active: activeAdminSection === 'visuals' }" @click="activeAdminSection = 'visuals'">数据可视化</button>
       <button :class="{ active: activeAdminSection === 'logs' }" @click="activeAdminSection = 'logs'">后台日志</button>
       <button :class="{ active: activeAdminSection === 'device' }" @click="activeAdminSection = 'device'">设备信息</button>
+      <button :class="{ active: activeAdminSection === 'proxy' }" @click="activeAdminSection = 'proxy'">代理管理</button>
       <button :class="{ active: activeAdminSection === 'config' }" @click="activeAdminSection = 'config'">系统配置</button>
     </nav>
 
@@ -40,6 +41,8 @@
         </article>
       </div>
     </section>
+
+    <AdminProxyPool v-if="activeAdminSection === 'proxy'" />
 
     <nav v-if="activeAdminSection === 'business'" class="business-anchor-nav" aria-label="业务管理快速导航">
       <button :class="{ active: businessAnchor === 'plans' }" @click="scrollToBusinessSection('plans')"><span>01</span><strong>套餐管理</strong></button>
@@ -313,14 +316,20 @@ import { api } from '../api'
 import { copyToClipboard, notify, askConfirm, focusDialog, trapDialogFocus } from '../ui'
 import AppSelect from '../components/AppSelect.vue'
 import AdminConfigEditor from '../components/AdminConfigEditor.vue'
+import AdminProxyPool from '../components/AdminProxyPool.vue'
 import { buildCodexConfig, downloadTextFile } from '../config/codex'
 
 const emptyGroup = () => ({ name: '', description: '', weight: 10, concurrency_limit: 1, is_default: false, allow_all: true, allowed_models: [], model_mapping_ids: [] })
 const emptyMapping = () => ({ name: '', source_model: '', source_effort: 'xhigh', target_model: '', target_effort: 'high', enabled: true })
 
 export default {
-  components: { AppSelect, AdminConfigEditor },
-  props: { appName: String, apiBaseUrl: String, codexConfig: Object },
+  components: { AppSelect, AdminConfigEditor, AdminProxyPool },
+  props: {
+    appName: String,
+    apiBaseUrl: String,
+    codexConfig: Object,
+    modelOptions: { type: Array, default: () => [] }
+  },
   data: () => ({
     summary: {},
     activeAdminSection: 'business',
@@ -457,7 +466,14 @@ export default {
     sourceEffortOptions () { return [{ value: '*', label: '任意强度', description: '该模型的所有推理强度' }, { value: '', label: '未指定', description: '请求中没有传推理强度' }, ...['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map(value => ({ value, label: value, description: `匹配 ${value} 档位` }))] },
     targetEffortOptions () { return ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map(value => ({ value, label: value, description: `实际调用使用 ${value} 档位` })) }
   },
-  created () { this.load(); this.loadGroupOptions(); this.loadModelCatalog() },
+  watch: {
+    modelOptions: {
+      deep: true,
+      immediate: true,
+      handler () { this.loadModelCatalog() }
+    }
+  },
+  created () { this.load(); this.loadGroupOptions() },
   mounted () { if (this.$route.hash === '#admin-business-groups') this.scrollToBusinessSection('groups') },
   methods: {
     scrollToBusinessSection (section) {
@@ -557,8 +573,19 @@ export default {
     async toggleMapping (item) { try { const d = await api.updateModelMapping(item.id, { enabled: !item.enabled }); if (!d.ok) throw new Error(d.message); await this.load(); await this.loadGroupOptions(); notify(item.enabled ? '模型映射已停用' : '模型映射已启用', 'success') } catch (e) { notify(e.message, 'error') } },
     async removeMapping (item) { if (!await askConfirm(`确定删除模型映射「${item.name}」吗？所有用户组会同时解除该规则。`)) return; try { const d = await api.deleteModelMapping(item.id); if (!d.ok) throw new Error(d.message); if (this.editingMapping && this.editingMapping.id === item.id) this.resetMappingForm(); await this.load(); await this.loadGroupOptions(); notify('模型映射已删除', 'success') } catch (e) { notify(e.message, 'error') } },
     async removeGroup (group) { if (!await askConfirm(`删除用户组「${group.name}」后，组内成员会转入默认组，确定继续吗？`)) return; try { const d = await api.deleteUserGroup(group.id); if (!d.ok) throw new Error(d.message); await this.load(); await this.loadGroupOptions(); notify('用户组已删除，成员已转入默认组', 'success') } catch (e) { notify(e.message, 'error') } },
-    async loadGroupOptions () { try { const all = []; let page = 1; let pages = 1; do { const d = await api.userGroups({ page, page_size: 5 }); all.push(...(d.groups || [])); pages = Number(d.pagination?.pages || 1); page += 1 } while (page <= pages); this.groupOptions = all } catch (e) { notify('用户组选项加载失败', 'error') } },
-    async loadModelCatalog () { try { const all = []; let page = 1; let pages = 1; do { const d = await api.monitoring({ page, page_size: 12 }); all.push(...((d.models || []).map(item => item.id))); pages = Number(d.pagination?.pages || 1); page += 1 } while (page <= pages); this.modelCatalog = [...new Set(all)] } catch (e) { notify('完整模型目录加载失败', 'error') } },
+    async loadGroupOptions () { try { const all = []; let page = 1; let pages = 1; do { const d = await api.userGroups({ page, page_size: 5 }); all.push(...(d.groups || [])); pages = Number(d.pagination?.pages || 1); page += 1 } while (page <= pages); this.groupOptions = all; this.loadModelCatalog() } catch (e) { notify('用户组选项加载失败', 'error') } },
+    async loadModelCatalog () {
+      const publicModels = (this.modelOptions || []).map(item => typeof item === 'string' ? item : item && item.id)
+      const groupModels = (this.groupOptions || []).flatMap(group => group.allowed_models || [])
+      let configuredModels = []
+      try {
+        const data = await api.adminModelCatalog()
+        configuredModels = (data.models || []).map(item => item && item.id)
+      } catch (error) {
+        if (!publicModels.length && !groupModels.length) notify('模型目录加载失败', 'error')
+      }
+      this.modelCatalog = [...new Set([...configuredModels, ...publicModels, ...groupModels].filter(model => model && model !== '*'))]
+    },
     editPlan (plan) {
       this.editingPlan = plan
       this.businessAnchor = 'plans'

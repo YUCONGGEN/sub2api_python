@@ -118,10 +118,32 @@ def test_public_config_exposes_data_visualization_visibility(monkeypatch):
     assert config_controller.ConfigController().public_config().data["data_visualization_visible"] is False
 
 
-def test_group_editor_uses_complete_monitoring_catalog_but_model_plaza_stays_filtered():
+def test_group_editor_uses_public_config_catalog_when_monitoring_is_disabled():
     root = Path(__file__).resolve().parents[1]
     admin = (root / "frontend/src/views/Admin.vue").read_text(encoding="utf-8")
     plaza = (root / "frontend/src/views/Models.vue").read_text(encoding="utf-8")
-    assert "api.monitoring({ page, page_size: 12 })" in admin
+    assert "modelOptions: { type: Array" in admin
+    assert "api.monitoring({ page, page_size: 12 })" not in admin
+    assert "const publicModels = (this.modelOptions || [])" in admin
+    assert "api.adminModelCatalog()" in admin
     assert "api.models({ page, page_size: 12 })" not in admin
     assert "api.models({" in plaza
+
+
+def test_admin_model_catalog_combines_configured_and_subscription_models():
+    from backend.controller.admin_model_catalog_controller import AdminModelCatalogController
+
+    class Auth:
+        def user_from_authorization(self, value):
+            return {"role": "ADMIN"}
+
+    class Gateway:
+        def catalog(self):
+            return [{"id": "gpt-local", "provider": "OpenAI"}]
+
+    class Subscriptions:
+        def catalog(self):
+            return [{"id": "gpt-pool", "provider": "OpenAI"}, {"id": "gpt-local"}]
+
+    result = AdminModelCatalogController(Auth(), Gateway(), Subscriptions()).catalog("Bearer test")
+    assert [item["id"] for item in result.data["models"]] == ["gpt-local", "gpt-pool"]

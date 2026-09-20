@@ -10,6 +10,8 @@ from .proxy_controller import ProxyController, register_proxy_route
 from .admin_config_controller import AdminConfigController
 from .subscription_admin_controller import SubscriptionAdminController
 from .subscription_controller import SubscriptionController
+from .proxy_pool_admin_controller import ProxyPoolAdminController
+from .admin_model_catalog_controller import AdminModelCatalogController
 
 __all__ = [
     "PaymentController",
@@ -17,6 +19,8 @@ __all__ = [
     "AdminConfigController",
     "SubscriptionAdminController",
     "SubscriptionController",
+    "ProxyPoolAdminController",
+    "AdminModelCatalogController",
     "register_payment_routes",
     "register_proxy_route",
 ]

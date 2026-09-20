@@ -14,6 +14,11 @@
         <article><span>订阅来源</span><strong>{{ subscriptions.length }}</strong><small>URL 只加密保存在服务器</small></article>
       </div>
 
+      <section class="proxy-card node-card">
+        <div class="card-head"><div><span class="eyebrow">POOL STATUS</span><h3>节点状态</h3><small v-if="snapshot.monitor && snapshot.monitor.sync && snapshot.monitor.sync.synced_at">最近同步 {{ formatTime(snapshot.monitor.sync.synced_at) }} · {{ snapshot.monitor.sync.candidate_count || 0 }} 个候选节点</small></div><div class="node-head-actions"><span>{{ nodes.length }} 个健康池节点</span><button class="secondary-btn" :disabled="poolSyncing" @click="syncPool">{{ poolSyncing ? '同步中…' : '同步订阅节点' }}</button></div></div>
+        <div class="node-grid"><article v-for="node in nodes" :key="node.name" :class="{ excluded: !node.eligible }"><i :class="node.status"></i><div><strong>{{ node.name }}</strong><span>{{ node.subscription_name || node.source || '未知来源' }} · {{ node.country || 'OTHER' }} · {{ node.eligible ? statusLabel(node.status) : '未参与当前策略' }}</span><small>当前连接 {{ node.active_connections || 0 }} 个 · 流量 {{ bytes(node.active_traffic_bytes || 0) }}</small><small>所属订阅共享：已用 {{ bytes(node.subscription_used_bytes) }} · 剩余 {{ bytes(node.subscription_remaining_bytes) }}</small></div><b>{{ node.delay_ms ? `${node.delay_ms} ms` : '—' }}</b></article></div>
+      </section>
+
       <div class="proxy-grid">
         <section class="proxy-card subscription-source-card">
           <div class="card-head"><div><span class="eyebrow">SUBSCRIPTION SOURCES</span><h3>代理订阅</h3></div></div>
@@ -39,10 +44,6 @@
         </section>
       </div>
 
-      <section class="proxy-card node-card">
-        <div class="card-head"><div><span class="eyebrow">POOL STATUS</span><h3>节点状态</h3><small v-if="snapshot.monitor && snapshot.monitor.sync && snapshot.monitor.sync.synced_at">最近同步 {{ formatTime(snapshot.monitor.sync.synced_at) }} · {{ snapshot.monitor.sync.candidate_count || 0 }} 个候选节点</small></div><div class="node-head-actions"><span>{{ nodes.length }} 个健康池节点</span><button class="secondary-btn" :disabled="poolSyncing" @click="syncPool">{{ poolSyncing ? '同步中…' : '同步订阅节点' }}</button></div></div>
-        <div class="node-grid"><article v-for="node in nodes" :key="node.name" :class="{ excluded: !node.eligible }"><i :class="node.status"></i><div><strong>{{ node.name }}</strong><span>{{ node.subscription_name || node.source || '未知来源' }} · {{ node.country || 'OTHER' }} · {{ node.eligible ? statusLabel(node.status) : '未参与当前策略' }}</span><small>当前连接 {{ node.active_connections || 0 }} 个 · 流量 {{ bytes(node.active_traffic_bytes || 0) }}</small><small>所属订阅共享：已用 {{ bytes(node.subscription_used_bytes) }} · 剩余 {{ bytes(node.subscription_remaining_bytes) }}</small></div><b>{{ node.delay_ms ? `${node.delay_ms} ms` : '—' }}</b></article></div>
-      </section>
     </template>
   </section>
 </template>

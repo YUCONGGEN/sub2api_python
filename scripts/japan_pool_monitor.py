@@ -12,9 +12,37 @@ import http.client
 import json
 import os
 from pathlib import Path
+import re
 import socket
 import time
 from urllib.parse import quote, urlencode
+
+
+COUNTRY_ALIASES = {
+    'JP': ('日本', '东京', '大阪', '埼玉', 'jp', 'japan', 'tokyo', 'osaka'),
+    'HK': ('香港', '港', 'hk', 'hong kong'),
+    'TW': ('台湾', '台北', '新北', 'tw', 'taiwan', 'taipei'),
+    'SG': ('新加坡', '狮城', 'sg', 'singapore'),
+    'KR': ('韩国', '首尔', '韩', 'kr', 'korea', 'seoul'),
+    'US': ('美国', '洛杉矶', '西雅图', '硅谷', '纽约', '达拉斯', 'us', 'usa', 'united states'),
+    'GB': ('英国', '伦敦', 'uk', 'gb', 'united kingdom', 'london'),
+    'DE': ('德国', '法兰克福', 'de', 'germany', 'frankfurt'),
+    'CA': ('加拿大', '多伦多', '温哥华', 'ca', 'canada', 'toronto', 'vancouver'),
+    'AU': ('澳大利亚', '澳洲', '悉尼', 'au', 'australia', 'sydney'),
+}
+
+
+def country_for_node(name: str) -> str:
+    lowered = str(name or '').casefold()
+    for code, aliases in COUNTRY_ALIASES.items():
+        for alias in aliases:
+            candidate = alias.casefold()
+            if candidate.isascii() and len(candidate) <= 2:
+                if re.search(rf'(^|[^a-z]){re.escape(candidate)}([^a-z]|$)', lowered):
+                    return code
+            elif candidate in lowered:
+                return code
+    return 'OTHER'
 
 
 class UnixConnection(http.client.HTTPConnection):
@@ -96,13 +124,62 @@ class Monitor:
         self.clock, self.sleep = clock, sleep
         self.persist = persist or (lambda state: None)
 
+    def eligible_nodes(self):
+        """Apply global country, subscription enablement and per-source caps."""
+        allowed = {str(value).upper() for value in self.config.get(
+            'allowed_countries', [*COUNTRY_ALIASES.keys(), 'OTHER'])}
+        disabled = {str(value) for value in self.config.get('disabled_sources', [])}
+        sources = self.config.get('sources', {})
+        countries = self.config.get('node_countries', {})
+        limits = self.config.get('source_node_limits', {})
+        counts = {}
+        result = []
+        for node in self.config['nodes']:
+            source = str(sources.get(node, ''))
+            country = str(countries.get(node) or country_for_node(node)).upper()
+            if source in disabled or country not in allowed:
+                continue
+            limit = max(1, min(int(limits.get(source, 20)), 20))
+            if counts.get(source, 0) >= limit:
+                continue
+            counts[source] = counts.get(source, 0) + 1
+            result.append(node)
+        return result
+
     def standbys(self, current):
         """Return the configured number of ordered failover candidates."""
-        alternatives = [node for node in self.config['nodes'] if node != current]
+        alternatives = [node for node in self.eligible_nodes() if node != current]
         requested = int(self.config.get('standby_pool_size', len(alternatives)))
         if requested < 1:
             raise ValueError('standby_pool_size must be at least 1')
         return alternatives[:requested]
+
+    def select_policy_replacement(self, current):
+        """Move new connections away from a disabled/excluded source safely."""
+        for candidate in self.standbys(current):
+            samples = []
+            required = int(self.config.get('replacement_confirmations', 2))
+            for attempt in range(required):
+                if attempt:
+                    self.sleep(float(self.config.get('replacement_interval_seconds', 2)))
+                delay = self.probe(candidate)
+                if delay is None:
+                    break
+                samples.append(delay)
+            if len(samples) != required:
+                self.quarantine(candidate)
+                continue
+            if self.controller.current().get('now') != current:
+                return {'status': 'selection_changed_externally'}
+            self.state['last_switch_at'] = self.clock()
+            self.state.setdefault('switch_history', []).append(
+                {'time': self.clock(), 'from': current, 'to': candidate, 'reason': 'policy'})
+            self.persist(self.state)
+            self.controller.select(candidate)
+            self.state['nodes'][candidate]['status'] = 'active'
+            return {'status': 'policy_switched_new_connections_only', 'from': current,
+                    'to': candidate, 'delay_ms': round(sum(samples) / len(samples), 1)}
+        return {'status': 'policy_no_healthy_candidate', 'node': current, 'changed': False}
 
     def probe(self, node):
         delay = self.controller.probe(node)
@@ -186,6 +263,11 @@ class Monitor:
         available = set(info.get('all', []))
         if current not in self.config['nodes'] or not set(self.config['nodes']).issubset(available):
             raise RuntimeError('Active pool differs from approved configuration; refusing to switch')
+        eligible = self.eligible_nodes()
+        if not eligible:
+            raise RuntimeError('No eligible nodes remain after country and subscription filters')
+        if current not in eligible:
+            return self.select_policy_replacement(current)
         activity_before = self.activity(current)
         for attempt in range(int(self.config.get('failure_confirmations', 3))):
             if attempt:

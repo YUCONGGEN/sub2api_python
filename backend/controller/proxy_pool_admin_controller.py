@@ -69,6 +69,32 @@ class ProxyPoolAdminController:
         except (ValueError, OSError) as exc:
             return bad(str(exc), 502)
 
+    @PatchMapping("/subscriptions/{source_id}")
+    def update_subscription(self, source_id: str = PathVariable(name="source_id"), body: dict = RequestBody(), authorization: str = RequestHeader(name="Authorization", required=False)):
+        if not self._admin(authorization):
+            return forbidden()
+        try:
+            source = self.proxy_pool.update_subscription(source_id, body if isinstance(body, dict) else {})
+            return ok({"ok": True, "subscription": source}, "订阅设置已保存，将在下一轮检查时生效")
+        except ProxyPoolAdminDisabled as exc:
+            return forbidden(str(exc))
+        except KeyError:
+            return not_found("代理订阅不存在")
+        except (ValueError, OSError) as exc:
+            return bad(str(exc))
+
+    @PostMapping("/version/check")
+    async def check_core_version(self, authorization: str = RequestHeader(name="Authorization", required=False)):
+        if not self._admin(authorization):
+            return forbidden()
+        try:
+            version = await self.proxy_pool.check_core_version()
+            return ok({"ok": True, "version": version}, "代理核心版本检查完成")
+        except ProxyPoolAdminDisabled as exc:
+            return forbidden(str(exc))
+        except (ValueError, httpx.HTTPError, OSError) as exc:
+            return bad(str(exc), 502)
+
     @DeleteMapping("/subscriptions/{source_id}")
     def delete_subscription(self, source_id: str = PathVariable(name="source_id"), authorization: str = RequestHeader(name="Authorization", required=False)):
         if not self._admin(authorization):

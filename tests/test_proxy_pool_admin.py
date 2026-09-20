@@ -68,9 +68,11 @@ def test_subscription_url_is_encrypted_and_never_returned(tmp_path):
     service._validate_remote_url = lambda url: ("example.com", url)
 
     async def download(url):
-        return b"proxies:\n  - name: jp-1\n    type: ss\n"
+        return b"proxies:\n  - name: jp-1\n    type: ss\n", {
+            "subscription-userinfo": "upload=100; download=200; total=1000; expire=2000000000"
+        }
 
-    service._download = download
+    service._download_details = download
     result = asyncio.run(service.add_subscription({"name": "演示订阅", "url": "https://example.com/private-token"}))
     persisted = service.registry_path.read_text(encoding="utf-8")
     assert result["host"] == "example.com"
@@ -78,6 +80,8 @@ def test_subscription_url_is_encrypted_and_never_returned(tmp_path):
     assert "private-token" not in persisted
     assert "url_encrypted" not in result
     assert result["checkable"] is True
+    assert result["traffic_used_bytes"] == 300
+    assert result["traffic_remaining_bytes"] == 700
 
 
 def test_imported_subscription_is_visible_but_not_checkable(tmp_path):
@@ -103,3 +107,60 @@ def test_subscription_parser_accepts_base64_and_rejects_unknown_content():
     assert ProxyPoolAdminService._subscription_node_count(encoded.encode()) == 2
     with pytest.raises(ValueError, match="未识别"):
         ProxyPoolAdminService._subscription_node_count(b"not a subscription")
+
+
+def test_subscription_policy_updates_enabled_state_and_source_limit(tmp_path):
+    service = configured_service(tmp_path)
+    service.registry_path.write_text(json.dumps({"subscriptions": [{
+        "id": "source-a", "name": "A", "pool_source": "a", "enabled": True,
+        "max_healthy_nodes": 2,
+    }]}, ensure_ascii=False), encoding="utf-8")
+
+    updated = service.update_subscription("source-a", {"enabled": False, "max_healthy_nodes": 1})
+    monitor = json.loads(service.monitor_config_path.read_text(encoding="utf-8"))
+    assert updated["enabled"] is False
+    assert updated["max_healthy_nodes"] == 1
+    assert monitor["disabled_sources"] == ["a"]
+    assert monitor["source_node_limits"]["a"] == 1
+
+
+def test_country_policy_rejects_selection_without_matching_nodes(tmp_path):
+    service = configured_service(tmp_path)
+    with pytest.raises(ValueError, match="没有可用节点"):
+        service.update_policy({"allowed_countries": ["JP"]})
+    result = service.update_policy({"allowed_countries": ["OTHER"]})
+    assert result["policy"]["allowed_countries"] == ["OTHER"]
+
+
+def test_core_version_check_only_reports_update(tmp_path):
+    service = configured_service(tmp_path)
+
+    async def download(url):
+        return json.dumps({"tag_name": "v1.3.0", "html_url": "https://example.com/release"}).encode()
+
+    service._download = download
+    result = asyncio.run(service.check_core_version())
+    assert result["current"] == "1.2.3"
+    assert result["latest"] == "1.3.0"
+    assert result["update_available"] is True
+
+
+def test_deleting_subscription_retires_its_existing_pool_nodes(tmp_path):
+    service = configured_service(tmp_path)
+    service.monitor_config_path.write_text(json.dumps({
+        "controller_socket": "/tmp/test.sock", "group": "日本稳定池",
+        "nodes": ["主节点", "备用一", "备用二"],
+        "sources": {"主节点": "a", "备用一": "b", "备用二": "c"},
+        "standby_pool_size": 1,
+    }, ensure_ascii=False), encoding="utf-8")
+    service.registry_path.write_text(json.dumps({"subscriptions": [
+        {"id": "source-a", "name": "A", "pool_source": "a", "enabled": True},
+        {"id": "source-b", "name": "B", "pool_source": "b", "enabled": True},
+        {"id": "source-c", "name": "C", "pool_source": "c", "enabled": True},
+    ]}, ensure_ascii=False), encoding="utf-8")
+
+    assert service.delete_subscription("source-a") is True
+    monitor = json.loads(service.monitor_config_path.read_text(encoding="utf-8"))
+    assert monitor["retired_sources"] == ["a"]
+    assert "a" in monitor["disabled_sources"]
+    assert service._eligible_nodes(monitor) == ["备用一", "备用二"]

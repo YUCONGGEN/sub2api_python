@@ -264,3 +264,31 @@ def test_original_policy_has_no_switch_count_or_hold_limit():
     assert policy.step()['to'] == 'b'
     assert len(state['switch_history']) == 3
     assert controller.changes == ['b']
+
+
+def test_country_source_and_per_subscription_limits_filter_candidates():
+    controller = FakeController({'a': [100]})
+    policy = configured(
+        controller,
+        sources={'a': 'one', 'b': 'one', 'c': 'two'},
+        node_countries={'a': 'JP', 'b': 'JP', 'c': 'US'},
+        allowed_countries=['JP'],
+        source_node_limits={'one': 1, 'two': 2},
+    )
+    assert policy.eligible_nodes() == ['a']
+
+
+def test_disabling_current_subscription_switches_only_new_connections():
+    controller = FakeController({'c': [120, 130]}, current='a')
+    policy = configured(
+        controller,
+        sources={'a': 'one', 'b': 'one', 'c': 'two'},
+        disabled_sources=['one'],
+        allowed_countries=['JP'],
+        node_countries={'a': 'JP', 'b': 'JP', 'c': 'JP'},
+    )
+    result = policy.step()
+    assert result['status'] == 'policy_switched_new_connections_only'
+    assert result['to'] == 'c'
+    assert controller.changes == ['c']
+    assert policy.state['switch_history'][-1]['reason'] == 'policy'

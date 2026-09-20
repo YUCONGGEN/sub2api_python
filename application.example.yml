@@ -102,6 +102,8 @@ rose:
     subscription-registry-path: ${ROSE_PROXY_POOL_SUBSCRIPTION_REGISTRY:./data/proxy-pool/subscriptions.json}
     max-subscription-bytes: ${ROSE_PROXY_POOL_MAX_SUBSCRIPTION_BYTES:2097152}
     request-timeout-seconds: ${ROSE_PROXY_POOL_REQUEST_TIMEOUT_SECONDS:15}
+    # 仅检测 Mihomo/Clash Meta 最新版本，不会自动下载、替换或重启代理核心。
+    core-version-release-url: ${ROSE_PROXY_POOL_VERSION_RELEASE_URL:https://api.github.com/repos/MetaCubeX/mihomo/releases/latest}
   conversation:
     # 隐私模式：只记录调用元数据、Token、费用、状态和耗时，绝不保存
     # 用户问题、模型回答、原始 JSON、错误正文或图片。

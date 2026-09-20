@@ -120,6 +120,7 @@ export const api = {
   updateProxySubscription: (id, body) => client.patch(`/api/admin/proxy-pool/subscriptions/${encodeURIComponent(id)}`, body),
   deleteProxySubscription: id => client.delete(`/api/admin/proxy-pool/subscriptions/${encodeURIComponent(id)}`),
   checkProxyCoreVersion: () => client.post('/api/admin/proxy-pool/version/check'),
+  syncProxyPool: () => client.post('/api/admin/proxy-pool/sync'),
   adminLogs: params => client.get('/api/admin/logs', { params }),
   exportUsage: params => client.get('/api/admin/usage-export', { params }),
   adminSubscriptionPlans: params => client.get('/api/admin/subscription-plans', { params }),

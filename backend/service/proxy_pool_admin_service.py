@@ -12,20 +12,25 @@ import hashlib
 import http.client
 import ipaddress
 import json
+import logging
 import os
 from pathlib import Path
 import re
 import shutil
 import socket
+import subprocess
 import tempfile
+import threading
+import time
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 
 import httpx
 import yaml
-from springbootai import Autowired, PostConstruct, Service, get_config
+from springbootai import Autowired, PostConstruct, Scheduled, Service, get_config
 
+from backend.common.proxy_subscription import normalize_subscription, provider_yaml
 from backend.service.credential_cipher_service import CredentialCipherService
 
 
@@ -126,6 +131,14 @@ class ProxyPoolAdminService:
         self.max_subscription_bytes = 2 * 1024 * 1024
         self.request_timeout_seconds = 15.0
         self.core_version_release_url = "https://api.github.com/repos/MetaCubeX/mihomo/releases/latest"
+        self.profile_path: Path | None = None
+        self.provider_dir = Path("providers")
+        self.mihomo_home: Path | None = None
+        self.mihomo_binary = "mihomo"
+        self.sync_interval_seconds = 300
+        self._last_sync_attempt = 0.0
+        self._sync_lock = threading.Lock()
+        self.logger = logging.getLogger("proxy_pool_admin")
 
     @PostConstruct
     def init(self) -> None:
@@ -141,6 +154,19 @@ class ProxyPoolAdminService:
         self.max_subscription_bytes = max(4096, min(int(options.get("max-subscription-bytes", self.max_subscription_bytes)), 8 * 1024 * 1024))
         self.request_timeout_seconds = max(3.0, min(float(options.get("request-timeout-seconds", 15)), 60.0))
         self.core_version_release_url = str(options.get("core-version-release-url") or self.core_version_release_url).strip()
+        profile = str(options.get("profile-path") or "").strip()
+        self.profile_path = Path(profile).expanduser().resolve() if profile else None
+        provider_dir = str(options.get("provider-dir") or "").strip()
+        self.provider_dir = Path(provider_dir).expanduser().resolve() if provider_dir else (
+            self.profile_path.parent / ".rose-providers" if self.profile_path else self.monitor_config_path.parent / "providers"
+        )
+        mihomo_home = str(options.get("mihomo-home") or "").strip()
+        if mihomo_home:
+            self.mihomo_home = Path(mihomo_home).expanduser().resolve()
+        elif self.profile_path:
+            self.mihomo_home = self.profile_path.parent.parent if self.profile_path.parent.name == "profiles" else self.profile_path.parent
+        self.mihomo_binary = str(options.get("mihomo-binary") or "mihomo").strip()
+        self.sync_interval_seconds = max(60, min(int(options.get("sync-interval-seconds", 300) or 300), 86400))
 
     def _ensure_enabled(self) -> None:
         if not self.enabled:
@@ -177,18 +203,24 @@ class ProxyPoolAdminService:
             if os.path.exists(temporary_name):
                 os.unlink(temporary_name)
 
-    def _controller(self, socket_path: str, route: str) -> dict[str, Any]:
-        connection = _UnixConnection(socket_path)
+    def _controller_request(self, socket_path: str, method: str, route: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        connection = _UnixConnection(socket_path, timeout=10)
         try:
-            connection.request("GET", route)
+            body = json.dumps(payload).encode("utf-8") if payload is not None else None
+            headers = {"Content-Type": "application/json"} if body is not None else {}
+            connection.request(method, route, body=body, headers=headers)
             response = connection.getresponse()
             body = response.read()
             if not 200 <= response.status < 300:
-                raise RuntimeError(f"HTTP {response.status}")
+                message = body.decode("utf-8", errors="replace")[:300]
+                raise RuntimeError(f"HTTP {response.status}: {message}")
             decoded = json.loads(body) if body else {}
             return decoded if isinstance(decoded, dict) else {}
         finally:
             connection.close()
+
+    def _controller(self, socket_path: str, route: str) -> dict[str, Any]:
+        return self._controller_request(socket_path, "GET", route)
 
     def _registry(self) -> dict[str, Any]:
         value = self._read_json(self.registry_path, {"subscriptions": []})
@@ -244,26 +276,38 @@ class ProxyPoolAdminService:
         for node in monitor.get("nodes", []):
             countries.setdefault(node, self._country_for_node(node))
 
-    def _eligible_nodes(self, monitor: dict[str, Any]) -> list[str]:
+    def _eligible_nodes(self, monitor: dict[str, Any], state: dict[str, Any] | None = None, current: str = "") -> list[str]:
         default_countries = [item["code"] for item in self.COUNTRY_OPTIONS]
         allowed = {str(code).upper() for code in monitor.get("allowed_countries", default_countries)}
         disabled = {str(source) for source in monitor.get("disabled_sources", [])}
         limits = monitor.get("source_node_limits", {}) if isinstance(monitor.get("source_node_limits"), dict) else {}
         countries = monitor.get("node_countries", {}) if isinstance(monitor.get("node_countries"), dict) else {}
         sources = monitor.get("sources", {}) if isinstance(monitor.get("sources"), dict) else {}
-        counts: dict[str, int] = {}
-        result = []
-        for node in monitor.get("nodes", []):
+        records = (state or {}).get("nodes", {}) if isinstance((state or {}).get("nodes"), dict) else {}
+        grouped: dict[str, list[tuple[int, int, str]]] = {}
+        rank = {"active": 0, "ready": 1, "probation": 2, "unknown": 3, "quarantined": 4}
+        for index, node in enumerate(monitor.get("nodes", [])):
             source = str(sources.get(node) or "")
             country = str(countries.get(node) or self._country_for_node(node)).upper()
             if source in disabled or country not in allowed:
                 continue
+            recorded = str((records.get(node) or {}).get("status") or "unknown")
+            status = "active" if node == current and recorded != "quarantined" else recorded
+            grouped.setdefault(source, []).append((rank.get(status, 3), index, node))
+        result: list[str] = []
+        for source, candidates in grouped.items():
             limit = max(1, min(int(limits.get(source) or 20), 20))
-            if counts.get(source, 0) >= limit:
-                continue
-            counts[source] = counts.get(source, 0) + 1
-            result.append(node)
+            result.extend(node for _, _, node in sorted(candidates)[:limit])
         return result
+
+    def _validate_pool_capacity(self, monitor: dict[str, Any], state: dict[str, Any] | None = None) -> int:
+        eligible_count = len(self._eligible_nodes(monitor, state or {}))
+        if eligible_count < 2:
+            raise ValueError("至少需要保留 2 个可用节点，才能维持主节点和备用节点")
+        standby_size = int(monitor.get("standby_pool_size", eligible_count - 1))
+        if standby_size > eligible_count - 1:
+            raise ValueError(f"当前备用池最多可设为 {eligible_count - 1} 个，请先调小备用池")
+        return eligible_count
 
     def snapshot(self) -> dict[str, Any]:
         self._ensure_enabled()
@@ -294,9 +338,12 @@ class ProxyPoolAdminService:
                 connection_traffic = {}
         except (OSError, RuntimeError, ValueError, http.client.HTTPException) as exc:
             core["error"] = str(exc)
+        registry = self._registry()
+        self._sync_subscription_policy(monitor, registry)
         nodes_state = state.get("nodes", {}) if isinstance(state.get("nodes"), dict) else {}
+        selected_nodes = self._eligible_nodes(monitor, state, current)
         nodes = []
-        for name in monitor.get("nodes", []):
+        for name in selected_nodes:
             record = nodes_state.get(name, {}) if isinstance(nodes_state.get(name), dict) else {}
             nodes.append({
                 "name": name,
@@ -306,16 +353,15 @@ class ProxyPoolAdminService:
                 "last_probe_at": record.get("last_probe_at"),
                 "available_in_core": name in available,
             })
-        registry = self._registry()
-        self._sync_subscription_policy(monitor, registry)
         source_counts: dict[str, int] = {}
-        for source in (monitor.get("sources") or {}).values():
-            source_counts[str(source)] = source_counts.get(str(source), 0) + 1
+        for name in selected_nodes:
+            source = str((monitor.get("sources") or {}).get(name) or "")
+            source_counts[source] = source_counts.get(source, 0) + 1
         for item in registry["subscriptions"]:
             item["pool_node_count"] = source_counts.get(str(item.get("pool_source") or ""), 0)
             item.setdefault("max_healthy_nodes", 2)
         subscriptions_by_source = self._subscription_by_source(registry)
-        eligible = set(self._eligible_nodes(monitor))
+        eligible = set(selected_nodes)
         countries = monitor.get("node_countries", {}) or {}
         for node in nodes:
             source = str(node.get("source") or "")
@@ -341,7 +387,7 @@ class ProxyPoolAdminService:
         return {
             "enabled": True,
             "core": core,
-            "monitor": {"online": monitor_online, "last_check": last_check, "group": monitor.get("group", "")},
+            "monitor": {"online": monitor_online, "last_check": last_check, "group": monitor.get("group", ""), "sync": monitor.get("pool_sync", {})},
             "policy": policy,
             "policy_limits": {key: {"min": limits[0], "max": limits[1]} for key, limits in self.POLICY_RULES.items()},
             "country_options": list(self.COUNTRY_OPTIONS),
@@ -350,9 +396,10 @@ class ProxyPoolAdminService:
             "subscriptions": [self._public_subscription(item) for item in registry["subscriptions"]],
         }
 
-    def update_policy(self, body: dict[str, Any]) -> dict[str, Any]:
+    async def update_policy(self, body: dict[str, Any]) -> dict[str, Any]:
         self._ensure_enabled()
         monitor = self._read_json(self.monitor_config_path, {})
+        previous_monitor = json.loads(json.dumps(monitor))
         if not isinstance(body, dict):
             raise ValueError("规则格式不正确")
         for key, (minimum, maximum) in self.POLICY_RULES.items():
@@ -381,14 +428,16 @@ class ProxyPoolAdminService:
             monitor["allowed_countries"] = countries
         registry = self._registry()
         self._sync_subscription_policy(monitor, registry)
-        if not self._eligible_nodes(monitor):
-            raise ValueError("当前国家和订阅设置下没有可用节点，请至少保留一个来源")
-        eligible_count = len(self._eligible_nodes(monitor))
-        if eligible_count < 2:
-            raise ValueError("筛选后至少需要保留 2 个可用节点，才能维持主节点和备用节点")
-        if int(monitor.get("standby_pool_size", eligible_count - 1)) > eligible_count - 1:
-            raise ValueError(f"当前筛选后备用池最多可设为 {eligible_count - 1} 个；请增加可用节点或调小备用池")
-        self._atomic_json(self.monitor_config_path, monitor, backup=True)
+        try:
+            self._atomic_json(self.monitor_config_path, monitor, backup=True)
+            if self.profile_path:
+                await self.synchronize_pool()
+                monitor = self._read_json(self.monitor_config_path, {})
+            state = self._read_json(self.monitor_state_path, {})
+            self._validate_pool_capacity(monitor, state)
+        except Exception:
+            self._atomic_json(self.monitor_config_path, previous_monitor)
+            raise
         return self.snapshot()
 
     @staticmethod
@@ -463,6 +512,344 @@ class ProxyPoolAdminService:
         }
 
     @staticmethod
+    def _atomic_text(path: Path, text: str, mode: int = 0o600) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(text)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.chmod(temporary_name, mode)
+            os.replace(temporary_name, path)
+        finally:
+            if os.path.exists(temporary_name):
+                os.unlink(temporary_name)
+
+    @staticmethod
+    def _managed_provider_name(item: dict[str, Any]) -> str:
+        return f"rose-{str(item.get('id') or '')[:16]}"
+
+    def _validate_profile(self, path: Path) -> None:
+        try:
+            command = [self.mihomo_binary]
+            if self.mihomo_home:
+                command.extend(["-d", str(self.mihomo_home)])
+            command.extend(["-t", "-f", str(path)])
+            result = subprocess.run(
+                command,
+                capture_output=True, text=True, timeout=45, check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ValueError("无法调用 Mihomo 校验生成的节点配置") from exc
+        if result.returncode != 0:
+            raise ValueError("Mihomo 拒绝了生成的节点配置，已保留原配置")
+
+    def _render_profile(self, provider_files: dict[str, str]) -> str:
+        if not self.profile_path or not self.profile_path.is_file():
+            raise ValueError("尚未配置有效的 Mihomo 主配置文件路径")
+        try:
+            profile = yaml.safe_load(self.profile_path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError) as exc:
+            raise ValueError("无法读取 Mihomo 主配置文件") from exc
+        if not isinstance(profile, dict):
+            raise ValueError("Mihomo 主配置文件格式不正确")
+        existing = profile.get("proxy-providers") if isinstance(profile.get("proxy-providers"), dict) else {}
+        providers = {key: value for key, value in existing.items() if not str(key).startswith("rose-")}
+        for name, filename in provider_files.items():
+            providers[name] = {
+                "type": "file",
+                "path": str((self.provider_dir / filename).resolve()),
+                "health-check": {
+                    "enable": True,
+                    "url": "https://cp.cloudflare.com/generate_204",
+                    "interval": 300,
+                    "timeout": 5000,
+                    "lazy": True,
+                },
+            }
+        profile["proxy-providers"] = providers
+        group_name = str(self._read_json(self.monitor_config_path, {}).get("group") or "")
+        managed = next((group for group in profile.get("proxy-groups", []) if str(group.get("name")) == group_name), None)
+        if not isinstance(managed, dict):
+            raise ValueError("Mihomo 主配置中找不到受控代理组")
+        managed["type"] = "select"
+        managed["proxies"] = []
+        managed["use"] = list(provider_files)
+        return yaml.safe_dump(profile, allow_unicode=True, sort_keys=False, width=4096)
+
+    def _proxy_batch_is_compatible(self, proxies: list[dict[str, Any]]) -> bool:
+        if not self.profile_path or not proxies:
+            return bool(proxies)
+        try:
+            profile = yaml.safe_load(self.profile_path.read_text(encoding="utf-8"))
+            if not isinstance(profile, dict):
+                return False
+            existing = profile.get("proxy-providers") if isinstance(profile.get("proxy-providers"), dict) else {}
+            profile["proxy-providers"] = {key: value for key, value in existing.items() if not str(key).startswith("rose-")}
+            profile["proxies"] = proxies
+            group_name = str(self._read_json(self.monitor_config_path, {}).get("group") or "")
+            managed = next((group for group in profile.get("proxy-groups", []) if str(group.get("name")) == group_name), None)
+            if not isinstance(managed, dict):
+                return False
+            managed.pop("use", None)
+            managed["type"] = "select"
+            managed["proxies"] = [str(proxy["name"]) for proxy in proxies]
+            descriptor, filename = tempfile.mkstemp(prefix=".rose-proxy-check-", suffix=".yaml", dir=str(self.profile_path.parent))
+            os.close(descriptor)
+            candidate = Path(filename)
+            try:
+                candidate.write_text(yaml.safe_dump(profile, allow_unicode=True, sort_keys=False, width=4096), encoding="utf-8")
+                self._validate_profile(candidate)
+                return True
+            finally:
+                candidate.unlink(missing_ok=True)
+        except (OSError, ValueError, yaml.YAMLError):
+            return False
+
+    def _filter_compatible_proxies(self, proxies: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Bisect only rejected batches so one bad upstream node cannot drop a provider."""
+        if not self.profile_path or self._proxy_batch_is_compatible(proxies):
+            return proxies
+        if len(proxies) == 1:
+            return []
+        middle = len(proxies) // 2
+        return self._filter_compatible_proxies(proxies[:middle]) + self._filter_compatible_proxies(proxies[middle:])
+
+    def _ensure_allowed_selection(self, monitor: dict[str, Any], state: dict[str, Any]) -> str:
+        socket_path = str(monitor["controller_socket"])
+        group_name = str(monitor.get("group") or "")
+        group = self._controller(socket_path, "/proxies/" + quote(group_name, safe=""))
+        current = str(group.get("now") or "")
+        eligible = self._eligible_nodes(monitor, state, current)
+        if current in eligible:
+            return current
+        query = urlencode({
+            "url": str(monitor.get("test_url") or "https://cp.cloudflare.com/generate_204"),
+            "timeout": int(monitor.get("probe_timeout_ms") or 5000),
+        })
+        for candidate in eligible:
+            try:
+                result = self._controller(socket_path, f"/proxies/{quote(candidate, safe='')}/delay?{query}")
+                if int(result.get("delay") or 0) <= 0:
+                    continue
+                self._controller_request(
+                    socket_path, "PUT", "/proxies/" + quote(group_name, safe=""), {"name": candidate}
+                )
+                record = state.setdefault("nodes", {}).setdefault(candidate, {})
+                record.update(status="active", delay_ms=int(result["delay"]), last_probe_at=time.time())
+                return candidate
+            except (OSError, RuntimeError, ValueError, http.client.HTTPException):
+                continue
+        raise ValueError("同步后的国家范围内没有通过连通性检查的节点，已保留原节点池")
+
+    def _seed_candidate_health(self, monitor: dict[str, Any], state: dict[str, Any]) -> int:
+        """Probe enough candidates to fill each source's configured healthy slots."""
+        allowed = {str(value).upper() for value in monitor.get("allowed_countries", [])}
+        disabled = {str(value) for value in monitor.get("disabled_sources", [])}
+        sources = monitor.get("sources", {}) or {}
+        countries = monitor.get("node_countries", {}) or {}
+        limits = monitor.get("source_node_limits", {}) or {}
+        grouped: dict[str, list[str]] = {}
+        for node in monitor.get("nodes", []):
+            source = str(sources.get(node) or "")
+            country = str(countries.get(node) or self._country_for_node(node)).upper()
+            if source in disabled or (allowed and country not in allowed):
+                continue
+            grouped.setdefault(source, []).append(node)
+        socket_path = str(monitor["controller_socket"])
+        query = urlencode({
+            "url": str(monitor.get("test_url") or "https://cp.cloudflare.com/generate_204"),
+            "timeout": int(monitor.get("probe_timeout_ms") or 5000),
+        })
+        now = time.time()
+        healthy_total = 0
+        records = state.setdefault("nodes", {})
+        for source, candidates in grouped.items():
+            wanted = max(1, min(int(limits.get(source) or 20), 20))
+            healthy = 0
+            for candidate in candidates:
+                record = records.setdefault(candidate, {})
+                if record.get("status") in {"active", "ready"} and record.get("last_success_at"):
+                    healthy += 1
+                else:
+                    try:
+                        result = self._controller(socket_path, f"/proxies/{quote(candidate, safe='')}/delay?{query}")
+                        delay = int(result.get("delay") or 0)
+                    except (OSError, RuntimeError, ValueError, http.client.HTTPException):
+                        delay = 0
+                    record["last_probe_at"] = now
+                    record["checks"] = int(record.get("checks") or 0) + 1
+                    if delay > 0:
+                        record.update(status="ready", delay_ms=delay, last_success_at=now, consecutive_successes=1)
+                        healthy += 1
+                    else:
+                        record.update(status="quarantined", consecutive_successes=0)
+                        record["failures"] = int(record.get("failures") or 0) + 1
+                        state.setdefault("quarantine_until", {})[candidate] = now + float(monitor.get("quarantine_seconds") or 600)
+                if healthy >= wanted:
+                    break
+            healthy_total += healthy
+        return healthy_total
+
+    async def synchronize_pool(self, *, force: bool = False) -> dict[str, Any]:
+        """Download, normalize, validate and hot-load enabled subscriptions."""
+        self._ensure_enabled()
+        if not self.profile_path:
+            return {"configured": False, "changed": False, "message": "未配置自动节点同步"}
+        if not self._sync_lock.acquire(blocking=False):
+            raise ValueError("节点同步正在执行，请稍后再试")
+        self._last_sync_attempt = time.monotonic()
+        try:
+            registry = self._registry()
+            monitor = self._read_json(self.monitor_config_path, {})
+            self._sync_subscription_policy(monitor, registry)
+            provider_texts: dict[str, str] = {}
+            provider_files: dict[str, str] = {}
+            sources: dict[str, str] = {}
+            countries: dict[str, str] = {}
+            failures: list[str] = []
+            now = _utc_now()
+            for item in registry.get("subscriptions", []):
+                if not _as_bool(item.get("enabled"), True):
+                    continue
+                provider_name = self._managed_provider_name(item)
+                filename = f"{provider_name}.yaml"
+                proxies: list[dict[str, Any]] = []
+                encrypted = str(item.get("url_encrypted") or "")
+                try:
+                    if not encrypted:
+                        raise ValueError("订阅地址未保留，请删除后重新添加")
+                    url = str(self.cipher.decrypt(encrypted).get("url") or "")
+                    raw, headers = await self._download_details(url)
+                    proxies = normalize_subscription(raw, provider_name)
+                    proxies = self._filter_compatible_proxies(proxies)
+                    if not proxies:
+                        raise ValueError("订阅中的节点均未通过 Mihomo 配置校验")
+                    item.update(
+                        status="validated", node_count=len(proxies), last_error="",
+                        last_checked_at=now, updated_at=now,
+                        **self._subscription_usage(headers),
+                    )
+                except Exception as exc:
+                    item.update(status="error", last_error=str(exc)[:300], last_checked_at=now, updated_at=now)
+                    existing = self.provider_dir / filename
+                    if existing.is_file():
+                        try:
+                            value = yaml.safe_load(existing.read_text(encoding="utf-8"))
+                            proxies = [entry for entry in (value.get("proxies") or []) if isinstance(entry, dict)]
+                        except (OSError, yaml.YAMLError, AttributeError):
+                            proxies = []
+                    failures.append(str(item.get("name") or item.get("id")))
+                if not proxies:
+                    continue
+                provider_texts[filename] = provider_yaml(proxies)
+                provider_files[provider_name] = filename
+                source = str(item.get("pool_source") or f"subscription-{item['id']}")
+                item["pool_source"] = source
+                for proxy in proxies:
+                    node = str(proxy.get("name") or "")
+                    if node:
+                        sources[node] = source
+                        countries[node] = self._country_for_node(node)
+            if len(sources) < 2:
+                raise ValueError("启用的订阅合计不足 2 个可用节点，已保留原节点池")
+
+            content_hash = hashlib.sha256(json.dumps({
+                "providers": provider_texts,
+                "sources": sources,
+                "allowed_countries": monitor.get("allowed_countries", []),
+                "source_node_limits": monitor.get("source_node_limits", {}),
+            }, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+            previous_hash = str((monitor.get("pool_sync") or {}).get("content_hash") or "")
+            changed = force or content_hash != previous_hash
+            monitor["nodes"] = list(sources)
+            monitor["sources"] = sources
+            monitor["node_countries"] = countries
+            self._sync_subscription_policy(monitor, registry)
+            state = self._read_json(self.monitor_state_path, {})
+            if isinstance(state.get("nodes"), dict):
+                state["nodes"] = {name: value for name, value in state["nodes"].items() if name in sources}
+            if isinstance(state.get("quarantine_until"), dict):
+                state["quarantine_until"] = {name: value for name, value in state["quarantine_until"].items() if name in sources}
+            if changed:
+                profile_text = self._render_profile(provider_files)
+                backup_dir = self.monitor_config_path.parent / "backups" / datetime.now().strftime("pool-sync-%Y%m%d-%H%M%S-%f")
+                backup_dir.mkdir(parents=True, exist_ok=False)
+                if self.profile_path.exists():
+                    shutil.copy2(self.profile_path, backup_dir / "profile.yml")
+                if self.provider_dir.exists():
+                    shutil.copytree(self.provider_dir, backup_dir / "providers")
+                self.provider_dir.mkdir(parents=True, exist_ok=True)
+                try:
+                    for filename, text in provider_texts.items():
+                        self._atomic_text(self.provider_dir / filename, text)
+                    for stale in self.provider_dir.glob("rose-*.yaml"):
+                        if stale.name not in provider_texts:
+                            stale.unlink()
+                    descriptor, candidate_name = tempfile.mkstemp(prefix=".rose-profile-", suffix=".yaml", dir=str(self.profile_path.parent))
+                    os.close(descriptor)
+                    candidate = Path(candidate_name)
+                    try:
+                        candidate.write_text(profile_text, encoding="utf-8")
+                        self._validate_profile(candidate)
+                        os.replace(candidate, self.profile_path)
+                    finally:
+                        candidate.unlink(missing_ok=True)
+                    self._controller_request(
+                        str(monitor["controller_socket"]), "PUT", "/configs?force=false",
+                        {"path": str(self.profile_path)},
+                    )
+                    self._seed_candidate_health(monitor, state)
+                    self._ensure_allowed_selection(monitor, state)
+                    self._validate_pool_capacity(monitor, state)
+                except Exception:
+                    old_profile = backup_dir / "profile.yml"
+                    if old_profile.exists():
+                        shutil.copy2(old_profile, self.profile_path)
+                    old_providers = backup_dir / "providers"
+                    if self.provider_dir.exists():
+                        shutil.rmtree(self.provider_dir)
+                    if old_providers.exists():
+                        shutil.copytree(old_providers, self.provider_dir)
+                    try:
+                        self._controller_request(
+                            str(monitor["controller_socket"]), "PUT", "/configs?force=false",
+                            {"path": str(self.profile_path)},
+                        )
+                    except Exception:
+                        pass
+                    raise
+            else:
+                self._ensure_allowed_selection(monitor, state)
+            monitor["pool_sync"] = {
+                "configured": True,
+                "changed": changed,
+                "content_hash": content_hash,
+                "synced_at": now,
+                "candidate_count": len(sources),
+                "provider_count": len(provider_files),
+                "failed_subscriptions": failures,
+            }
+            self._atomic_json(self.registry_path, registry, backup=changed)
+            self._atomic_json(self.monitor_config_path, monitor, backup=changed)
+            self._atomic_json(self.monitor_state_path, state)
+            return dict(monitor["pool_sync"])
+        finally:
+            self._sync_lock.release()
+
+    @Scheduled(fixed_rate=60000, initial_delay=30000)
+    def scheduled_pool_sync(self) -> None:
+        if not self.enabled or not self.profile_path:
+            return
+        if time.monotonic() - self._last_sync_attempt < self.sync_interval_seconds:
+            return
+        try:
+            asyncio.run(self.synchronize_pool())
+        except Exception as exc:
+            self.logger.warning("代理订阅自动同步失败，保留原节点池: %s", exc)
+
+    @staticmethod
     def _subscription_node_count(raw: bytes) -> int:
         text = raw.decode("utf-8-sig", errors="replace").strip()
         try:
@@ -518,10 +905,23 @@ class ProxyPoolAdminService:
             **self._subscription_usage(headers),
         }
         registry["subscriptions"].append(item)
-        self._atomic_json(self.registry_path, registry)
+        self._atomic_json(self.registry_path, registry, backup=True)
+        try:
+            if not self.profile_path:
+                monitor = self._read_json(self.monitor_config_path, {})
+                source = str(item.get("pool_source") or "")
+                if item.get("enabled") and source:
+                    monitor["retired_sources"] = [value for value in monitor.get("retired_sources", []) if str(value) != source]
+                self._sync_subscription_policy(monitor, registry)
+                self._atomic_json(self.monitor_config_path, monitor, backup=True)
+            await self.synchronize_pool()
+        except Exception:
+            registry["subscriptions"] = [entry for entry in registry["subscriptions"] if str(entry.get("id")) != source_id]
+            self._atomic_json(self.registry_path, registry)
+            raise
         return self._public_subscription(item)
 
-    def update_subscription(self, source_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    async def update_subscription(self, source_id: str, body: dict[str, Any]) -> dict[str, Any]:
         self._ensure_enabled()
         registry = self._registry()
         item = next((entry for entry in registry["subscriptions"] if str(entry.get("id")) == source_id), None)
@@ -539,25 +939,30 @@ class ProxyPoolAdminService:
                 raise ValueError("每个订阅的健康节点上限必须在 1～20 个之间")
             item["max_healthy_nodes"] = maximum
         item["updated_at"] = _utc_now()
+        self._atomic_json(self.registry_path, registry, backup=True)
+        try:
+            if not self.profile_path:
+                monitor = self._read_json(self.monitor_config_path, {})
+                source = str(item.get("pool_source") or "")
+                if item.get("enabled") and source:
+                    monitor["retired_sources"] = [value for value in monitor.get("retired_sources", []) if str(value) != source]
+                self._sync_subscription_policy(monitor, registry)
+                self._atomic_json(self.monitor_config_path, monitor, backup=True)
+            await self.synchronize_pool()
+            monitor = self._read_json(self.monitor_config_path, {})
+            self._validate_pool_capacity(monitor, self._read_json(self.monitor_state_path, {}))
+        except Exception:
+            item.clear()
+            item.update(previous)
+            self._atomic_json(self.registry_path, registry)
+            if self.profile_path:
+                try:
+                    await self.synchronize_pool(force=True)
+                except Exception:
+                    pass
+            raise
         monitor = self._read_json(self.monitor_config_path, {})
         source = str(item.get("pool_source") or "")
-        if item.get("enabled") and source:
-            monitor["retired_sources"] = [
-                value for value in monitor.get("retired_sources", []) if str(value) != source
-            ]
-        self._sync_subscription_policy(monitor, registry)
-        eligible_count = len(self._eligible_nodes(monitor))
-        if eligible_count < 2:
-            item.clear()
-            item.update(previous)
-            raise ValueError("该设置会使可用节点少于 2 个，无法维持主节点和备用节点")
-        standby_size = int(monitor.get("standby_pool_size", eligible_count - 1))
-        if standby_size > eligible_count - 1:
-            item.clear()
-            item.update(previous)
-            raise ValueError(f"该设置下备用池最多可设为 {eligible_count - 1} 个，请先调小备用池")
-        self._atomic_json(self.registry_path, registry, backup=True)
-        self._atomic_json(self.monitor_config_path, monitor, backup=True)
         item["pool_node_count"] = sum(1 for value in (monitor.get("sources") or {}).values() if str(value) == source)
         return self._public_subscription(item)
 
@@ -618,30 +1023,40 @@ class ProxyPoolAdminService:
         item["last_checked_at"] = _utc_now()
         item["updated_at"] = item["last_checked_at"]
         self._atomic_json(self.registry_path, registry)
+        if item.get("status") == "validated":
+            await self.synchronize_pool()
         return self._public_subscription(item)
 
-    def delete_subscription(self, source_id: str) -> bool:
+    async def delete_subscription(self, source_id: str) -> bool:
         self._ensure_enabled()
         registry = self._registry()
         removed = next((item for item in registry["subscriptions"] if str(item.get("id")) == source_id), None)
         if not removed:
             return False
         registry["subscriptions"] = [item for item in registry["subscriptions"] if str(item.get("id")) != source_id]
-        monitor = self._read_json(self.monitor_config_path, {})
-        source = str(removed.get("pool_source") or "")
-        if source and source in {str(value) for value in (monitor.get("sources") or {}).values()}:
-            retired = {str(value) for value in monitor.get("retired_sources", []) if str(value).strip()}
-            retired.add(source)
-            monitor["retired_sources"] = sorted(retired)
-        self._sync_subscription_policy(monitor, registry)
-        eligible_count = len(self._eligible_nodes(monitor))
-        if eligible_count < 2:
-            raise ValueError("不能删除：删除后可用节点少于 2 个，无法维持主节点和备用节点")
-        standby_size = int(monitor.get("standby_pool_size", eligible_count - 1))
-        if standby_size > eligible_count - 1:
-            raise ValueError(f"不能删除：删除后备用池最多可设为 {eligible_count - 1} 个，请先调小备用池")
         self._atomic_json(self.registry_path, registry, backup=True)
-        self._atomic_json(self.monitor_config_path, monitor, backup=True)
+        try:
+            if not self.profile_path:
+                monitor = self._read_json(self.monitor_config_path, {})
+                source = str(removed.get("pool_source") or "")
+                if source and source in {str(value) for value in (monitor.get("sources") or {}).values()}:
+                    retired = {str(value) for value in monitor.get("retired_sources", []) if str(value).strip()}
+                    retired.add(source)
+                    monitor["retired_sources"] = sorted(retired)
+                self._sync_subscription_policy(monitor, registry)
+                self._atomic_json(self.monitor_config_path, monitor, backup=True)
+            await self.synchronize_pool(force=True)
+            monitor = self._read_json(self.monitor_config_path, {})
+            self._validate_pool_capacity(monitor, self._read_json(self.monitor_state_path, {}))
+        except Exception:
+            registry["subscriptions"].append(removed)
+            self._atomic_json(self.registry_path, registry)
+            if self.profile_path:
+                try:
+                    await self.synchronize_pool(force=True)
+                except Exception:
+                    pass
+            raise
         return True
 
 

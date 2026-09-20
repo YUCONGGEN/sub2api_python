@@ -33,11 +33,11 @@ class ProxyPoolAdminController:
             return bad(str(exc), 503)
 
     @PatchMapping("/policy")
-    def update_policy(self, body: dict = RequestBody(), authorization: str = RequestHeader(name="Authorization", required=False)):
+    async def update_policy(self, body: dict = RequestBody(), authorization: str = RequestHeader(name="Authorization", required=False)):
         if not self._admin(authorization):
             return forbidden()
         try:
-            return ok({"ok": True, **self.proxy_pool.update_policy(body)}, "代理池规则已保存，将在下一轮检查时生效")
+            return ok({"ok": True, **(await self.proxy_pool.update_policy(body))}, "代理池规则已保存，将在下一轮检查时生效")
         except ProxyPoolAdminDisabled as exc:
             return forbidden(str(exc))
         except (ValueError, OSError) as exc:
@@ -70,11 +70,11 @@ class ProxyPoolAdminController:
             return bad(str(exc), 502)
 
     @PatchMapping("/subscriptions/{source_id}")
-    def update_subscription(self, source_id: str = PathVariable(name="source_id"), body: dict = RequestBody(), authorization: str = RequestHeader(name="Authorization", required=False)):
+    async def update_subscription(self, source_id: str = PathVariable(name="source_id"), body: dict = RequestBody(), authorization: str = RequestHeader(name="Authorization", required=False)):
         if not self._admin(authorization):
             return forbidden()
         try:
-            source = self.proxy_pool.update_subscription(source_id, body if isinstance(body, dict) else {})
+            source = await self.proxy_pool.update_subscription(source_id, body if isinstance(body, dict) else {})
             return ok({"ok": True, "subscription": source}, "订阅设置已保存，将在下一轮检查时生效")
         except ProxyPoolAdminDisabled as exc:
             return forbidden(str(exc))
@@ -96,16 +96,28 @@ class ProxyPoolAdminController:
             return bad(str(exc), 502)
 
     @DeleteMapping("/subscriptions/{source_id}")
-    def delete_subscription(self, source_id: str = PathVariable(name="source_id"), authorization: str = RequestHeader(name="Authorization", required=False)):
+    async def delete_subscription(self, source_id: str = PathVariable(name="source_id"), authorization: str = RequestHeader(name="Authorization", required=False)):
         if not self._admin(authorization):
             return forbidden()
         try:
-            deleted = self.proxy_pool.delete_subscription(source_id)
+            deleted = await self.proxy_pool.delete_subscription(source_id)
         except ProxyPoolAdminDisabled as exc:
             return forbidden(str(exc))
         except (ValueError, OSError) as exc:
             return bad(str(exc))
         return ok({"ok": True}, "代理订阅已删除") if deleted else not_found("代理订阅不存在")
+
+    @PostMapping("/sync")
+    async def sync_pool(self, authorization: str = RequestHeader(name="Authorization", required=False)):
+        if not self._admin(authorization):
+            return forbidden()
+        try:
+            sync = await self.proxy_pool.synchronize_pool(force=True)
+            return ok({"ok": True, "sync": sync}, "订阅节点已同步")
+        except ProxyPoolAdminDisabled as exc:
+            return forbidden(str(exc))
+        except (ValueError, OSError) as exc:
+            return bad(str(exc), 502)
 
 
 __all__ = ["ProxyPoolAdminController"]

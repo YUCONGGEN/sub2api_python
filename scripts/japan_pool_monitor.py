@@ -132,18 +132,25 @@ class Monitor:
         sources = self.config.get('sources', {})
         countries = self.config.get('node_countries', {})
         limits = self.config.get('source_node_limits', {})
-        counts = {}
-        result = []
-        for node in self.config['nodes']:
+        grouped = {}
+        ranks = {'active': 0, 'ready': 1, 'probation': 2, 'unknown': 3, 'quarantined': 4}
+        try:
+            current = str(self.controller.current().get('now') or '')
+        except Exception:
+            current = ''
+        records = self.state.get('nodes', {})
+        for index, node in enumerate(self.config['nodes']):
             source = str(sources.get(node, ''))
             country = str(countries.get(node) or country_for_node(node)).upper()
             if source in disabled or country not in allowed:
                 continue
+            recorded = str(records.get(node, {}).get('status') or 'unknown')
+            status = 'active' if node == current and recorded != 'quarantined' else recorded
+            grouped.setdefault(source, []).append((ranks.get(status, 3), index, node))
+        result = []
+        for source, candidates in grouped.items():
             limit = max(1, min(int(limits.get(source, 20)), 20))
-            if counts.get(source, 0) >= limit:
-                continue
-            counts[source] = counts.get(source, 0) + 1
-            result.append(node)
+            result.extend(node for _, _, node in sorted(candidates)[:limit])
         return result
 
     def standbys(self, current):

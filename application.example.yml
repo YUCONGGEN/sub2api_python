@@ -100,6 +100,11 @@ rose:
     monitor-config-path: ${ROSE_PROXY_POOL_MONITOR_CONFIG:./data/proxy-pool/monitor.json}
     monitor-state-path: ${ROSE_PROXY_POOL_MONITOR_STATE:./data/proxy-pool/state.json}
     subscription-registry-path: ${ROSE_PROXY_POOL_SUBSCRIPTION_REGISTRY:./data/proxy-pool/subscriptions.json}
+    # 迁移时只需复制上述目录和这个 Mihomo 主配置；节点/provider 由订阅自动生成。
+    profile-path: ${ROSE_PROXY_POOL_PROFILE:./data/proxy-pool/mihomo.yml}
+    mihomo-binary: ${ROSE_PROXY_POOL_MIHOMO_BINARY:mihomo}
+    # 定时检查远端订阅变化；管理员新增、删除、启停或手动同步时会立即生效。
+    sync-interval-seconds: ${ROSE_PROXY_POOL_SYNC_INTERVAL_SECONDS:300}
     max-subscription-bytes: ${ROSE_PROXY_POOL_MAX_SUBSCRIPTION_BYTES:2097152}
     request-timeout-seconds: ${ROSE_PROXY_POOL_REQUEST_TIMEOUT_SECONDS:15}
     # 仅检测 Mihomo/Clash Meta 最新版本，不会自动下载、替换或重启代理核心。

@@ -2,6 +2,7 @@ import asyncio
 import json
 
 import pytest
+import yaml
 
 from backend.service.proxy_pool_admin_service import ProxyPoolAdminService
 
@@ -52,15 +53,15 @@ def test_snapshot_reports_core_policy_and_nodes_without_secrets(tmp_path):
 
 def test_policy_update_is_bounded_and_backed_up(tmp_path):
     service = configured_service(tmp_path)
-    result = service.update_policy({"standby_pool_size": 1, "failure_confirmations": 4})
+    result = asyncio.run(service.update_policy({"standby_pool_size": 1, "failure_confirmations": 4}))
     saved = json.loads(service.monitor_config_path.read_text(encoding="utf-8"))
     assert result["policy"]["standby_pool_size"] == 1
     assert saved["failure_confirmations"] == 4
     assert list(tmp_path.glob("monitor.json.bak-*"))
     with pytest.raises(ValueError, match="备用池最多可设为 2"):
-        service.update_policy({"standby_pool_size": 3})
+        asyncio.run(service.update_policy({"standby_pool_size": 3}))
     with pytest.raises(ValueError, match="备用复测间隔必须在 1～60 秒之间"):
-        service.update_policy({"replacement_interval_seconds": 61})
+        asyncio.run(service.update_policy({"replacement_interval_seconds": 61}))
 
 
 def test_subscription_url_is_encrypted_and_never_returned(tmp_path):
@@ -116,7 +117,7 @@ def test_subscription_policy_updates_enabled_state_and_source_limit(tmp_path):
         "max_healthy_nodes": 2,
     }]}, ensure_ascii=False), encoding="utf-8")
 
-    updated = service.update_subscription("source-a", {"enabled": False, "max_healthy_nodes": 1})
+    updated = asyncio.run(service.update_subscription("source-a", {"enabled": False, "max_healthy_nodes": 1}))
     monitor = json.loads(service.monitor_config_path.read_text(encoding="utf-8"))
     assert updated["enabled"] is False
     assert updated["max_healthy_nodes"] == 1
@@ -126,9 +127,9 @@ def test_subscription_policy_updates_enabled_state_and_source_limit(tmp_path):
 
 def test_country_policy_rejects_selection_without_matching_nodes(tmp_path):
     service = configured_service(tmp_path)
-    with pytest.raises(ValueError, match="没有可用节点"):
-        service.update_policy({"allowed_countries": ["JP"]})
-    result = service.update_policy({"allowed_countries": ["OTHER"]})
+    with pytest.raises(ValueError, match="至少需要保留 2 个可用节点"):
+        asyncio.run(service.update_policy({"allowed_countries": ["JP"]}))
+    result = asyncio.run(service.update_policy({"allowed_countries": ["OTHER"]}))
     assert result["policy"]["allowed_countries"] == ["OTHER"]
 
 
@@ -159,8 +160,66 @@ def test_deleting_subscription_retires_its_existing_pool_nodes(tmp_path):
         {"id": "source-c", "name": "C", "pool_source": "c", "enabled": True},
     ]}, ensure_ascii=False), encoding="utf-8")
 
-    assert service.delete_subscription("source-a") is True
+    assert asyncio.run(service.delete_subscription("source-a")) is True
     monitor = json.loads(service.monitor_config_path.read_text(encoding="utf-8"))
     assert monitor["retired_sources"] == ["a"]
     assert "a" in monitor["disabled_sources"]
     assert service._eligible_nodes(monitor) == ["备用一", "备用二"]
+
+
+def test_subscription_sync_adds_new_nodes_and_removes_deleted_source(tmp_path):
+    service = configured_service(tmp_path)
+    service.profile_path = tmp_path / "mihomo.yml"
+    service.provider_dir = tmp_path / "providers"
+    service.profile_path.write_text(yaml.safe_dump({
+        "mixed-port": 7890,
+        "proxies": [],
+        "proxy-groups": [{"name": "日本稳定池", "type": "select", "proxies": ["DIRECT"]}],
+        "rules": ["MATCH,日本稳定池"],
+    }, allow_unicode=True), encoding="utf-8")
+    service.registry_path.write_text(json.dumps({"subscriptions": [
+        {"id": "one", "name": "一号", "pool_source": "source-one", "enabled": True,
+         "max_healthy_nodes": 2, "url_encrypted": service.cipher.encrypt({"url": "https://one.example/sub"})},
+        {"id": "two", "name": "二号", "pool_source": "source-two", "enabled": True,
+         "max_healthy_nodes": 2, "url_encrypted": service.cipher.encrypt({"url": "https://two.example/sub"})},
+    ]}, ensure_ascii=False), encoding="utf-8")
+
+    async def download(url):
+        host = "one" if "one.example" in url else "two"
+        proxies = [
+            {"name": f"日本-{host}-{index}", "type": "ss", "server": f"{host}{index}.example",
+             "port": 443, "cipher": "aes-128-gcm", "password": "secret"}
+            for index in range(1, 4)
+        ]
+        return yaml.safe_dump({"proxies": proxies}, allow_unicode=True).encode(), {}
+
+    service._download_details = download
+    service._validate_profile = lambda path: None
+    service._seed_candidate_health = lambda monitor, state: len(monitor["nodes"])
+    service._ensure_allowed_selection = lambda monitor, state: monitor["nodes"][0]
+    reloads = []
+    service._controller_request = lambda socket, method, route, payload=None: reloads.append((method, route)) or {}
+
+    result = asyncio.run(service.synchronize_pool())
+    monitor = json.loads(service.monitor_config_path.read_text(encoding="utf-8"))
+    profile = yaml.safe_load(service.profile_path.read_text(encoding="utf-8"))
+    assert result["candidate_count"] == 6
+    assert len(monitor["nodes"]) == 6
+    assert set(profile["proxy-providers"]) == {"rose-one", "rose-two"}
+    assert profile["proxy-groups"][0]["use"] == ["rose-one", "rose-two"]
+    assert reloads[-1] == ("PUT", "/configs?force=false")
+
+    assert asyncio.run(service.delete_subscription("one")) is True
+    monitor = json.loads(service.monitor_config_path.read_text(encoding="utf-8"))
+    profile = yaml.safe_load(service.profile_path.read_text(encoding="utf-8"))
+    assert all("rose-one｜" not in name for name in monitor["nodes"])
+    assert set(profile["proxy-providers"]) == {"rose-two"}
+
+
+def test_incompatible_proxy_is_bisected_without_dropping_provider(tmp_path):
+    service = configured_service(tmp_path)
+    service.profile_path = tmp_path / "mihomo.yml"
+    service._proxy_batch_is_compatible = lambda proxies: all("bad" not in item["name"] for item in proxies)
+    proxies = [{"name": name, "type": "ss", "server": "example.com", "port": 443}
+               for name in ("good-one", "bad-node", "good-two")]
+    assert [item["name"] for item in service._filter_compatible_proxies(proxies)] == ["good-one", "good-two"]

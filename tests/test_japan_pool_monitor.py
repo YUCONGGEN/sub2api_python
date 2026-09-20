@@ -292,3 +292,18 @@ def test_disabling_current_subscription_switches_only_new_connections():
     assert result['to'] == 'c'
     assert controller.changes == ['c']
     assert policy.state['switch_history'][-1]['reason'] == 'policy'
+
+
+def test_failed_node_rotates_out_of_per_subscription_healthy_limit():
+    controller = FakeController({'a': [None], 'b': [110], 'c': [120]}, current='a')
+    policy = configured(
+        controller,
+        nodes=['a', 'b', 'c'],
+        sources={'a': 'one', 'b': 'one', 'c': 'one'},
+        node_countries={'a': 'JP', 'b': 'JP', 'c': 'JP'},
+        allowed_countries=['JP'],
+        source_node_limits={'one': 2},
+        failure_confirmations=2,
+    )
+    policy.state.setdefault('nodes', {})['a'] = {'status': 'quarantined'}
+    assert policy.eligible_nodes() == ['b', 'c']

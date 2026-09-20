@@ -57,8 +57,10 @@ def test_policy_update_is_bounded_and_backed_up(tmp_path):
     assert result["policy"]["standby_pool_size"] == 1
     assert saved["failure_confirmations"] == 4
     assert list(tmp_path.glob("monitor.json.bak-*"))
-    with pytest.raises(ValueError, match="最多可设为 2"):
+    with pytest.raises(ValueError, match="备用池最多可设为 2"):
         service.update_policy({"standby_pool_size": 3})
+    with pytest.raises(ValueError, match="备用复测间隔必须在 1～60 秒之间"):
+        service.update_policy({"replacement_interval_seconds": 61})
 
 
 def test_subscription_url_is_encrypted_and_never_returned(tmp_path):

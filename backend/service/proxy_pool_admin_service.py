@@ -57,6 +57,21 @@ def _as_bool(value: Any, default: bool = False) -> bool:
 
 @Service("proxy_pool_admin_service")
 class ProxyPoolAdminService:
+    POLICY_LABELS = {
+        "standby_pool_size": "备用池大小",
+        "interval_seconds": "主节点检查间隔",
+        "failure_confirmations": "失败确认次数",
+        "failure_interval_seconds": "失败复测间隔",
+        "replacement_confirmations": "备用成功确认次数",
+        "replacement_interval_seconds": "备用复测间隔",
+        "quarantine_seconds": "故障隔离时间",
+        "quarantine_recheck_seconds": "隔离重试间隔",
+        "standby_probes_per_cycle": "每轮备用检查数",
+        "standby_interval_seconds": "备用复查间隔",
+        "recovery_successes": "恢复确认次数",
+        "recovery_interval_seconds": "恢复检查间隔",
+        "recovery_max_interval_seconds": "恢复检查最大间隔",
+    }
     POLICY_RULES = {
         "standby_pool_size": (1, 20),
         "interval_seconds": (10, 3600),
@@ -217,12 +232,14 @@ class ProxyPoolAdminService:
         for key, (minimum, maximum) in self.POLICY_RULES.items():
             if key not in body:
                 continue
+            label = self.POLICY_LABELS.get(key, "该配置项")
             try:
                 value = int(body[key])
             except (TypeError, ValueError) as exc:
-                raise ValueError(f"{key} 必须是整数") from exc
+                raise ValueError(f"{label}必须填写整数") from exc
             if value < minimum or value > maximum:
-                raise ValueError(f"{key} 必须在 {minimum} 到 {maximum} 之间")
+                unit = "个" if key == "standby_pool_size" or key.endswith("confirmations") or key == "standby_probes_per_cycle" or key == "recovery_successes" else "秒"
+                raise ValueError(f"{label}必须在 {minimum}～{maximum} {unit}之间")
             monitor[key] = value
         node_count = len(monitor.get("nodes", []))
         if node_count > 1 and int(monitor.get("standby_pool_size", node_count - 1)) > node_count - 1:

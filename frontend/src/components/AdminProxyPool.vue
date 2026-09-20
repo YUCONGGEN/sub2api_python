@@ -99,6 +99,16 @@ export default {
     },
     limit (key, side) { return this.snapshot.policy_limits?.[key]?.[side] },
     async savePolicy () {
+      for (const field of this.policyFields) {
+        const value = Number(this.policy[field.key])
+        const minimum = Number(this.limit(field.key, 'min'))
+        const maximum = Number(this.limit(field.key, 'max'))
+        if (!Number.isInteger(value) || value < minimum || value > maximum) {
+          const unit = field.key === 'standby_pool_size' || field.key.endsWith('confirmations') || field.key === 'standby_probes_per_cycle' || field.key === 'recovery_successes' ? '个' : '秒'
+          notify(`${field.label.replace('（秒）', '')}必须在 ${minimum}～${maximum} ${unit}之间`, 'error')
+          return
+        }
+      }
       this.policySaving = true
       try {
         const data = await api.updateProxyPoolPolicy(this.policy)

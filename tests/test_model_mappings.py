@@ -62,3 +62,36 @@ def test_unspecified_and_wildcard_efforts_are_distinct():
     assert unspecified["reasoning"]["effort"] == "medium"
     assert second["id"] == 2
     assert explicit["reasoning"]["effort"] == "low"
+
+
+def test_empty_source_and_target_apply_to_all_models_without_changing_model():
+    outgoing, matched = UserGroupService.apply_model_mapping(
+        _user({"id": 3, "enabled": True, "source_model": "", "source_effort": "*", "target_model": "", "target_effort": "medium"}),
+        {"model": "future-model", "reasoning": {"effort": "high", "summary": "auto"}},
+    )
+
+    assert matched["id"] == 3
+    assert outgoing == {"model": "future-model", "reasoning": {"effort": "medium", "summary": "auto"}}
+
+
+def test_empty_source_redirects_every_model_to_configured_target():
+    outgoing, matched = UserGroupService.apply_model_mapping(
+        _user({"id": 4, "enabled": True, "source_model": "", "source_effort": "*", "target_model": "gpt-5.6-luna", "target_effort": "low"}),
+        {"model": "any-client-model", "reasoning_effort": "xhigh"},
+    )
+
+    assert matched["id"] == 4
+    assert outgoing == {"model": "gpt-5.6-luna", "reasoning": {"effort": "low"}}
+
+
+def test_exact_model_rule_wins_over_all_models_rule():
+    outgoing, matched = UserGroupService.apply_model_mapping(
+        _user(
+            {"id": 5, "enabled": True, "source_model": "", "source_effort": "high", "target_model": "global-target", "target_effort": "low"},
+            {"id": 6, "enabled": True, "source_model": "gpt-5.6-sol", "source_effort": "*", "target_model": "exact-target", "target_effort": "medium"},
+        ),
+        {"model": "gpt-5.6-sol", "reasoning": {"effort": "high"}},
+    )
+
+    assert matched["id"] == 6
+    assert outgoing["model"] == "exact-target"

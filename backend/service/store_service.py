@@ -448,8 +448,8 @@ class StoreService:
             changes["name"] = name
         if not partial or "source_model" in values:
             model = str(values.get("source_model") or "").strip()
-            if not model or len(model) > 160:
-                raise ValueError("请求模型不能为空且不能超过 160 个字符")
+            if len(model) > 160:
+                raise ValueError("请求模型不能超过 160 个字符")
             changes["source_model"] = model
         if not partial or "source_effort" in values:
             effort = str(values.get("source_effort") or "").strip().lower()
@@ -458,8 +458,8 @@ class StoreService:
             changes["source_effort"] = effort
         if not partial or "target_model" in values:
             model = str(values.get("target_model") or "").strip()
-            if not model or len(model) > 160:
-                raise ValueError("目标模型不能为空且不能超过 160 个字符")
+            if len(model) > 160:
+                raise ValueError("目标模型不能超过 160 个字符")
             changes["target_model"] = model
         if not partial or "target_effort" in values:
             effort = str(values.get("target_effort") or "").strip().lower()

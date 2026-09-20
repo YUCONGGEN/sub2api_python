@@ -209,14 +209,14 @@
     </div>
 
     <div v-if="activeAdminSection === 'business'" id="admin-business-mappings" class="panel model-mapping-panel business-anchor-target">
-      <div class="panel-head"><div><span class="eyebrow">MODEL REQUEST ROUTING</span><h2>模型映射</h2><p class="panel-note">按“请求模型 + 推理强度”改写实际调用的模型与强度；只有勾选该规则的用户分组才会生效。</p></div></div>
+      <div class="panel-head"><div><span class="eyebrow">MODEL REQUEST ROUTING</span><h2>模型映射</h2><p class="panel-note">按“请求模型 + 推理强度”改写实际调用的模型与强度；请求模型留空表示全部模型，目标模型留空表示保持原请求模型。只有勾选该规则的用户分组才会生效。</p></div></div>
       <form class="model-mapping-form" @submit.prevent="saveMapping">
         <div class="mapping-form-title"><span>{{ editingMapping ? '编辑映射' : '新增映射' }}</span><small>计费按实际调用的目标模型计算</small></div>
         <label><span>规则名称</span><input v-model.trim="mappingForm.name" maxlength="120" placeholder="例如：Sol xhigh 降为 high" required /></label>
-        <label><span>请求模型</span><input v-model.trim="mappingForm.source_model" maxlength="160" placeholder="gpt-5.6-sol" required /></label>
+        <label><span>请求模型</span><input v-model.trim="mappingForm.source_model" maxlength="160" placeholder="留空表示全部模型" /></label>
         <label><span>请求强度</span><AppSelect v-model="mappingForm.source_effort" :options="sourceEffortOptions" aria-label="请求推理强度" /></label>
         <div class="mapping-arrow" aria-hidden="true">→</div>
-        <label><span>目标模型</span><input v-model.trim="mappingForm.target_model" maxlength="160" placeholder="gpt-5.6-sol" required /></label>
+        <label><span>目标模型</span><input v-model.trim="mappingForm.target_model" maxlength="160" placeholder="留空表示保持请求模型" /></label>
         <label><span>目标强度</span><AppSelect v-model="mappingForm.target_effort" :options="targetEffortOptions" aria-label="目标推理强度" /></label>
         <label class="mapping-enabled"><input v-model="mappingForm.enabled" type="checkbox" /><i></i><span>启用规则</span></label>
         <div class="mapping-form-actions"><button class="primary-btn" :disabled="mappingSaving">{{ mappingSaving ? '保存中…' : editingMapping ? '保存映射' : '新增映射' }}</button><button v-if="editingMapping" type="button" class="secondary-btn" @click="resetMappingForm">取消</button></div>
@@ -224,7 +224,7 @@
       <div class="mapping-rule-grid">
         <article v-for="item in modelMappings" :key="item.id" :class="['mapping-rule-card', { disabled: !item.enabled }]">
           <div class="mapping-rule-head"><div><span>{{ item.name }}</span><small>RULE {{ String(item.id).padStart(2, '0') }}</small></div><b :class="['status', item.enabled ? 'success' : 'pending']">{{ item.enabled ? '启用' : '停用' }}</b></div>
-          <div class="mapping-route"><div><small>请求</small><strong>{{ item.source_model }}</strong><em>{{ effortLabel(item.source_effort) }}</em></div><i>→</i><div><small>实际调用</small><strong>{{ item.target_model }}</strong><em>{{ effortLabel(item.target_effort) }}</em></div></div>
+          <div class="mapping-route"><div><small>请求</small><strong>{{ mappingModelLabel(item.source_model) }}</strong><em>{{ effortLabel(item.source_effort) }}</em></div><i>→</i><div><small>实际调用</small><strong>{{ mappingModelLabel(item.target_model, true) }}</strong><em>{{ effortLabel(item.target_effort) }}</em></div></div>
           <div class="mapping-rule-actions"><button class="secondary-btn" @click="editMapping(item)">编辑</button><button class="secondary-btn" @click="toggleMapping(item)">{{ item.enabled ? '停用' : '启用' }}</button><button class="text-btn danger" @click="removeMapping(item)">删除</button></div>
         </article>
       </div>
@@ -253,7 +253,7 @@
           </div>
           <div class="group-mapping-picker">
             <div class="group-model-head"><div><span class="eyebrow">MODEL MAPPING</span><strong>该组启用的映射</strong></div><small>未勾选的规则不会影响该组</small></div>
-            <div class="group-mapping-options"><label v-for="item in modelMappings" :key="item.id" :class="{ selected: groupForm.model_mapping_ids.includes(item.id), disabled: !item.enabled }"><input v-model="groupForm.model_mapping_ids" type="checkbox" :value="item.id" /><span><b>{{ item.name }}</b><small>{{ item.source_model }} · {{ effortLabel(item.source_effort) }} → {{ item.target_model }} · {{ effortLabel(item.target_effort) }}</small></span></label><span v-if="!modelMappings.length" class="muted">尚未创建模型映射</span></div>
+            <div class="group-mapping-options"><label v-for="item in modelMappings" :key="item.id" :class="{ selected: groupForm.model_mapping_ids.includes(item.id), disabled: !item.enabled }"><input v-model="groupForm.model_mapping_ids" type="checkbox" :value="item.id" /><span><b>{{ item.name }}</b><small>{{ mappingModelLabel(item.source_model) }} · {{ effortLabel(item.source_effort) }} → {{ mappingModelLabel(item.target_model, true) }} · {{ effortLabel(item.target_effort) }}</small></span></label><span v-if="!modelMappings.length" class="muted">尚未创建模型映射</span></div>
           </div>
         </div>
         <div class="group-form-actions"><button class="primary-btn" :disabled="groupSaving"><span>{{ groupSaving ? '保存中…' : editingGroup ? '保存修改' : '创建分组' }}</span><b aria-hidden="true">→</b></button><button v-if="editingGroup" type="button" class="secondary-btn" @click="resetGroupForm">取消编辑</button></div>
@@ -501,6 +501,7 @@ export default {
     groupExtraModelCount (group) { const models = group.allowed_models || []; return models.includes('*') ? 0 : Math.max(0, models.length - 3) },
     async saveGroup () { this.groupSaving = true; try { const body = { name: this.groupForm.name, description: this.groupForm.description, weight: this.groupForm.weight, concurrency_limit: this.groupForm.concurrency_limit, is_default: this.groupForm.is_default, allowed_models: this.groupForm.allow_all ? ['*'] : this.groupForm.allowed_models, model_mapping_ids: this.groupForm.model_mapping_ids }; const d = this.editingGroup ? await api.updateUserGroup(this.editingGroup.id, body) : await api.createUserGroup(body); if (!d.ok) throw new Error(d.message); notify(this.editingGroup ? '用户组已更新' : '用户组已创建', 'success'); this.resetGroupForm(); await this.load(); await this.loadGroupOptions() } catch (e) { notify(e.message, 'error') } finally { this.groupSaving = false } },
     effortLabel (value) { return value === '*' ? '任意强度' : value === '' || value == null ? '未指定' : String(value) },
+    mappingModelLabel (value, target = false) { return String(value || '').trim() || (target ? '保持请求模型' : '全部模型') },
     resetMappingForm () { this.editingMapping = null; this.mappingForm = emptyMapping() },
     editMapping (item) { this.editingMapping = item; this.mappingForm = { name: item.name, source_model: item.source_model, source_effort: item.source_effort || '', target_model: item.target_model, target_effort: item.target_effort, enabled: !!item.enabled }; this.$nextTick(() => document.getElementById('admin-business-mappings')?.scrollIntoView({ behavior: 'smooth', block: 'start' })) },
     async saveMapping () { this.mappingSaving = true; try { const d = this.editingMapping ? await api.updateModelMapping(this.editingMapping.id, this.mappingForm) : await api.createModelMapping(this.mappingForm); if (!d.ok) throw new Error(d.message); notify(this.editingMapping ? '模型映射已更新' : '模型映射已创建', 'success'); this.resetMappingForm(); await this.load(); await this.loadGroupOptions() } catch (e) { notify(e.message, 'error') } finally { this.mappingSaving = false } },

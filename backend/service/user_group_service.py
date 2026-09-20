@@ -79,11 +79,13 @@ class UserGroupService:
 
     @staticmethod
     def apply_model_mapping(user: Mapping[str, Any], payload: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
-        """Apply the effective group's first exact/wildcard request mapping.
+        """Apply the effective group's most specific model/effort mapping.
 
         Permission checks intentionally happen before this method, against the
         client-facing model. Billing and upstream selection then use the mapped
-        model because it is the model actually called.
+        model because it is the model actually called. An empty source model
+        matches every requested model, while an empty target model preserves
+        the requested model.
         """
         outgoing = dict(payload)
         source_model = str(payload.get("model") or "").strip()
@@ -96,12 +98,15 @@ class UserGroupService:
             item for item in mappings
             if isinstance(item, Mapping)
             and bool(item.get("enabled"))
-            and str(item.get("source_model") or "").strip().lower() == source_model.lower()
+            and str(item.get("source_model") or "").strip().lower() in {"", source_model.lower()}
             and str(item.get("source_effort") or "").strip().lower() in {source_effort, "*"}
         ]
         if not candidates:
             return outgoing, None
-        candidates.sort(key=lambda item: 0 if str(item.get("source_effort") or "").strip().lower() == source_effort else 1)
+        candidates.sort(key=lambda item: (
+            0 if str(item.get("source_model") or "").strip() else 1,
+            0 if str(item.get("source_effort") or "").strip().lower() == source_effort else 1,
+        ))
         mapping = dict(candidates[0])
         outgoing["model"] = str(mapping.get("target_model") or source_model).strip()
         target_effort = str(mapping.get("target_effort") or "").strip().lower()

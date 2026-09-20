@@ -22,8 +22,8 @@
           <div v-if="subscriptions.length" class="source-list">
             <article v-for="item in subscriptions" :key="item.id">
               <div><strong>{{ item.name }}</strong><span>{{ item.host }} · {{ item.node_count || 0 }} 个节点</span><small>最近检查 {{ formatTime(item.last_checked_at) }}</small><em v-if="item.last_error">{{ item.last_error }}</em></div>
-              <span :class="['source-state', item.status === 'validated' ? 'ok' : 'bad']">{{ item.status === 'validated' ? '可访问' : '异常' }}</span>
-              <div class="source-actions"><button class="secondary-btn" :disabled="checkingId === item.id" @click="checkSource(item)">{{ checkingId === item.id ? '检查中…' : '检查' }}</button><button class="text-btn danger" @click="removeSource(item)">删除</button></div>
+              <span :class="['source-state', sourceStateClass(item)]">{{ sourceStateLabel(item) }}</span>
+              <div class="source-actions"><button class="secondary-btn" :disabled="!item.checkable || checkingId === item.id" :title="item.checkable ? '重新下载并验证订阅' : '历史导入来源未保留订阅 URL'" @click="checkSource(item)">{{ checkingId === item.id ? '检查中…' : '检查' }}</button><button class="text-btn danger" @click="removeSource(item)">删除</button></div>
             </article>
           </div>
           <div v-else class="empty">尚未添加代理订阅</div>
@@ -117,6 +117,7 @@ export default {
       } catch (error) { notify(error.message, 'error') } finally { this.sourceSaving = false }
     },
     async checkSource (item) {
+      if (!item.checkable) return
       this.checkingId = item.id
       try { await api.checkProxySubscription(item.id); await this.load(); notify('订阅检查完成', 'success') } catch (error) { notify(error.message, 'error') } finally { this.checkingId = '' }
     },
@@ -125,6 +126,8 @@ export default {
       try { await api.deleteProxySubscription(item.id); await this.load(); notify('代理订阅已删除', 'success') } catch (error) { notify(error.message, 'error') }
     },
     statusLabel (value) { return ({ active: '当前使用', ready: '备用可用', probation: '恢复确认中', quarantined: '已隔离', unknown: '待检查' })[value] || value },
+    sourceStateLabel (item) { return item.status === 'validated' ? '可访问' : item.status === 'imported' ? '历史导入' : '异常' },
+    sourceStateClass (item) { return item.status === 'validated' ? 'ok' : item.status === 'imported' ? 'imported' : 'bad' },
     formatTime (value) { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '尚未检查' }
   }
 }
@@ -132,6 +135,7 @@ export default {
 
 <style scoped>
 .proxy-admin{display:grid;gap:16px}.proxy-title{display:flex;justify-content:space-between;align-items:flex-end;gap:20px}.proxy-title h2{margin:5px 0 4px;font:500 28px/1.2 'Playfair Display',Georgia,serif;color:#1f3652}.proxy-title p{margin:0;color:#6f8496;font-size:12px}.proxy-status-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.proxy-status-grid article,.proxy-card{border:1px solid #d7e4ee;border-radius:16px;background:#fff;padding:16px}.proxy-status-grid article{display:grid;gap:5px}.proxy-status-grid span{font:10px var(--mono);color:#7890a2}.proxy-status-grid strong{color:#1f3652;font-size:18px;overflow-wrap:anywhere}.proxy-status-grid small{color:#7b8d9c}.ok{color:#278a67!important}.bad{color:#bd5b55!important}.proxy-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.card-head{display:flex;align-items:center;justify-content:space-between;gap:15px;margin-bottom:13px}.card-head h3{margin:4px 0 0;color:#1f3652}.source-form{display:grid;grid-template-columns:minmax(140px,.6fr) minmax(220px,1.4fr) auto;gap:8px}.source-form input,.policy-form input{border:1px solid #cfdeea;border-radius:10px;background:#f8fbfd;color:#17334a;padding:11px}.security-note{margin:10px 0;color:#788c9c;font-size:11px;line-height:1.5}.source-list{display:grid;gap:8px}.source-list article{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:10px;border:1px solid #dbe7ef;border-radius:12px;padding:11px}.source-list article>div:first-child{display:grid;gap:3px;min-width:0}.source-list strong{color:#213b52}.source-list span,.source-list small{color:#71889b;font-size:11px}.source-list em{color:#bd5b55;font-size:10px;overflow-wrap:anywhere}.source-state{border-radius:20px;background:#edf6f0;padding:5px 8px}.source-actions{display:flex;align-items:center;gap:7px}.policy-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.policy-form label{display:grid;gap:5px;color:#46667e;font-size:11px}.policy-form small{color:#8698a6;font-size:10px}.node-card{padding:16px}.node-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.node-grid article{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:9px;border:1px solid #dbe7ef;border-radius:11px;padding:11px}.node-grid i{width:9px;height:9px;border-radius:50%;background:#96a6b2}.node-grid i.active{background:#278a67;box-shadow:0 0 0 4px #278a6720}.node-grid i.ready{background:#4d8fb2}.node-grid i.quarantined{background:#bd5b55}.node-grid div{display:grid;gap:3px;min-width:0}.node-grid strong{color:#1f3652;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.node-grid span{color:#778d9d;font-size:10px}.node-grid b{color:#31576e;font:11px var(--mono)}.proxy-error{display:grid;gap:6px;border:1px solid #e4b9b5;border-radius:14px;background:#fff4f2;padding:18px;color:#9d4742}.proxy-error small{color:#a66a65}.empty{padding:28px;text-align:center;color:#8a9ba8}
+.source-state.imported{color:#8a6b28!important;background:#fff6dd}
 :global(.theme-night) .proxy-title h2,:global(.theme-night) .proxy-status-grid strong,:global(.theme-night) .card-head h3,:global(.theme-night) .source-list strong,:global(.theme-night) .node-grid strong{color:#dbeaf3}:global(.theme-night) .proxy-status-grid article,:global(.theme-night) .proxy-card{border-color:#294557;background:#12212d}:global(.theme-night) .source-list article,:global(.theme-night) .node-grid article{border-color:#294557;background:#152734}:global(.theme-night) .source-form input,:global(.theme-night) .policy-form input{border-color:#35566a;background:#172b39;color:#dcecf4}
 @media(max-width:1000px){.proxy-status-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.proxy-grid{grid-template-columns:1fr}.node-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:680px){.proxy-title{align-items:flex-start;flex-direction:column}.proxy-status-grid,.policy-form,.node-grid{grid-template-columns:1fr}.source-form{grid-template-columns:1fr}.source-list article{grid-template-columns:1fr}.source-actions{justify-content:flex-end}}
 </style>

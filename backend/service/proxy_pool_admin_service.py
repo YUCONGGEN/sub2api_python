@@ -156,10 +156,12 @@ class ProxyPoolAdminService:
 
     @staticmethod
     def _public_subscription(item: dict[str, Any]) -> dict[str, Any]:
-        return {key: item.get(key) for key in (
+        result = {key: item.get(key) for key in (
             "id", "name", "host", "enabled", "status", "node_count",
             "created_at", "updated_at", "last_checked_at", "last_error",
         )}
+        result["checkable"] = bool(item.get("url_encrypted"))
+        return result
 
     def snapshot(self) -> dict[str, Any]:
         self._ensure_enabled()
@@ -328,6 +330,8 @@ class ProxyPoolAdminService:
         item = next((entry for entry in registry["subscriptions"] if str(entry.get("id")) == source_id), None)
         if not item:
             raise KeyError(source_id)
+        if not item.get("url_encrypted"):
+            raise ValueError("历史导入来源未保留订阅地址，无法在线检查；可删除后用原订阅 URL 重新添加")
         try:
             url = str(self.cipher.decrypt(str(item.get("url_encrypted") or "")).get("url") or "")
             raw = await self._download(url)

@@ -75,6 +75,25 @@ def test_subscription_url_is_encrypted_and_never_returned(tmp_path):
     assert result["node_count"] == 1
     assert "private-token" not in persisted
     assert "url_encrypted" not in result
+    assert result["checkable"] is True
+
+
+def test_imported_subscription_is_visible_but_not_checkable(tmp_path):
+    service = configured_service(tmp_path)
+    service.registry_path.write_text(json.dumps({"subscriptions": [{
+        "id": "legacy-hy2",
+        "name": "旧 HY2 订阅",
+        "host": "47.112.97.173",
+        "status": "imported",
+        "node_count": 2,
+    }]}, ensure_ascii=False), encoding="utf-8")
+
+    source = service.snapshot()["subscriptions"][0]
+    assert source["status"] == "imported"
+    assert source["checkable"] is False
+    assert "url_encrypted" not in source
+    with pytest.raises(ValueError, match="历史导入来源未保留订阅地址"):
+        asyncio.run(service.check_subscription("legacy-hy2"))
 
 
 def test_subscription_parser_accepts_base64_and_rejects_unknown_content():

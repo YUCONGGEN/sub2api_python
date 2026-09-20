@@ -31,6 +31,26 @@ CREATE TABLE IF NOT EXISTS user_group_model_mappings (
   KEY idx_group_mapping_mapping (mapping_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE TABLE IF NOT EXISTS announcements (
+  id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  title VARCHAR(120) NOT NULL,
+  content TEXT NOT NULL,
+  enabled TINYINT NOT NULL DEFAULT 1,
+  created_by BIGINT NOT NULL,
+  expires_at VARCHAR(40),
+  created_at VARCHAR(40) NOT NULL,
+  updated_at VARCHAR(40) NOT NULL,
+  KEY idx_announcements_current (enabled, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS announcement_reads (
+  announcement_id BIGINT NOT NULL,
+  user_id BIGINT NOT NULL,
+  read_at VARCHAR(40) NOT NULL,
+  PRIMARY KEY(announcement_id, user_id),
+  KEY idx_announcement_reads_user (user_id, announcement_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS users (
   id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
   username VARCHAR(64) NOT NULL UNIQUE,

@@ -31,6 +31,24 @@ CREATE TABLE IF NOT EXISTS user_group_model_mappings (
   PRIMARY KEY(group_id, mapping_id)
 );
 
+CREATE TABLE IF NOT EXISTS announcements (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_by INTEGER NOT NULL,
+  expires_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS announcement_reads (
+  announcement_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  read_at TEXT NOT NULL,
+  PRIMARY KEY(announcement_id, user_id)
+);
+
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   username TEXT NOT NULL UNIQUE,
@@ -300,6 +318,8 @@ CREATE INDEX IF NOT EXISTS idx_upstream_subscription_provider ON upstream_subscr
 CREATE INDEX IF NOT EXISTS idx_upstream_subscription_cooldown ON upstream_subscription_accounts(provider, cooldown_until);
 CREATE INDEX IF NOT EXISTS idx_upstream_config_request_user ON upstream_config_requests(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_upstream_config_request_status ON upstream_config_requests(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_announcements_current ON announcements(enabled, id DESC);
+CREATE INDEX IF NOT EXISTS idx_announcement_reads_user ON announcement_reads(user_id, announcement_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_pending_payment_amount
   ON payment_orders(provider, payment_amount)
   WHERE status = 'PENDING' AND payment_amount IS NOT NULL;

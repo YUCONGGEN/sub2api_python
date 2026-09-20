@@ -158,6 +158,25 @@ class AuthController:
             return unauthorized()
         return ok({"ok": True, "user": self.store.public_user(user)})
 
+    @GetMapping("/announcement")
+    def announcement(self, authorization: str = RequestHeader(name="Authorization", required=False)):
+        user = self.auth.user_from_authorization(authorization)
+        if not user:
+            return unauthorized()
+        return ok({
+            "ok": True,
+            "announcement": self.store.current_announcement(int(user["id"])),
+        })
+
+    @PostMapping("/announcement/{announcement_id}/acknowledge")
+    def acknowledge_announcement(self, announcement_id: int = PathVariable(name="announcement_id"), authorization: str = RequestHeader(name="Authorization", required=False)):
+        user = self.auth.user_from_authorization(authorization)
+        if not user:
+            return unauthorized()
+        if not self.store.acknowledge_announcement(int(announcement_id), int(user["id"])):
+            return not_found("公示已撤下或已被新公示替换")
+        return ok({"ok": True}, "已确认公示")
+
     @staticmethod
     def _group_overview_visible(user: dict) -> bool:
         if str(user.get("role") or "").upper() == "ADMIN":

@@ -42,6 +42,33 @@ class AdminController:
         summary.update(self.observability.dashboard())
         return ok({"ok": True, "summary": summary})
 
+    @GetMapping("/announcement")
+    def announcement(self, authorization: str = RequestHeader(name="Authorization", required=False)):
+        if not self.admin(authorization):
+            return forbidden()
+        return ok({"ok": True, "announcement": self.store.current_announcement()})
+
+    @PostMapping("/announcement")
+    def publish_announcement(self, body: dict = RequestBody(), authorization: str = RequestHeader(name="Authorization", required=False)):
+        admin = self.admin(authorization)
+        if not admin:
+            return forbidden()
+        try:
+            announcement = self.store.publish_announcement(
+                body.get("title", ""), body.get("content", ""), int(admin["id"]), body.get("expires_at")
+            )
+        except (TypeError, ValueError) as exc:
+            return bad(str(exc) or "公示内容不正确")
+        return ok({"ok": True, "announcement": announcement}, "公示已发布")
+
+    @DeleteMapping("/announcement")
+    def withdraw_announcement(self, authorization: str = RequestHeader(name="Authorization", required=False)):
+        if not self.admin(authorization):
+            return forbidden()
+        if not self.store.withdraw_announcement():
+            return not_found("当前没有已发布的公示")
+        return ok({"ok": True}, "公示已撤下")
+
     @GetMapping("/logs")
     def logs(self, authorization: str = RequestHeader(name="Authorization", required=False), level: str = RequestParam(name="level", required=False, default=""), page: int = RequestParam(name="page", required=False, default=1), page_size: int = RequestParam(name="page_size", required=False, default=5)):
         """Return paginated warning/error records without request bodies."""

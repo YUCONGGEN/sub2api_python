@@ -9,12 +9,37 @@
     </div>
 
     <nav class="admin-overview-tabs" aria-label="管理后台分区">
+      <button :class="{ active: activeAdminSection === 'announcement' }" @click="activeAdminSection = 'announcement'">公示管理</button>
       <button :class="{ active: activeAdminSection === 'business' }" @click="activeAdminSection = 'business'">业务管理</button>
       <button :class="{ active: activeAdminSection === 'visuals' }" @click="activeAdminSection = 'visuals'">数据可视化</button>
       <button :class="{ active: activeAdminSection === 'logs' }" @click="activeAdminSection = 'logs'">后台日志</button>
       <button :class="{ active: activeAdminSection === 'device' }" @click="activeAdminSection = 'device'">设备信息</button>
       <button :class="{ active: activeAdminSection === 'config' }" @click="activeAdminSection = 'config'">系统配置</button>
     </nav>
+
+    <section v-if="activeAdminSection === 'announcement'" class="panel announcement-admin-panel">
+      <div class="panel-head">
+        <div><span class="eyebrow">USER ANNOUNCEMENT</span><h2>登录公示</h2><p class="panel-note">发布后，普通用户登录时会在右上角看到公示；在线用户也会在一分钟内收到。发布新内容会替换当前公示。</p></div>
+        <span :class="['status', announcement ? 'success' : 'pending']">{{ announcement ? '展示中' : '未发布' }}</span>
+      </div>
+      <div class="announcement-admin-layout">
+        <form class="announcement-admin-form" @submit.prevent="publishCurrentAnnouncement">
+          <label><span>公示标题</span><input v-model.trim="announcementForm.title" maxlength="120" placeholder="例如：服务维护通知" required /></label>
+          <label><span>公示内容</span><textarea v-model.trim="announcementForm.content" maxlength="2000" rows="8" placeholder="请输入需要让用户知道的内容" required></textarea><small>{{ announcementForm.content.length }} / 2000</small></label>
+          <label><span>到期时间 <em>可选，留空表示永久有效</em></span><input v-model="announcementForm.expires_at" type="datetime-local" /></label>
+          <div class="announcement-admin-actions"><button class="primary-btn" :disabled="announcementSaving">{{ announcementSaving ? '发布中…' : announcement ? '发布新公示' : '发布公示' }}</button><button v-if="announcement" type="button" class="secondary-btn" :disabled="announcementSaving" @click="withdrawCurrentAnnouncement">撤下当前公示</button></div>
+        </form>
+        <article class="announcement-admin-preview">
+          <span class="eyebrow">CURRENT NOTICE</span>
+          <template v-if="announcement">
+            <h3>{{ announcement.title }}</h3>
+            <p>{{ announcement.content }}</p>
+            <small>发布于 {{ format(announcement.created_at) }}<template v-if="announcement.expires_at"> · 到期于 {{ format(announcement.expires_at) }}</template><template v-else> · 永久有效</template></small>
+          </template>
+          <div v-else class="empty compact-empty">当前没有向用户展示的公示</div>
+        </article>
+      </div>
+    </section>
 
     <nav v-if="activeAdminSection === 'business'" class="business-anchor-nav" aria-label="业务管理快速导航">
       <button :class="{ active: businessAnchor === 'plans' }" @click="scrollToBusinessSection('plans')"><span>01</span><strong>套餐管理</strong></button>
@@ -311,6 +336,9 @@ export default {
     groups: [],
     groupOptions: [],
     modelMappings: [],
+    announcement: null,
+    announcementForm: { title: '', content: '', expires_at: '' },
+    announcementSaving: false,
     mappingForm: emptyMapping(),
     editingMapping: null,
     mappingSaving: false,
@@ -451,9 +479,10 @@ export default {
           api.adminSubscriptionPlans({ page: this.planPagination.page, page_size: 5 }),
           api.adminLogs({ page: this.logPagination.page, page_size: 5 }),
           api.userGroups({ page: this.groupPagination.page, page_size: 5 }),
-          api.modelMappings()
+          api.modelMappings(),
+          api.adminAnnouncement()
       ])
-      const [sResult, uResult, cResult, pResult, lResult, gResult, mResult] = results
+      const [sResult, uResult, cResult, pResult, lResult, gResult, mResult, aResult] = results
       if (sResult.status === 'fulfilled') {
         const s = sResult.value
         this.summary = s.summary || {}
@@ -469,6 +498,7 @@ export default {
       if (lResult.status === 'fulfilled') { const l = lResult.value; this.recentLogs = l.logs || this.summary.recent_logs || []; this.logPagination = l.pagination || this.logPagination }
       if (gResult.status === 'fulfilled') { const g = gResult.value; this.groups = g.groups || []; this.groupPagination = g.pagination || this.groupPagination }
       if (mResult.status === 'fulfilled') this.modelMappings = mResult.value.mappings || []
+      if (aResult.status === 'fulfilled') this.announcement = aResult.value.announcement || null
       const failed = results.filter(item => item.status === 'rejected')
       if (failed.length) notify(`${failed.length} 个管理区块加载失败，其余数据已保留`, 'error')
       this.loadingSections = false
@@ -484,6 +514,25 @@ export default {
     changePlanPage (page) { this.planPagination.page = page; this.load() },
     changeGroupPage (page) { this.groupPagination.page = page; this.load() },
     changeLogPage (page) { this.logPagination.page = page; this.load() },
+    async publishCurrentAnnouncement () {
+      this.announcementSaving = true
+      try {
+        const expiresAt = this.announcementForm.expires_at ? new Date(this.announcementForm.expires_at).toISOString() : null
+        const d = await api.publishAnnouncement({ title: this.announcementForm.title, content: this.announcementForm.content, expires_at: expiresAt })
+        this.announcement = d.announcement
+        this.announcementForm = { title: '', content: '', expires_at: '' }
+        notify('公示已发布，普通用户将收到提醒', 'success')
+      } catch (e) { notify(e.message || '公示发布失败', 'error') } finally { this.announcementSaving = false }
+    },
+    async withdrawCurrentAnnouncement () {
+      if (!await askConfirm('确定撤下当前公示吗？撤下后用户将不再看到它。')) return
+      this.announcementSaving = true
+      try {
+        await api.withdrawAnnouncement()
+        this.announcement = null
+        notify('当前公示已撤下', 'success')
+      } catch (e) { notify(e.message || '公示撤下失败', 'error') } finally { this.announcementSaving = false }
+    },
     resetPlanForm () { this.editingPlan = null; this.planForm = { name: '', description: '', price: 0, duration_days: 30, daily_amount: 0, daily_tokens: 0, group_id: null, enabled: true } },
     resetGroupForm () { this.editingGroup = null; this.groupForm = emptyGroup() },
     editGroup (group) {
@@ -625,6 +674,7 @@ export default {
 </script>
 <style scoped>
 .admin-create-user label > .app-select,.plan-group-field > .app-select { margin-top: 7px; }
+.announcement-admin-panel{margin-top:18px;background:linear-gradient(145deg,#fbfeff,#f8f6ff)}.announcement-admin-layout{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(280px,.8fr);gap:18px}.announcement-admin-form{display:grid;gap:14px}.announcement-admin-form>label{display:grid;gap:7px;color:#668096;font-size:11px}.announcement-admin-form label>span{display:flex;justify-content:space-between;gap:12px}.announcement-admin-form label em{color:#8a9dab;font:9px var(--mono);font-style:normal}.announcement-admin-form input,.announcement-admin-form textarea{width:100%;padding:11px 12px;border:1px solid #cfdee9;border-radius:10px;background:#fff;color:#29475f;font:11px/1.65 var(--sans);outline:0}.announcement-admin-form input{height:44px}.announcement-admin-form textarea{resize:vertical}.announcement-admin-form label>small{justify-self:end;color:#8ba0af;font:9px var(--mono)}.announcement-admin-actions{display:flex;gap:9px}.announcement-admin-preview{min-width:0;padding:20px;border:1px solid #d8e4ee;border-radius:14px;background:#ffffffc7}.announcement-admin-preview h3{margin:15px 0 10px;color:#294d68;font:600 21px/1.35 'Playfair Display',Georgia,serif}.announcement-admin-preview>p{max-height:310px;margin:0 0 17px;overflow:auto;color:#5f778b;font-size:12px;line-height:1.75;white-space:pre-wrap;overflow-wrap:anywhere}.announcement-admin-preview>small{display:block;padding-top:12px;border-top:1px solid #e2eaf0;color:#8397a6;font:9px/1.6 var(--mono)}:global(html[data-theme="dark"] .announcement-admin-panel){background:linear-gradient(145deg,#111e29,#182133)}:global(html[data-theme="dark"] .announcement-admin-preview),:global(html[data-theme="dark"] .announcement-admin-form input),:global(html[data-theme="dark"] .announcement-admin-form textarea){background:#152633;border-color:#345164;color:#d8e8f2}:global(html[data-theme="dark"] .announcement-admin-preview h3){color:#d6e6ef}:global(html[data-theme="dark"] .announcement-admin-preview>p){color:#a5bac8}:global(html[data-theme="dark"] .announcement-admin-preview>small){border-color:#2d4658;color:#8fa7b6}@media(max-width:760px){.announcement-admin-layout{grid-template-columns:1fr}.announcement-admin-actions{flex-direction:column}.announcement-admin-actions button{width:100%}}
 .model-mapping-panel{background:linear-gradient(145deg,#fbfeff 0%,#f7f9ff 100%)}
 .model-mapping-form{display:grid;grid-template-columns:minmax(160px,1.15fr) minmax(150px,1fr) minmax(145px,.8fr) 36px minmax(150px,1fr) minmax(145px,.8fr);gap:12px;align-items:end;padding:18px;border:1px solid #d7e5ee;border-radius:14px;background:#ffffffc7}
 .mapping-form-title{grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;padding-bottom:10px;border-bottom:1px solid #e3ebf1}.mapping-form-title span{color:#294e69;font:600 14px var(--mono)}.mapping-form-title small{color:#8093a2;font-size:10px}

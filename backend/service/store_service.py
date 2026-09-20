@@ -510,6 +510,73 @@ class StoreService:
         self._group_mapping_cache.clear()
         return deleted
 
+    # ------------------------------------------------------------ announcements
+    @staticmethod
+    def _public_announcement(row: Mapping[str, Any] | None) -> dict[str, Any] | None:
+        if not row:
+            return None
+        data = dict(row)
+        data["id"] = int(data.get("id") or 0)
+        data["enabled"] = bool(data.get("enabled"))
+        data["created_by"] = int(data.get("created_by") or 0)
+        return data
+
+    def current_announcement(self, user_id: int | None = None) -> dict[str, Any] | None:
+        announcement = self._public_announcement(self.mapper.find_current_announcement(utc_now()))
+        if not announcement:
+            return None
+        if user_id is not None:
+            announcement["acknowledged"] = bool(
+                self.mapper.find_announcement_read(int(announcement["id"]), int(user_id))
+            )
+        return announcement
+
+    @Transactional()
+    def publish_announcement(self, title: str, content: str, created_by: int, expires_at: str | None = None) -> dict[str, Any]:
+        normalized_title = str(title or "").strip()
+        normalized_content = str(content or "").strip()
+        if not 2 <= len(normalized_title) <= 120:
+            raise ValueError("公示标题需为 2-120 个字符")
+        if not 1 <= len(normalized_content) <= 2000:
+            raise ValueError("公示内容需为 1-2000 个字符")
+        now = utc_now()
+        normalized_expiry = None
+        if str(expires_at or "").strip():
+            try:
+                expiry = datetime.fromisoformat(str(expires_at).strip().replace("Z", "+00:00"))
+                if expiry.tzinfo is None:
+                    expiry = expiry.replace(tzinfo=timezone.utc)
+                expiry = expiry.astimezone(timezone.utc)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("公示到期时间无效") from exc
+            if expiry <= datetime.now(timezone.utc):
+                raise ValueError("公示到期时间必须晚于当前时间")
+            normalized_expiry = expiry.isoformat()
+        self.mapper.disable_announcements(now)
+        announcement = {
+            "title": normalized_title,
+            "content": normalized_content,
+            "created_by": int(created_by),
+            "expires_at": normalized_expiry,
+            "created_at": now,
+            "updated_at": now,
+        }
+        self.mapper.insert_announcement(announcement)
+        return self._public_announcement(
+            self.mapper.find_announcement(int(announcement.get("id") or 0))
+        ) or {**announcement, "id": int(announcement.get("id") or 0), "enabled": True}
+
+    @Transactional()
+    def withdraw_announcement(self) -> bool:
+        return bool(self.mapper.disable_announcements(utc_now()))
+
+    def acknowledge_announcement(self, announcement_id: int, user_id: int) -> bool:
+        current = self.mapper.find_current_announcement(utc_now())
+        if not current or int(current.get("id") or 0) != int(announcement_id):
+            return False
+        self.mapper.insert_announcement_read(int(announcement_id), int(user_id), utc_now())
+        return True
+
     def admin_user_detail(self, user_id: int, order_page: int = 1, page_size: int = 5) -> dict[str, Any] | None:
         user = self.find_user(user_id)
         if not user:

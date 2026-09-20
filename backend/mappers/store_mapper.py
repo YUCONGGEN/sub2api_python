@@ -114,6 +114,24 @@ class StoreMapper:
     def delete_model_mapping_assignments(self, mapping_id: int) -> int:
         pass
 
+    def find_current_announcement(self, now: str) -> Mapping[str, Any] | None:
+        pass
+
+    def find_announcement(self, announcement_id: int) -> Mapping[str, Any] | None:
+        pass
+
+    def disable_announcements(self, updated_at: str) -> int:
+        pass
+
+    def insert_announcement(self, announcement: Mapping[str, Any]) -> int:
+        pass
+
+    def find_announcement_read(self, announcement_id: int, user_id: int) -> Mapping[str, Any] | None:
+        pass
+
+    def insert_announcement_read(self, announcement_id: int, user_id: int, read_at: str) -> int:
+        pass
+
     def insert_user_group(self, group: Mapping[str, Any]) -> int:
         pass
 

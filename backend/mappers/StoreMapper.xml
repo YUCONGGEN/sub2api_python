@@ -162,6 +162,35 @@
         INSERT INTO user_group_model_mappings(group_id,mapping_id) VALUES(#{group_id},#{mapping_id})
     </insert>
     <delete id="delete_model_mapping_assignments">DELETE FROM user_group_model_mappings WHERE mapping_id=#{mapping_id}</delete>
+    <select id="find_current_announcement">
+        SELECT id,title,content,enabled,created_by,expires_at,created_at,updated_at
+        FROM announcements
+        WHERE enabled=1 AND (expires_at IS NULL OR expires_at&gt;#{now})
+        ORDER BY id DESC LIMIT 1
+    </select>
+    <select id="find_announcement">
+        SELECT id,title,content,enabled,created_by,expires_at,created_at,updated_at
+        FROM announcements WHERE id=#{announcement_id} LIMIT 1
+    </select>
+    <update id="disable_announcements">
+        UPDATE announcements SET enabled=0,updated_at=#{updated_at} WHERE enabled=1
+    </update>
+    <insert id="insert_announcement" useGeneratedKeys="true" keyProperty="announcement.id">
+        INSERT INTO announcements(title,content,enabled,created_by,expires_at,created_at,updated_at)
+        VALUES(#{announcement.title},#{announcement.content},1,#{announcement.created_by},#{announcement.expires_at},#{announcement.created_at},#{announcement.updated_at})
+    </insert>
+    <select id="find_announcement_read">
+        SELECT announcement_id,user_id,read_at FROM announcement_reads
+        WHERE announcement_id=#{announcement_id} AND user_id=#{user_id} LIMIT 1
+    </select>
+    <insert id="insert_announcement_read">
+        INSERT OR IGNORE INTO announcement_reads(announcement_id,user_id,read_at)
+        VALUES(#{announcement_id},#{user_id},#{read_at})
+    </insert>
+    <insert id="insert_announcement_read" databaseId="mysql">
+        INSERT IGNORE INTO announcement_reads(announcement_id,user_id,read_at)
+        VALUES(#{announcement_id},#{user_id},#{read_at})
+    </insert>
     <insert id="insert_user_group" useGeneratedKeys="true" keyProperty="group.id">
         INSERT INTO user_groups(name,description,weight,concurrency_limit,allowed_models_json,is_default,created_at,updated_at)
         VALUES(#{group.name},#{group.description},#{group.weight},#{group.concurrency_limit},#{group.allowed_models_json},#{group.is_default},#{group.created_at},#{group.updated_at})

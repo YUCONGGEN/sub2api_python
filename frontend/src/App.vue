@@ -93,11 +93,48 @@
             ><b>/</b>{{ pageTitle || $route.meta.title }}
           </div>
           <div class="top-actions">
+            <button
+              v-if="user && user.role !== 'ADMIN' && currentAnnouncement"
+              :class="['announcement-trigger', { unread: !currentAnnouncement.acknowledged }]"
+              type="button"
+              @click="announcementOpen = !announcementOpen"
+            >
+              公示<span v-if="!currentAnnouncement.acknowledged" aria-label="未读"></span>
+            </button>
             <button class="theme-switch" type="button" @click="toggleTheme">
               主题：{{ theme === "dark" ? "夜晚" : "白天" }}</button
             ><router-link to="/docs">新手指南 ↗</router-link>
           </div>
         </header>
+        <transition name="announcement-slide">
+          <aside
+            v-if="user && user.role !== 'ADMIN' && currentAnnouncement && announcementOpen"
+            class="announcement-popover"
+            role="dialog"
+            aria-live="polite"
+            aria-labelledby="current-announcement-title"
+          >
+            <div class="announcement-popover-head">
+              <span>ADMIN NOTICE</span>
+              <button type="button" aria-label="关闭公示" @click="announcementOpen = false">×</button>
+            </div>
+            <h2 id="current-announcement-title">{{ currentAnnouncement.title }}</h2>
+            <p>{{ currentAnnouncement.content }}</p>
+            <div class="announcement-popover-foot">
+              <small>
+                {{ announcementTime(currentAnnouncement.created_at) }}
+                <template v-if="currentAnnouncement.expires_at"> · 有效至 {{ announcementTime(currentAnnouncement.expires_at) }}</template>
+              </small>
+              <button
+                v-if="!currentAnnouncement.acknowledged"
+                type="button"
+                :disabled="announcementAcknowledging"
+                @click="acknowledgeCurrentAnnouncement"
+              >{{ announcementAcknowledging ? "确认中…" : "知道了" }}</button>
+              <span v-else>已确认</span>
+            </div>
+          </aside>
+        </transition>
         <router-view
           :user="user"
           :app-name="siteName"
@@ -143,6 +180,12 @@ export default {
     theme: "light",
     mobileMenuOpen: false,
     healthTimer: null,
+    announcementTimer: null,
+    announcementExpiryTimer: null,
+    currentAnnouncement: null,
+    announcementOpen: false,
+    announcementAcknowledging: false,
+    lastPromptedAnnouncementId: null,
     systemStatus: { text: "正在检测系统状态", level: "checking" },
   }),
   computed: {
@@ -196,12 +239,17 @@ export default {
     this.healthTimer = window.setInterval(() => {
       if (this.monitoringEnabled) this.loadSystemStatus();
     }, 60000);
+    this.announcementTimer = window.setInterval(() => {
+      if (this.user && this.user.role !== "ADMIN") this.loadAnnouncement();
+    }, 60000);
     this.updateTitle();
     window.addEventListener("rose:auth-expired", this.handleAuthExpired);
   },
   beforeDestroy() {
     window.removeEventListener("rose:auth-expired", this.handleAuthExpired);
     window.clearInterval(this.healthTimer);
+    window.clearInterval(this.announcementTimer);
+    window.clearTimeout(this.announcementExpiryTimer);
   },
   methods: {
     async loadConfig() {
@@ -275,20 +323,80 @@ export default {
     async loadUser(force = false) {
       if (!localStorage.getItem("rose_token")) {
         this.user = null;
+        this.clearAnnouncement();
         return;
       }
       try {
         const data = await api.me({ force });
         this.user = data.user;
+        if (this.user?.role !== "ADMIN") await this.loadAnnouncement();
+        else this.clearAnnouncement();
       } catch (e) {
         this.logout(false);
       }
+    },
+    clearAnnouncement() {
+      window.clearTimeout(this.announcementExpiryTimer);
+      this.announcementExpiryTimer = null;
+      this.currentAnnouncement = null;
+      this.announcementOpen = false;
+    },
+    scheduleAnnouncementExpiry(announcement) {
+      window.clearTimeout(this.announcementExpiryTimer);
+      this.announcementExpiryTimer = null;
+      if (!announcement?.expires_at) return;
+      const remaining = new Date(announcement.expires_at).getTime() - Date.now();
+      if (remaining <= 0) {
+        this.clearAnnouncement();
+        return;
+      }
+      const delay = Math.min(remaining, 2147483647);
+      this.announcementExpiryTimer = window.setTimeout(() => {
+        if (remaining > delay) this.scheduleAnnouncementExpiry(this.currentAnnouncement);
+        else this.clearAnnouncement();
+      }, delay);
+    },
+    async loadAnnouncement() {
+      try {
+        const data = await api.currentAnnouncement();
+        const announcement = data.announcement || null;
+        if (!announcement) {
+          this.clearAnnouncement();
+          return;
+        }
+        this.currentAnnouncement = announcement;
+        this.scheduleAnnouncementExpiry(announcement);
+        if (!announcement.acknowledged && this.lastPromptedAnnouncementId !== announcement.id) {
+          this.lastPromptedAnnouncementId = announcement.id;
+          this.announcementOpen = true;
+        }
+      } catch (e) {}
+    },
+    async acknowledgeCurrentAnnouncement() {
+      if (!this.currentAnnouncement || this.announcementAcknowledging) return;
+      this.announcementAcknowledging = true;
+      try {
+        await api.acknowledgeAnnouncement(this.currentAnnouncement.id);
+        this.currentAnnouncement = { ...this.currentAnnouncement, acknowledged: true };
+        this.announcementOpen = false;
+      } catch (e) {
+        await this.loadAnnouncement();
+      } finally {
+        this.announcementAcknowledging = false;
+      }
+    },
+    announcementTime(value) {
+      if (!value) return "";
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString("zh-CN", { hour12: false });
     },
     refreshUser() {
       this.loadUser(true);
     },
     handleAuthExpired() {
       this.user = null;
+      this.clearAnnouncement();
+      this.lastPromptedAnnouncementId = null;
       if (this.$route.path !== "/login")
         this.$router.push("/login").catch(() => {});
     },
@@ -302,6 +410,8 @@ export default {
       window.sessionStorage.removeItem("rose_fresh_api_key");
       clearAuthCache();
       this.user = null;
+      this.clearAnnouncement();
+      this.lastPromptedAnnouncementId = null;
       if (this.$route.path !== "/login")
         this.$router.push("/login").catch(() => {});
     },

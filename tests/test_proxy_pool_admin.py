@@ -1,18 +1,20 @@
 import asyncio
+import base64
 import json
 
 import pytest
 import yaml
 
+from backend.common.proxy_subscription import normalize_subscription
 from backend.service.proxy_pool_admin_service import ProxyPoolAdminService
 
 
 class FakeCipher:
     def encrypt(self, value):
-        return "encrypted:" + value["url"][::-1]
+        return "encrypted:" + json.dumps(value, ensure_ascii=False)[::-1]
 
     def decrypt(self, value):
-        return {"url": value.removeprefix("encrypted:")[::-1]}
+        return json.loads(value.removeprefix("encrypted:")[::-1])
 
 
 def configured_service(tmp_path):
@@ -74,13 +76,20 @@ def test_subscription_url_is_encrypted_and_never_returned(tmp_path):
         }
 
     service._download_details = download
-    result = asyncio.run(service.add_subscription({"name": "演示订阅", "url": "https://example.com/private-token"}))
+    result = asyncio.run(service.add_subscription({
+        "name": "演示订阅",
+        "url": "https://example.com/private-token",
+        "note": "备用地址 https://backup.example，账号 demo，密码 secret",
+    }))
     persisted = service.registry_path.read_text(encoding="utf-8")
     assert result["host"] == "example.com"
     assert result["node_count"] == 1
     assert "private-token" not in persisted
+    assert "密码 secret" not in persisted
     assert "url_encrypted" not in result
+    assert "note_encrypted" not in result
     assert result["checkable"] is True
+    assert result["note"] == "备用地址 https://backup.example，账号 demo，密码 secret"
     assert result["traffic_used_bytes"] == 300
     assert result["traffic_remaining_bytes"] == 700
 
@@ -110,6 +119,36 @@ def test_subscription_parser_accepts_base64_and_rejects_unknown_content():
         ProxyPoolAdminService._subscription_node_count(b"not a subscription")
 
 
+def test_subscription_usage_falls_back_to_quota_nodes():
+    dated = "proxies:\n  - name: '剩余流量：38.2 GB'\n  - name: '套餐到期：2026-12-23'\n"
+    usage = ProxyPoolAdminService._subscription_content_usage(dated.encode("utf-8"))
+    assert usage["traffic_remaining_bytes"] == int(38.2 * 1024 ** 3)
+    assert usage["traffic_expire_label"] == "2026-12-23"
+    assert usage["traffic_expire_at"] > 0
+
+    permanent = """proxies:
+  - {name: '剩余流量：988.75 GB', type: ss, server: info.example, port: 443}
+  - {name: '套餐到期：长期有效', type: ss, server: info.example, port: 443}
+  - {name: '日本可用节点', type: ss, server: jp.example, port: 443}
+"""
+    encoded = base64.b64encode(permanent.encode("utf-8"))
+    usage = ProxyPoolAdminService._subscription_content_usage(encoded)
+    assert usage["traffic_remaining_bytes"] == int(988.75 * 1024 ** 3)
+    assert usage["traffic_expire_label"] == "长期有效"
+
+    proxies = normalize_subscription(permanent.encode("utf-8"), "rose-demo")
+    assert [item["name"] for item in proxies] == ["rose-demo｜日本可用节点"]
+
+    vmess_lines = []
+    for name in ("剩余流量：18.12 GB", "套餐到期：长期有效"):
+        payload = base64.b64encode(json.dumps({"ps": name}, ensure_ascii=False).encode("utf-8")).decode()
+        vmess_lines.append("vmess://" + payload)
+    nested = base64.b64encode("\n".join(vmess_lines).encode("utf-8"))
+    usage = ProxyPoolAdminService._subscription_content_usage(nested)
+    assert usage["traffic_remaining_bytes"] == int(18.12 * 1024 ** 3)
+    assert usage["traffic_expire_label"] == "长期有效"
+
+
 def test_subscription_policy_updates_enabled_state_and_source_limit(tmp_path):
     service = configured_service(tmp_path)
     service.registry_path.write_text(json.dumps({"subscriptions": [{
@@ -123,6 +162,30 @@ def test_subscription_policy_updates_enabled_state_and_source_limit(tmp_path):
     assert updated["max_healthy_nodes"] == 1
     assert monitor["disabled_sources"] == ["a"]
     assert monitor["source_node_limits"]["a"] == 1
+
+
+def test_subscription_name_and_encrypted_note_can_be_updated(tmp_path):
+    service = configured_service(tmp_path)
+    service.registry_path.write_text(json.dumps({"subscriptions": [
+        {"id": "source-a", "name": "旧名称", "pool_source": "a", "enabled": True,
+         "max_healthy_nodes": 2},
+        {"id": "source-b", "name": "其他订阅", "pool_source": "b", "enabled": True,
+         "max_healthy_nodes": 2},
+    ]}, ensure_ascii=False), encoding="utf-8")
+
+    updated = asyncio.run(service.update_subscription("source-a", {
+        "name": "新名称", "note": "账号 test，密码 private", "max_healthy_nodes": 2,
+    }))
+    persisted = service.registry_path.read_text(encoding="utf-8")
+    assert updated["name"] == "新名称"
+    assert updated["note"] == "账号 test，密码 private"
+    assert "密码 private" not in persisted
+    assert "note_encrypted" in persisted
+
+    with pytest.raises(ValueError, match="订阅名称已存在"):
+        asyncio.run(service.update_subscription("source-a", {"name": "其他订阅"}))
+    with pytest.raises(ValueError, match="不能超过 100"):
+        asyncio.run(service.update_subscription("source-a", {"note": "密" * 101}))
 
 
 def test_country_policy_rejects_selection_without_matching_nodes(tmp_path):

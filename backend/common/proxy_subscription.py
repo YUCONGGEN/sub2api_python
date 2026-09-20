@@ -17,6 +17,10 @@ import yaml
 
 
 SUPPORTED_SCHEMES = {"ss", "vmess", "vless", "trojan", "hysteria2", "hy2"}
+METADATA_NODE_PATTERN = re.compile(
+    r"(?:剩余流量|流量剩余|套餐到期|到期时间|有效期|最新官网|永久地址|过滤掉\s*\d+\s*条线路)",
+    flags=re.IGNORECASE,
+)
 
 
 def _b64decode(value: str) -> bytes:
@@ -258,6 +262,8 @@ def normalize_subscription(raw: bytes, prefix: str) -> list[dict[str, Any]]:
             # malformed. Skip only that upstream node so the other nodes load.
             continue
         name = str(proxy.get("name") or f"node-{index}").strip()
+        if METADATA_NODE_PATTERN.search(name):
+            continue
         scoped = f"{prefix}｜{name}"[:180]
         if scoped in names:
             scoped = f"{scoped[:165]}-{index}"

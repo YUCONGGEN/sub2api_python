@@ -24,7 +24,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import quote, urlencode, urlsplit
+from urllib.parse import quote, unquote, urlencode, urlsplit
 
 import httpx
 import yaml
@@ -63,6 +63,11 @@ def _as_bool(value: Any, default: bool = False) -> bool:
 
 @Service("proxy_pool_admin_service")
 class ProxyPoolAdminService:
+    SUBSCRIPTION_USAGE_FIELDS = (
+        "traffic_upload_bytes", "traffic_download_bytes", "traffic_used_bytes",
+        "traffic_total_bytes", "traffic_remaining_bytes", "traffic_expire_at",
+        "traffic_expire_label",
+    )
     COUNTRY_OPTIONS = (
         {"code": "JP", "label": "日本"},
         {"code": "HK", "label": "香港"},
@@ -229,15 +234,21 @@ class ProxyPoolAdminService:
         value.setdefault("subscriptions", [])
         return value
 
-    @staticmethod
-    def _public_subscription(item: dict[str, Any]) -> dict[str, Any]:
+    def _public_subscription(self, item: dict[str, Any]) -> dict[str, Any]:
         result = {key: item.get(key) for key in (
             "id", "name", "host", "enabled", "status", "node_count",
             "created_at", "updated_at", "last_checked_at", "last_error",
             "pool_source", "pool_node_count", "max_healthy_nodes",
             "traffic_upload_bytes", "traffic_download_bytes", "traffic_used_bytes",
             "traffic_total_bytes", "traffic_remaining_bytes", "traffic_expire_at",
+            "traffic_expire_label",
         )}
+        result["note"] = ""
+        if item.get("note_encrypted"):
+            try:
+                result["note"] = str(self.cipher.decrypt(str(item["note_encrypted"])).get("note") or "")[:100]
+            except Exception:
+                result["note"] = ""
         result["checkable"] = bool(item.get("url_encrypted"))
         return result
 
@@ -502,14 +513,78 @@ class ProxyPoolAdminService:
         used = upload + download
         if total <= 0:
             return {}
-        return {
+        result = {
             "traffic_upload_bytes": upload,
             "traffic_download_bytes": download,
             "traffic_used_bytes": used,
             "traffic_total_bytes": total,
             "traffic_remaining_bytes": max(0, total - used),
-            "traffic_expire_at": parsed.get("expire") or None,
         }
+        if parsed.get("expire"):
+            result["traffic_expire_at"] = parsed["expire"]
+        return result
+
+    @staticmethod
+    def _subscription_content_usage(raw: bytes) -> dict[str, Any]:
+        """Read quota hints embedded as pseudo-node names by some providers."""
+        text = raw.decode("utf-8-sig", errors="replace")
+        candidates = [text]
+        compact = "".join(text.split())
+        try:
+            decoded = base64.b64decode(compact + "=" * (-len(compact) % 4), validate=False).decode("utf-8", errors="replace")
+            if decoded and decoded != text:
+                candidates.append(decoded)
+        except (ValueError, UnicodeError):
+            pass
+        embedded_names: list[str] = []
+        for candidate in candidates:
+            for line in candidate.splitlines():
+                value = line.strip()
+                if value.lower().startswith("vmess://"):
+                    try:
+                        payload = value.split("://", 1)[1]
+                        details = json.loads(base64.b64decode(payload + "=" * (-len(payload) % 4), validate=False).decode("utf-8"))
+                        embedded_names.append(str(details.get("ps") or ""))
+                    except (ValueError, UnicodeError, json.JSONDecodeError):
+                        pass
+                elif "://" in value and "#" in value:
+                    embedded_names.append(unquote(value.rsplit("#", 1)[1]).strip())
+        content = "\n".join([*candidates, *embedded_names])
+        result: dict[str, Any] = {}
+        remaining = re.search(
+            r"(?:剩余流量|流量剩余|剩余)\s*[:：]\s*([0-9]+(?:\.[0-9]+)?)\s*(B|KB|MB|GB|TB)",
+            content,
+            flags=re.IGNORECASE,
+        )
+        if remaining:
+            units = {"B": 1, "KB": 1024, "MB": 1024 ** 2, "GB": 1024 ** 3, "TB": 1024 ** 4}
+            result["traffic_remaining_bytes"] = int(float(remaining.group(1)) * units[remaining.group(2).upper()])
+        expiry = re.search(
+            r"(?:套餐到期|到期时间|有效期)\s*[:：]\s*(长期有效|永不过期|永久|[0-9]{4}[-/.年][0-9]{1,2}[-/.月][0-9]{1,2}日?)",
+            content,
+            flags=re.IGNORECASE,
+        )
+        if expiry:
+            label = expiry.group(1).strip()
+            if label in {"长期有效", "永不过期", "永久"}:
+                result["traffic_expire_label"] = "长期有效"
+            else:
+                normalized = re.sub(r"[/.年月]", "-", label).rstrip("日-")
+                try:
+                    expires = datetime.strptime(normalized, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                    result["traffic_expire_at"] = int(expires.timestamp())
+                    result["traffic_expire_label"] = normalized
+                except ValueError:
+                    pass
+        return result
+
+    @classmethod
+    def _refresh_subscription_usage(cls, item: dict[str, Any], raw: bytes, headers: dict[str, str]) -> None:
+        usage = cls._subscription_content_usage(raw)
+        usage.update(cls._subscription_usage(headers))
+        for key in cls.SUBSCRIPTION_USAGE_FIELDS:
+            item.pop(key, None)
+        item.update(usage)
 
     @staticmethod
     def _atomic_text(path: Path, text: str, mode: int = 0o600) -> None:
@@ -724,7 +799,7 @@ class ProxyPoolAdminService:
                     raw, headers = await self._download_details(url)
                     raw_hash = hashlib.sha256(raw).hexdigest()
                     existing = self.provider_dir / filename
-                    if str(item.get("subscription_content_hash") or "") == raw_hash and existing.is_file():
+                    if not force and str(item.get("subscription_content_hash") or "") == raw_hash and existing.is_file():
                         cached = yaml.safe_load(existing.read_text(encoding="utf-8"))
                         proxies = [entry for entry in (cached.get("proxies") or []) if isinstance(entry, dict)]
                     else:
@@ -736,8 +811,8 @@ class ProxyPoolAdminService:
                         status="validated", node_count=len(proxies), last_error="",
                         last_checked_at=now, updated_at=now,
                         subscription_content_hash=raw_hash,
-                        **self._subscription_usage(headers),
                     )
+                    self._refresh_subscription_usage(item, raw, headers)
                 except Exception as exc:
                     item.update(status="error", last_error=str(exc)[:300], last_checked_at=now, updated_at=now)
                     existing = self.provider_dir / filename
@@ -884,9 +959,12 @@ class ProxyPoolAdminService:
     async def add_subscription(self, body: dict[str, Any]) -> dict[str, Any]:
         self._ensure_enabled()
         name = str(body.get("name") or "").strip()[:80]
+        note = str(body.get("note") or "").strip()
         url = str(body.get("url") or "").strip()
         if not name:
             raise ValueError("订阅名称不能为空")
+        if len(note) > 100:
+            raise ValueError("订阅备注不能超过 100 个字符")
         host, _ = await asyncio.to_thread(self._validate_remote_url, url)
         raw, headers = await self._download_details(url)
         node_count = self._subscription_node_count(raw)
@@ -909,8 +987,10 @@ class ProxyPoolAdminService:
             "updated_at": now,
             "last_checked_at": now,
             "last_error": "",
-            **self._subscription_usage(headers),
         }
+        self._refresh_subscription_usage(item, raw, headers)
+        if note:
+            item["note_encrypted"] = self.cipher.encrypt({"note": note})
         registry["subscriptions"].append(item)
         self._atomic_json(self.registry_path, registry, backup=True)
         try:
@@ -935,6 +1015,27 @@ class ProxyPoolAdminService:
         if not item:
             raise KeyError(source_id)
         previous = dict(item)
+        if "name" in body:
+            name = str(body.get("name") or "").strip()
+            if not name:
+                raise ValueError("订阅名称不能为空")
+            if len(name) > 80:
+                raise ValueError("订阅名称不能超过 80 个字符")
+            if any(
+                str(entry.get("id")) != source_id
+                and str(entry.get("name") or "").casefold() == name.casefold()
+                for entry in registry["subscriptions"]
+            ):
+                raise ValueError("订阅名称已存在")
+            item["name"] = name
+        if "note" in body:
+            note = str(body.get("note") or "").strip()
+            if len(note) > 100:
+                raise ValueError("订阅备注不能超过 100 个字符")
+            if note:
+                item["note_encrypted"] = self.cipher.encrypt({"note": note})
+            else:
+                item.pop("note_encrypted", None)
         if "enabled" in body:
             item["enabled"] = _as_bool(body.get("enabled"), True)
         if "max_healthy_nodes" in body:
@@ -1018,13 +1119,7 @@ class ProxyPoolAdminService:
             url = str(self.cipher.decrypt(str(item.get("url_encrypted") or "")).get("url") or "")
             raw, headers = await self._download_details(url)
             item.update(status="validated", node_count=self._subscription_node_count(raw), last_error="")
-            usage = self._subscription_usage(headers)
-            for key in (
-                "traffic_upload_bytes", "traffic_download_bytes", "traffic_used_bytes",
-                "traffic_total_bytes", "traffic_remaining_bytes", "traffic_expire_at",
-            ):
-                if key in usage:
-                    item[key] = usage[key]
+            self._refresh_subscription_usage(item, raw, headers)
         except Exception as exc:
             item.update(status="error", last_error=str(exc)[:300])
         item["last_checked_at"] = _utc_now()

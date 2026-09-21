@@ -138,12 +138,15 @@ class StoreService:
         if "plan_count" in data:
             data["plan_count"] = int(data.get("plan_count") or 0)
         group_id = int(data.get("id") or 0)
+        # Mapping rules are edited from the admin UI and must take effect on
+        # the very next request.  Do not rely on a process-local cache here:
+        # a request can arrive through a different auth/session path after a
+        # rule is saved, and stale cached group data would silently bypass the
+        # new mapping until a backend restart.  The query is small (only the
+        # mappings assigned to one group) and keeps the runtime behaviour
+        # deterministic across workers and deployment modes.
         mapping_loader = getattr(self.mapper, "list_group_model_mappings", None)
-        cache = getattr(self, "_group_mapping_cache", {})
-        if group_id and group_id not in cache:
-            cache[group_id] = [dict(item) for item in (mapping_loader(group_id) if mapping_loader else [])]
-            self._group_mapping_cache = cache
-        mapping_rows = cache.get(group_id, [])
+        mapping_rows = [dict(item) for item in (mapping_loader(group_id) if mapping_loader and group_id else [])]
         data["model_mappings"] = [self._public_model_mapping(item) for item in (mapping_rows or [])]
         data["model_mapping_ids"] = [int(item["id"]) for item in data["model_mappings"]]
         return data

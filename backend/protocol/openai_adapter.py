@@ -711,11 +711,18 @@ async def openai_models(request: Request):
         seen.add(item.get("id"))
         data.append({
             "id": item["id"],
+            # Codex's model manager uses ``slug`` as the stable model key;
+            # OpenAI-compatible clients ignore this additional metadata.
+            "slug": item["id"],
             "object": "model",
             "created": now,
             "owned_by": item.get("provider", "rose"),
         })
-    return JSONResponse({"object": "list", "data": data})
+    # OpenAI clients consume ``data``. Codex's model manager also accepts the
+    # gateway's historical ``models`` envelope and rejects a response that only
+    # contains ``data`` while refreshing its catalog. Keep both aliases so
+    # startup discovery is compatible with both client families.
+    return JSONResponse({"object": "list", "data": data, "models": data})
 
 
 def register_proxy_route(app):

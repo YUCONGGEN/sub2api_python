@@ -7,6 +7,7 @@ import json
 import math
 import threading
 import time
+import uuid
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -43,6 +44,7 @@ OPENAI_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses"
 OPENAI_MODELS_URL = "https://chatgpt.com/backend-api/codex/models"
 OPENAI_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 OPENAI_RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
+OPENAI_RESET_CREDITS_CONSUME_URL = OPENAI_RESET_CREDITS_URL + "/consume"
 CLAUDE_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 CLAUDE_COUNT_TOKENS_URL = "https://api.anthropic.com/v1/messages/count_tokens"
 CLAUDE_MODELS_URL = "https://api.anthropic.com/v1/models"
@@ -1636,6 +1638,68 @@ class SubscriptionGatewayService:
         finally:
             if response is not None and not response.is_closed:
                 await response.aclose()
+
+    async def _quota_reset_request(self, headers: dict[str, str], redeem_request_id: str) -> tuple[int, bytes]:
+        request_headers = {**headers, "Content-Type": "application/json"}
+        request = self._client().build_request(
+            "POST",
+            OPENAI_RESET_CREDITS_CONSUME_URL,
+            headers=request_headers,
+            json={"redeem_request_id": redeem_request_id},
+        )
+        response: httpx.Response | None = None
+        try:
+            response = await self._client().send(request, stream=False)
+            body = await response.aread()
+            return int(response.status_code), body
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            # The upstream may have consumed the non-refundable credit before
+            # the connection failed. Make the ambiguity explicit so callers do
+            # not immediately retry and accidentally spend another credit.
+            raise ValueError("重置请求结果未知，请先刷新订阅余量确认，不要重复点击") from exc
+        finally:
+            if response is not None and not response.is_closed:
+                await response.aclose()
+
+    async def reset_account_quota(self, account_id: int) -> dict[str, Any]:
+        """Consume one OpenAI reset credit and return a fresh quota snapshot."""
+        account_id = int(account_id)
+        redeem_request_id = str(uuid.uuid4())
+        async with self._quota_lock(account_id):
+            fresh = await self.accounts.refresh_account(account_id, force=False)
+            account = fresh["account"]
+            if str(account.get("provider") or "") != "openai":
+                raise ValueError("只有 OpenAI / Codex 订阅支持额度重置")
+            headers = self._openai_quota_headers(fresh["credentials"], account)
+            status, body = await self._quota_reset_request(headers, redeem_request_id)
+            if status == 401 and str(fresh["credentials"].get("refresh_token") or "").strip():
+                fresh = await self.accounts.refresh_account(account_id, force=True)
+                account = fresh["account"]
+                headers = self._openai_quota_headers(fresh["credentials"], account)
+                status, body = await self._quota_reset_request(headers, redeem_request_id)
+            if status < 200 or status >= 300:
+                detail = self._error_detail(httpx.Response(status), body)
+                raise ValueError(f"额度重置失败（HTTP {status}）：{detail}")
+            try:
+                upstream = json.loads(body.decode("utf-8")) if body.strip() else {}
+            except (UnicodeDecodeError, ValueError):
+                upstream = {}
+            if not isinstance(upstream, dict):
+                upstream = {}
+            with self._safety_lock:
+                self._quota_cache.pop(account_id, None)
+
+        result = {
+            "ok": True,
+            "code": str(upstream.get("code") or "").strip(),
+            "windows_reset": max(0, self._quota_int(upstream.get("windows_reset"))),
+            "quota": None,
+        }
+        try:
+            result["quota"] = await self.query_account_quota(account_id, force=True)
+        except ValueError:
+            result["warning"] = "重置次数已提交，但最新余量回查失败；请稍后刷新确认，不要重复点击"
+        return result
 
     async def query_account_quota(self, account_id: int, force: bool = False) -> dict[str, Any]:
         account_id = int(account_id)

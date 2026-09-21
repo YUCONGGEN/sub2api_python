@@ -3,6 +3,7 @@ import base64
 import hashlib
 import json
 import logging
+import uuid
 from copy import deepcopy
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
@@ -685,6 +686,55 @@ def test_subscription_quota_refreshes_expired_oauth_token_once():
     assert [request.headers["authorization"] for request in client.requests] == [
         "Bearer expired-token", "Bearer fresh-token", "Bearer fresh-token",
     ]
+
+
+def test_subscription_quota_reset_consumes_one_credit_and_refreshes_snapshot():
+    usage = {
+        "plan_type": "pro",
+        "rate_limit": {
+            "allowed": True,
+            "limit_reached": False,
+            "primary_window": {"used_percent": 0, "limit_window_seconds": 18000},
+            "secondary_window": {"used_percent": 0, "limit_window_seconds": 604800},
+        },
+    }
+    client = SequenceClient([
+        httpx.Response(200, json={"code": "reset", "windows_reset": 2}),
+        httpx.Response(200, json=usage),
+        httpx.Response(200, json={"available_count": 1, "credits": []}),
+    ])
+    gateway = configured_gateway(QuotaAccounts(), RecordingStore(), client)
+
+    result = asyncio.run(gateway.reset_account_quota(3))
+
+    assert result["ok"] is True
+    assert result["windows_reset"] == 2
+    assert result["quota"]["reset_credits"]["available_count"] == 1
+    reset_request = client.requests[0]
+    assert reset_request.method == "POST"
+    assert reset_request.url == httpx.URL("https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume")
+    payload = json.loads(reset_request.content)
+    assert str(uuid.UUID(payload["redeem_request_id"])) == payload["redeem_request_id"]
+    assert reset_request.headers["authorization"] == "Bearer quota-token"
+    assert [request.method for request in client.requests] == ["POST", "GET", "GET"]
+
+
+def test_subscription_quota_reset_reuses_redeem_id_after_token_refresh():
+    accounts = RefreshingQuotaAccounts()
+    client = SequenceClient([
+        httpx.Response(401, json={"detail": "token expired"}),
+        httpx.Response(200, json={"code": "reset", "windows_reset": 1}),
+        httpx.Response(200, json={"rate_limit": {"allowed": True}}),
+        httpx.Response(200, json={"available_count": 0}),
+    ])
+    gateway = configured_gateway(accounts, RecordingStore(), client)
+
+    result = asyncio.run(gateway.reset_account_quota(3))
+
+    assert result["windows_reset"] == 1
+    assert accounts.refresh_calls == [False, True, False]
+    assert json.loads(client.requests[0].content)["redeem_request_id"] == json.loads(client.requests[1].content)["redeem_request_id"]
+    assert [request.headers["authorization"] for request in client.requests[:2]] == ["Bearer expired-token", "Bearer fresh-token"]
 
 
 def test_only_low_weekly_quota_disables_subscription_account():

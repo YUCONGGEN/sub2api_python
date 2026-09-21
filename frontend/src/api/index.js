@@ -138,6 +138,7 @@ export const api = {
   refreshUpstreamSubscription: id => client.post(`/api/upstream-subscriptions/${id}/refresh`),
   testUpstreamSubscription: id => client.post(`/api/upstream-subscriptions/${id}/test`),
   upstreamSubscriptionQuota: (id, refresh = false) => client.get(`/api/upstream-subscriptions/${id}/quota`, { params: { refresh } }),
+  resetUpstreamSubscriptionQuota: id => client.post(`/api/upstream-subscriptions/${id}/quota/reset`, undefined, { timeout: 90000 }),
   upstreamConfigRequests: params => client.get('/api/upstream-subscriptions/config-requests', { params }),
   createUpstreamConfigRequest: body => client.post('/api/upstream-subscriptions/config-requests', body),
   revealUpstreamConfigRequest: id => client.get(`/api/upstream-subscriptions/config-requests/${id}/secret`),

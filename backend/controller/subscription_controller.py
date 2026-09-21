@@ -234,6 +234,25 @@ class SubscriptionController:
             return bad(str(exc), 502)
         return ok({"ok": True, "quota": quota})
 
+    @PostMapping("/{account_id}/quota/reset")
+    async def reset_account_quota(self, account_id: int = PathVariable(name="account_id"), authorization: str = RequestHeader(name="Authorization", required=False)):
+        user = self._user(authorization)
+        error = self._available(user)
+        if error:
+            return error
+        if not self.accounts.quota_visible(user):
+            return forbidden("订阅剩余量当前仅管理员可见")
+        row, denied = self._managed(user, account_id)
+        if denied:
+            return denied
+        if str(row.get("provider") or "") != "openai":
+            return bad("只有 OpenAI / Codex 订阅支持额度重置")
+        try:
+            result = await self.gateway.reset_account_quota(account_id)
+        except ValueError as exc:
+            return bad(str(exc), 502)
+        return ok(result, "订阅额度已重置")
+
     @GetMapping("/config-requests")
     def list_config_requests(self, authorization: str = RequestHeader(name="Authorization", required=False), status: str = RequestParam(name="status", required=False, default=""), page: int = RequestParam(name="page", required=False, default=1), page_size: int = RequestParam(name="page_size", required=False, default=20)):
         user = self._user(authorization)

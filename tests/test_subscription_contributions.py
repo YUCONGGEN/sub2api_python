@@ -234,3 +234,38 @@ def test_regular_account_owner_cannot_bypass_five_minute_quota_cache():
 
     assert result.code == 200
     assert calls == [(9, False)]
+
+
+def test_account_owner_can_reset_own_openai_quota():
+    controller = SubscriptionController.__new__(SubscriptionController)
+    user = {"id": 7, "role": "USER"}
+    controller.auth = type("Auth", (), {"user_from_authorization": lambda self, token: user})()
+    controller.accounts = make_service()
+    controller.accounts.repository.find = lambda account_id: account_row(7)
+    calls = []
+
+    class Gateway:
+        async def reset_account_quota(self, account_id):
+            calls.append(account_id)
+            return {"ok": True, "windows_reset": 2, "quota": {"reset_credits": {"available_count": 0}}}
+
+    controller.gateway = Gateway()
+    result = asyncio.run(controller.reset_account_quota(9, authorization="Bearer owner-token"))
+
+    assert result.code == 200
+    assert result.data["windows_reset"] == 2
+    assert calls == [9]
+
+
+def test_regular_user_cannot_reset_another_users_openai_quota():
+    controller = SubscriptionController.__new__(SubscriptionController)
+    user = {"id": 7, "role": "USER"}
+    controller.auth = type("Auth", (), {"user_from_authorization": lambda self, token: user})()
+    controller.accounts = make_service()
+    controller.accounts.repository.find = lambda account_id: account_row(12)
+    controller.gateway = type("Gateway", (), {})()
+
+    result = asyncio.run(controller.reset_account_quota(9, authorization="Bearer user-token"))
+
+    assert result.code == 403
+    assert result.message == "只能管理自己添加的订阅账号"

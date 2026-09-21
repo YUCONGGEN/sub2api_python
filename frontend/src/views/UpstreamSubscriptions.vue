@@ -123,7 +123,7 @@
                 </div>
                 <div v-if="!quotaWindows(quotaState(account).quota).length" class="quota-empty">上游暂未返回用量窗口</div>
               </div>
-              <div class="quota-reset"><span><small>可用重置次数</small><b>{{ resetCreditCount(quotaState(account).quota) }}</b></span><span><small>最近查询</small><b>{{ displayTime(quotaState(account).quota.fetched_at) }}</b></span></div>
+              <div class="quota-reset"><span><small>可用重置次数</small><span class="quota-reset-value"><b>{{ resetCreditCount(quotaState(account).quota) }}</b><button v-if="account.can_manage && hasResetCredit(quotaState(account).quota)" type="button" :disabled="quotaResetId === account.id || quotaState(account).loading" @click="resetAccountQuota(account)">{{ quotaResetId === account.id ? '重置中…' : '重置额度' }}</button></span></span><span><small>最近查询</small><b>{{ displayTime(quotaState(account).quota.fetched_at) }}</b></span></div>
               <p v-if="quotaState(account).quota.warning" class="quota-warning">{{ quotaState(account).quota.warning }}</p>
             </template>
           </div>
@@ -215,7 +215,7 @@ export default {
   name: 'UpstreamSubscriptions',
   components: { GatewayActivity },
   props: { user: { type: Object, default: null }, subscriptionContributionsEnabled: { type: Boolean, default: false } },
-  data: () => ({ providers: PROVIDERS, accounts: [], summary: {}, gatewayMetrics: {}, quotaByAccount: {}, pagination: { page: 1, pages: 1, total: 0 }, error: '', loading: false, busy: false, actionId: null, filter: '', showForm: false, editingId: null, oauthSession: null, gatewayEnabled: false, quotaVisible: true, metricsTimer: null, configRequests: [], requestPagination: { page: 1, page_size: 5, pages: 1, total: 0 }, requestLoading: false, requestBusy: false, requestForm: { url: '', api_key: '', model_id: '', use_proxy: false }, form: defaults('openai'), pricingAccount: null, pricingRows: [], pricingBusy: false }),
+  data: () => ({ providers: PROVIDERS, accounts: [], summary: {}, gatewayMetrics: {}, quotaByAccount: {}, quotaResetId: null, pagination: { page: 1, pages: 1, total: 0 }, error: '', loading: false, busy: false, actionId: null, filter: '', showForm: false, editingId: null, oauthSession: null, gatewayEnabled: false, quotaVisible: true, metricsTimer: null, configRequests: [], requestPagination: { page: 1, page_size: 5, pages: 1, total: 0 }, requestLoading: false, requestBusy: false, requestForm: { url: '', api_key: '', model_id: '', use_proxy: false }, form: defaults('openai'), pricingAccount: null, pricingRows: [], pricingBusy: false }),
   computed: { isAdmin () { return String(this.user?.role || '').toUpperCase() === 'ADMIN' }, otherProviderCount () { return PROVIDERS.filter(item => item.id !== 'openai').reduce((sum, item) => sum + this.providerCount(item.id), 0) } },
   watch: { 'form.provider' (next, previous) { if (!this.editingId && !this.oauthSession && next !== previous) { const fresh = defaults(next); this.form.models = fresh.models; this.form.mode = fresh.mode } } },
   created () { this.load(); this.loadConfigRequests(); if (this.isAdmin) this.metricsTimer = window.setInterval(this.refreshGatewayMetrics, 5000) },
@@ -260,6 +260,7 @@ export default {
     quotaWindows (quota) { return [quota?.short_window, quota?.long_window].filter(Boolean) },
     quotaPercent (value) { return Math.min(100, Math.max(0, Number(value || 0))).toFixed(1).replace(/\.0$/, '') },
     resetCreditCount (quota) { const value = quota?.reset_credits?.available_count; return value === null || value === undefined ? '未提供' : `${Number(value).toLocaleString('zh-CN')} 次` },
+    hasResetCredit (quota) { return Number(quota?.reset_credits?.available_count || 0) > 0 },
     setQuotaState (accountId, value) { this.quotaByAccount = { ...this.quotaByAccount, [accountId]: value } },
     async loadAccountQuota (account, refresh = false, quiet = false) {
       if (!this.quotaVisible || account.provider !== 'openai') return
@@ -282,6 +283,25 @@ export default {
       }
     },
     loadAccountQuotas () { if (!this.quotaVisible) return; this.accounts.filter(account => account.provider === 'openai').forEach(account => this.loadAccountQuota(account, this.isAdmin && !!account.can_manage, true)) },
+    async resetAccountQuota (account) {
+      if (!account?.can_manage || !this.hasResetCredit(this.quotaState(account).quota) || this.quotaResetId !== null) return
+      const count = this.resetCreditCount(this.quotaState(account).quota)
+      if (!await askConfirm(`确定消耗 1 次重置次数，立即重置“${account.name}”的订阅额度吗？当前可用 ${count}，操作不可撤销。`)) return
+      this.quotaResetId = account.id
+      try {
+        const data = await api.resetUpstreamSubscriptionQuota(account.id)
+        if (data.quota) {
+          this.setQuotaState(account.id, { loading: false, quota: data.quota, error: '' })
+        } else {
+          this.setQuotaState(account.id, { loading: false, quota: null, error: data.warning || '额度已提交重置，请稍后刷新确认，不要重复点击' })
+        }
+        const windows = Number(data.windows_reset || 0)
+        notify(windows > 0 ? `订阅额度已重置，共恢复 ${windows} 个用量窗口` : '重置请求已成功提交，订阅余量已更新', 'success')
+        if (data.warning) notify(data.warning, 'error')
+      } catch (error) {
+        notify(error.message || '订阅额度重置失败', 'error')
+      } finally { this.quotaResetId = null }
+    },
     statusClass (account) { return account.enabled ? String(account.status || 'READY').toLowerCase() : 'disabled' },
     statusText (account) { if (!account.enabled) return '已停用'; return ({ READY: '可用', INVALID: '凭据失效', COOLDOWN: '冷却中', DISABLED: '已停用' })[account.status] || account.status },
     displayTime (value) { if (!value) return '—'; const date = new Date(value); return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN') },
@@ -515,6 +535,17 @@ export default {
 .quota-reset { padding-top:8px;border-top:1px solid #e1ebef; }
 .quota-reset>span { display:grid;gap:3px;min-width:0; }
 .quota-reset>span:last-child { text-align:right; }
+.quota-reset-value { display:flex;align-items:center;gap:7px; }
+.quota-reset-value button {
+  padding:3px 7px;
+  border:1px solid #d0b46a;
+  border-radius:6px;
+  background:#fff9e8;
+  color:#795f1d;
+  font-size:9px;
+  cursor:pointer;
+}
+.quota-reset-value button:disabled { opacity:.6;cursor:wait; }
 .quota-reset b {
   overflow:hidden;
   color:#355a70;
@@ -605,6 +636,7 @@ export default {
 :global(html[data-theme="dark"] .quota-readonly) { color:#91a9b7; }
 :global(html[data-theme="dark"] .quota-window i) { background:#294554; }
 :global(html[data-theme="dark"] .quota-reset) { border-color:#2d4959; }
+:global(html[data-theme="dark"] .quota-reset-value button) { border-color:#6b5a2d;background:#302a19;color:#e2cd8b; }
 :global(html[data-theme="dark"] .account-actions) { border-color:#2d4657; }
 :global(html[data-theme="dark"] .account-actions .secondary-btn) { border-color:#3a5869;background:#1c3140;color:#b6cbd6; }
 :global(html[data-theme="dark"] .account-actions .secondary-btn:hover) { border-color:#527a8d;background:#23404f;color:#d4e5ec; }

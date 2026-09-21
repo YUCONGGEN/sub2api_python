@@ -717,6 +717,7 @@ async def openai_models(request: Request):
             "display_name": item.get("id", "Rose model"),
             "description": item.get("description", "OpenAI-compatible model"),
             "supported_reasoning_efforts": list(item.get("reasoning_levels") or ["none", "low", "medium", "high", "xhigh"]),
+            "supported_reasoning_levels": list(item.get("reasoning_levels") or ["none", "low", "medium", "high", "xhigh"]),
             "default_reasoning_effort": item.get("reasoning_effort") or "high",
             "input_modalities": ["text", "image"] if item.get("supports_image") else ["text"],
             "output_modalities": ["text"],

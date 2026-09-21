@@ -149,6 +149,22 @@ def test_responses_tools_are_normalized_for_chat_upstreams():
     ]
 
 
+def test_developer_role_is_normalized_only_for_chat_wire_payloads():
+    model = ReliableOpenAIChatModel.__new__(ReliableOpenAIChatModel)
+    model.model = "deepseek-v4-pro"
+    model.temperature = 0.7
+    model.endpoint = "chat"
+    payload = model._http_payload([
+        {"role": "developer", "content": "instructions"},
+        {"role": "user", "content": "hello"},
+    ])
+    assert [item["role"] for item in payload["messages"]] == ["system", "user"]
+
+    model.endpoint = "responses"
+    payload = model._http_payload([{"role": "developer", "content": "instructions"}])
+    assert payload["input"][0]["role"] == "developer"
+
+
 @pytest.mark.parametrize("mode", ["sync", "async", "stream", "async_stream"])
 @pytest.mark.parametrize("configured_effort", ["high", "medium"])
 def test_all_api_invocation_paths_send_configured_effort_for_resolved_default_model(mode, configured_effort):

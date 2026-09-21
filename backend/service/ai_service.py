@@ -255,6 +255,14 @@ class ReliableOpenAIChatModel(OpenAIChatModel):
             serialized_messages = messages
         else:
             serialized_messages = [self._serialize_msg(message) for message in messages]
+        if getattr(self, "endpoint", "chat") == "chat":
+            # Codex Responses uses the OpenAI ``developer`` role.  Chat
+            # compatible providers such as DeepSeek accept the same content
+            # as a system message but reject the developer role with 422.
+            serialized_messages = [
+                ({**message, "role": "system"} if isinstance(message, dict) and message.get("role") == "developer" else message)
+                for message in serialized_messages
+            ]
         request_options = dict(options or {})
         upstream_model = str(request_options.pop("_rose_upstream_model", "") or self.model)
         payload = {

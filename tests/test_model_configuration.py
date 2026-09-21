@@ -248,11 +248,11 @@ def test_public_config_expands_one_fallback_connection_into_real_model_ids(monke
         "models": [{
             "id": "openai",
             "enabled": True,
-            "catalog-models": ["gpt-5.6-sol", "gpt-6-astra"],
+            "catalog-models": ["codex-auto-review", "gpt-5.6-sol", "gpt-6-astra"],
         }],
     }})
     models = config_controller.ConfigController().public_config().data["models"]
-    assert [item["id"] for item in models] == ["gpt-5.6-sol", "gpt-6-astra"]
+    assert [item["id"] for item in models] == ["codex-auto-review", "gpt-5.6-sol", "gpt-6-astra"]
 
 
 def test_gateway_catalog_expands_fallback_connection_for_plaza_and_monitoring():
@@ -264,7 +264,7 @@ def test_gateway_catalog_expands_fallback_connection_for_plaza_and_monitoring():
         "endpoint": "Responses",
         "group": "OpenAI API Fallback",
         "upstream-model": "openai",
-        "catalog-models": ["gpt-5.6-sol", "gpt-6-astra"],
+        "catalog-models": ["codex-auto-review", "gpt-5.6-sol", "gpt-6-astra"],
         "api-key": "test-key",
         "currency": "CNY",
         "pricing": {
@@ -277,10 +277,10 @@ def test_gateway_catalog_expands_fallback_connection_for_plaza_and_monitoring():
     gateway.refresh_health = lambda force=False: gateway.health
 
     models = gateway.catalog()
-    assert [item["id"] for item in models] == ["gpt-5.6-sol", "gpt-6-astra"]
+    assert [item["id"] for item in models] == ["codex-auto-review", "gpt-5.6-sol", "gpt-6-astra"]
     assert all(item["status"] == "正常" for item in models)
     assert all(item["endpoint"] == "Responses" for item in models)
-    assert [item["upstream_model"] for item in models] == ["gpt-5.6-sol", "gpt-6-astra"]
+    assert [item["upstream_model"] for item in models] == ["codex-auto-review", "gpt-5.6-sol", "gpt-6-astra"]
 
 
 def test_group_editor_uses_public_config_catalog_when_monitoring_is_disabled():

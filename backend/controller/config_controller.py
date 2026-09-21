@@ -66,12 +66,19 @@ class ConfigController:
         for item in models if isinstance(models, list) else []:
             if not isinstance(item, dict) or not item.get("id") or item.get("enabled", True) is False:
                 continue
-            model_options.append({
-                "id": str(item["id"]),
-                "reasoning_effort": item.get("reasoning-effort"),
-                "reasoning_levels": list(item.get("reasoning-levels") or []),
-                "description": item.get("description", ""),
-            })
+            catalog_models = item.get("catalog-models")
+            display_ids = (
+                [str(value).strip() for value in catalog_models if str(value).strip()]
+                if isinstance(catalog_models, list) and catalog_models
+                else [str(item["id"])]
+            )
+            for display_id in dict.fromkeys(display_ids):
+                model_options.append({
+                    "id": display_id,
+                    "reasoning_effort": item.get("reasoning-effort"),
+                    "reasoning_levels": list(item.get("reasoning-levels") or []),
+                    "description": item.get("description", ""),
+                })
         return ok({
             "ok": True,
             "name": name,

@@ -243,6 +243,46 @@ def test_public_config_exposes_data_visualization_visibility(monkeypatch):
     assert config_controller.ConfigController().public_config().data["data_visualization_visible"] is False
 
 
+def test_public_config_expands_one_fallback_connection_into_real_model_ids(monkeypatch):
+    monkeypatch.setattr(config_controller, "get_config", lambda: {"rose": {
+        "models": [{
+            "id": "openai",
+            "enabled": True,
+            "catalog-models": ["gpt-5.6-sol", "gpt-6-astra"],
+        }],
+    }})
+    models = config_controller.ConfigController().public_config().data["models"]
+    assert [item["id"] for item in models] == ["gpt-5.6-sol", "gpt-6-astra"]
+
+
+def test_gateway_catalog_expands_fallback_connection_for_plaza_and_monitoring():
+    gateway = ai_service.AiGatewayService(None)
+    gateway.models = {"openai": {
+        "id": "openai",
+        "enabled": True,
+        "provider": "OpenAI",
+        "endpoint": "Responses",
+        "group": "OpenAI API Fallback",
+        "upstream-model": "openai",
+        "catalog-models": ["gpt-5.6-sol", "gpt-6-astra"],
+        "api-key": "test-key",
+        "currency": "CNY",
+        "pricing": {
+            "input-cny-per-million": 1,
+            "output-cny-per-million": 2,
+            "cache-cny-per-million": 0,
+        },
+    }}
+    gateway.health = {"openai": gateway._health_record(gateway.models["openai"], "ok", "正常")}
+    gateway.refresh_health = lambda force=False: gateway.health
+
+    models = gateway.catalog()
+    assert [item["id"] for item in models] == ["gpt-5.6-sol", "gpt-6-astra"]
+    assert all(item["status"] == "正常" for item in models)
+    assert all(item["endpoint"] == "Responses" for item in models)
+    assert [item["upstream_model"] for item in models] == ["gpt-5.6-sol", "gpt-6-astra"]
+
+
 def test_group_editor_uses_public_config_catalog_when_monitoring_is_disabled():
     root = Path(__file__).resolve().parents[1]
     admin = (root / "frontend/src/views/Admin.vue").read_text(encoding="utf-8")

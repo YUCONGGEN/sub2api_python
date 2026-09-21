@@ -911,27 +911,34 @@ class AiGatewayService:
                     "cache-usd-per-million": spec["pricing"].get("cache-usd-per-million", 0),
                 }
             health = self.health.get(spec["id"], self._health_record(spec, "unknown", "尚未检查"))
-            result.append({
-                "id": spec["id"],
-                "provider": spec.get("provider", "OpenAI Compatible"),
-                "endpoint": spec.get("endpoint", "Chat"),
-                "group": spec.get("group", "Default"),
-                "pricing": public_pricing,
-                "currency": currency,
-                # Keep both YAML-style names and concise display fields so a
-                # client can render prices without knowing internal config keys.
-                "input": input_price,
-                "output": output_price,
-                "description": spec.get("description", "OpenAI 兼容模型。"),
-                "enabled": spec.get("enabled", True),
-                "upstream_model": spec.get("upstream-model", spec["id"]),
-                "reasoning_effort": spec.get("reasoning-effort"),
-                "reasoning_levels": list(spec.get("reasoning-levels") or []),
-                "has_upstream_key": bool(str(spec.get("api-key") or "").strip()),
-                "supports_image": self._as_bool(spec.get("supports-image", False), False),
-                "status": health["label"],
-                "health": health,
-            })
+            catalog_models = spec.get("catalog-models")
+            display_ids = (
+                [str(item).strip() for item in catalog_models if str(item).strip()]
+                if isinstance(catalog_models, list) and catalog_models
+                else [spec["id"]]
+            )
+            for display_id in dict.fromkeys(display_ids):
+                result.append({
+                    "id": display_id,
+                    "provider": spec.get("provider", "OpenAI Compatible"),
+                    "endpoint": spec.get("endpoint", "Chat"),
+                    "group": spec.get("group", "Default"),
+                    "pricing": public_pricing,
+                    "currency": currency,
+                    # Keep both YAML-style names and concise display fields so a
+                    # client can render prices without knowing internal config keys.
+                    "input": input_price,
+                    "output": output_price,
+                    "description": spec.get("description", "OpenAI 兼容模型。"),
+                    "enabled": spec.get("enabled", True),
+                    "upstream_model": display_id if len(display_ids) > 1 else spec.get("upstream-model", spec["id"]),
+                    "reasoning_effort": spec.get("reasoning-effort"),
+                    "reasoning_levels": list(spec.get("reasoning-levels") or []),
+                    "has_upstream_key": bool(str(spec.get("api-key") or "").strip()),
+                    "supports_image": self._as_bool(spec.get("supports-image", False), False) or display_id.startswith("gpt-image-"),
+                    "status": health["label"],
+                    "health": health,
+                })
         return result
 
     @staticmethod

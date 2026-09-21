@@ -714,6 +714,15 @@ async def openai_models(request: Request):
             # Codex's model manager uses ``slug`` as the stable model key;
             # OpenAI-compatible clients ignore this additional metadata.
             "slug": item["id"],
+            "display_name": item.get("id", "Rose model"),
+            "description": item.get("description", "OpenAI-compatible model"),
+            "supported_reasoning_efforts": list(item.get("reasoning_levels") or ["none", "low", "medium", "high", "xhigh"]),
+            "default_reasoning_effort": item.get("reasoning_effort") or "high",
+            "input_modalities": ["text", "image"] if item.get("supports_image") else ["text"],
+            "output_modalities": ["text"],
+            "supports_reasoning_summaries": True,
+            "supports_parallel_tool_calls": True,
+            "context_window": 200000,
             "object": "model",
             "created": now,
             "owned_by": item.get("provider", "rose"),

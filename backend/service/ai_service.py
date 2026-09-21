@@ -15,7 +15,7 @@ from springbootai.ai.core import ChatClientBuilder, Message, ChatResponse, Gener
 from springbootai.ai.providers import OpenAIChatModel
 
 from backend.common.multimodal import parse_dsml_tool_calls, text_content as multimodal_text_content
-from backend.common.reasoning import DEFAULT_GPT_REASONING_EFFORT, configured_gpt_reasoning_effort, effective_gpt_reasoning_effort, requested_reasoning_effort
+from backend.common.reasoning import DEFAULT_GPT_REASONING_EFFORT, configured_gpt_reasoning_effort, default_gpt_reasoning_effort, effective_gpt_reasoning_effort, requested_reasoning_effort
 from backend.service.store_service import StoreService
 
 
@@ -643,6 +643,7 @@ class AiGatewayService:
         self.clients: dict[str, Any] = {}
         self.models: dict[str, dict[str, Any]] = {}
         self.model_name = "gpt-5.6-sol"
+        self.openai_subscription_fallback_model = ""
         self.gpt_default_reasoning_effort = DEFAULT_GPT_REASONING_EFFORT
         self.demo_mode = True
         self.pricing = {}
@@ -662,12 +663,16 @@ class AiGatewayService:
         openai_cfg = ai_cfg.get("openai", {}) if isinstance(ai_cfg, dict) else {}
         rose_cfg = cfg.get("rose", {})
         proxy_cfg = rose_cfg.get("proxy", {})
+        subscription_cfg = rose_cfg.get("subscription-gateway", {})
         billing = cfg.get("rose", {}).get("billing", {})
         health_cfg = proxy_cfg.get("health-check", {}) if isinstance(proxy_cfg.get("health-check"), dict) else {}
         transport_cfg = proxy_cfg.get("transport", {}) if isinstance(proxy_cfg.get("transport"), dict) else {}
         self._health_interval = max(5.0, float(health_cfg.get("interval-seconds", proxy_cfg.get("health-check-interval-seconds", 60))))
         self._health_timeout = max(1.0, min(15.0, float(health_cfg.get("timeout-seconds", proxy_cfg.get("health-check-timeout-seconds", 5)))))
         self.model_name = str(proxy_cfg.get("default-model") or proxy_cfg.get("model") or openai_cfg.get("chat", {}).get("model") or "gpt-5.6-sol")
+        self.openai_subscription_fallback_model = str(
+            subscription_cfg.get("openai-fallback-model") or ""
+        ).strip()
         self._use_langchain = self._as_bool(proxy_cfg.get("use-langchain", False), False)
         # Transport settings are shared by all configured upstreams.  They
         # control connection reuse/concurrency without coupling model entries
@@ -828,6 +833,28 @@ class AiGatewayService:
         if not spec.get("enabled", True):
             raise ValueError(f"模型已停用: {selected}")
         return spec
+
+    def apply_openai_subscription_fallback(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Select the configured API model after the subscription pool declines.
+
+        Protocol adapters call this only after every subscription adapter has
+        returned ``None``.  Keep already configured API models untouched and
+        limit the alias to GPT reasoning families so Claude/Grok/Kimi requests
+        cannot accidentally leak into an OpenAI fallback.
+        """
+        fallback_id = self.openai_subscription_fallback_model
+        requested = str(payload.get("model") or self.model_name).strip()
+        if not fallback_id or requested in self.models:
+            return payload
+        if default_gpt_reasoning_effort(requested, self.gpt_default_reasoning_effort) is None:
+            return payload
+        fallback = self.models.get(fallback_id)
+        if not fallback or not fallback.get("enabled", True):
+            return payload
+        provider = str(fallback.get("provider") or "").strip().lower()
+        if provider not in {"openai", "openai compatible", "openai-compatible"}:
+            return payload
+        return {**payload, "model": fallback_id}
 
     def get_pricing(self, model_id: str | None) -> dict[str, Any]:
         return dict(self.model_spec(model_id).get("pricing", {}))

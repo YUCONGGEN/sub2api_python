@@ -176,6 +176,9 @@ rose:
     # 可接入自己有权使用的 OpenAI、Claude、Grok、Kimi、GLM 与 MiniMax 账号。凭据在数据库中
     # 使用独立密钥加密；生产环境必须设置为随机值，修改后旧凭据需要重新授权。
     enabled: ${ROSE_SUBSCRIPTION_GATEWAY_ENABLED:true}
+    # OpenAI/Codex 订阅账号优先；没有可用订阅账号时，将 GPT 请求转给这里指定的
+    # rose.models 模型 ID。留空表示不启用 API 兜底，不会影响 Claude/Kimi 等请求。
+    openai-fallback-model: ${ROSE_SUBSCRIPTION_OPENAI_FALLBACK_MODEL:}
     # Codex 订阅传输的版本兼容标识（不是模型授权）。留空时每 6 小时从官方
     # GitHub release 自动同步；显式填写后固定版本，不再自动更新。
     codex-client-version: ${ROSE_CODEX_CLIENT_VERSION:}
@@ -270,6 +273,18 @@ rose:
   # 每个 URL/API Key/Model ID 可在自己的模型条目内单独设置 use-proxy；
   # false 表示直连，true 表示读取服务器代理环境变量。旧字段 trust-env 仍兼容。
   models: []
+    # 与 subscription-gateway.openai-fallback-model 配套的 API 兜底示例：
+    # - id: openai
+    #   enabled: true
+    #   provider: OpenAI
+    #   endpoint: Chat
+    #   group: OpenAI API Fallback
+    #   upstream-model: openai
+    #   base-url: ${ROSE_OPENAI_FALLBACK_BASE_URL:https://api.example.com/v1}
+    #   api-key: ${ROSE_OPENAI_FALLBACK_API_KEY:}
+    #   use-proxy: false
+    #   timeout-seconds: 180
+    #   demo-mode-when-key-missing: false
     # - id: deepseek-v4-flash
     #   enabled: true
     #   provider: DeepSeek

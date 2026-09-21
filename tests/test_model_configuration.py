@@ -59,6 +59,36 @@ def test_per_model_use_proxy_is_friendly_and_legacy_compatible():
     assert gateway._model_uses_proxy({}) is True
 
 
+def test_openai_subscription_fallback_rewrites_only_unconfigured_gpt_models(monkeypatch):
+    gateway = init_gateway(monkeypatch, {
+        "subscription-gateway": {"openai-fallback-model": "openai"},
+        "models": [
+            {"id": "openai", "provider": "OpenAI", "enabled": True},
+            {"id": "configured-gpt", "provider": "OpenAI", "enabled": True},
+        ],
+    })
+
+    original = {"model": "gpt-5.6-sol", "messages": [{"role": "user", "content": "hi"}]}
+    routed = gateway.apply_openai_subscription_fallback(original)
+    assert routed["model"] == "openai"
+    assert original["model"] == "gpt-5.6-sol"
+    assert gateway.apply_openai_subscription_fallback({"model": "configured-gpt"})["model"] == "configured-gpt"
+    assert gateway.apply_openai_subscription_fallback({"model": "claude-opus-5"})["model"] == "claude-opus-5"
+
+
+@pytest.mark.parametrize("fallback", ["", "missing", "disabled", "not-openai"])
+def test_openai_subscription_fallback_requires_an_enabled_openai_target(monkeypatch, fallback):
+    gateway = init_gateway(monkeypatch, {
+        "subscription-gateway": {"openai-fallback-model": fallback},
+        "models": [
+            {"id": "disabled", "provider": "OpenAI", "enabled": False},
+            {"id": "not-openai", "provider": "Custom", "enabled": True},
+        ],
+    })
+    payload = {"model": "gpt-5.6-sol"}
+    assert gateway.apply_openai_subscription_fallback(payload) is payload
+
+
 def test_empty_api_catalog_keeps_subscription_models(monkeypatch):
     gateway = init_gateway(monkeypatch, {"models": []})
     subscriptions = [

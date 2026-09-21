@@ -103,6 +103,7 @@ async def openai_chat(request: Request):
     subscription_response = await maybe_proxy_compatible_chat_subscription(request, payload, user)
     if subscription_response is not None:
         return subscription_response
+    payload = service.apply_openai_subscription_fallback(payload)
     request_id = "chatcmpl-" + uuid.uuid4().hex
     # Persist only usage metadata.  Run the small bookkeeping insert in the
     # default executor so it overlaps the upstream network wait and cannot
@@ -413,6 +414,7 @@ async def openai_responses(request: Request):
     subscription_response = await maybe_proxy_openai_subscription(request, payload, user)
     if subscription_response is not None:
         return subscription_response
+    payload = service.apply_openai_subscription_fallback(payload)
     try:
         messages = _responses_input_to_messages(payload.get("input"))
         if not messages:

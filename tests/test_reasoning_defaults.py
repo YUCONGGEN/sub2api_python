@@ -134,6 +134,21 @@ def test_api_options_preserve_explicit_effort_and_use_resolved_upstream_name():
     assert AiGatewayService._request_options({"model": "deepseek-v4-flash"}, reasoning_effort="medium") == {"reasoning_effort": "medium"}
 
 
+def test_responses_tools_are_normalized_for_chat_upstreams():
+    options = AiGatewayService._request_options({
+        "model": "deepseek-v4-pro",
+        "tools": [
+            {"type": "function", "name": "apply_patch", "description": "edit", "parameters": {"type": "object"}},
+            {"type": "custom", "name": "lookup", "input_schema": {"type": "object"}},
+            {"type": "web_search_preview"},
+        ],
+    })
+    assert options["tools"] == [
+        {"type": "function", "function": {"name": "apply_patch", "description": "edit", "parameters": {"type": "object"}}},
+        {"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}},
+    ]
+
+
 @pytest.mark.parametrize("mode", ["sync", "async", "stream", "async_stream"])
 @pytest.mark.parametrize("configured_effort", ["high", "medium"])
 def test_all_api_invocation_paths_send_configured_effort_for_resolved_default_model(mode, configured_effort):

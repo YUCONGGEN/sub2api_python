@@ -1101,6 +1101,43 @@ class AiGatewayService:
         return answer, usage, model
 
     @staticmethod
+    def _normalize_chat_tools(value: Any) -> list[dict[str, Any]]:
+        """Convert Responses-style tools to Chat Completions tools.
+
+        Codex sends function tools in the Responses wire format (the function
+        name/schema are flat on the tool object) while many compatible Chat
+        providers, including DeepSeek, require the nested ``function`` shape.
+        Provider-specific built-ins such as web search cannot be executed by a
+        generic Chat upstream and are omitted instead of making the whole
+        request fail with a 4xx validation error.
+        """
+        if not isinstance(value, list):
+            return []
+        normalized: list[dict[str, Any]] = []
+        for raw in value:
+            if not isinstance(raw, dict):
+                continue
+            nested = raw.get("function")
+            if isinstance(nested, dict):
+                item = {"type": "function", "function": dict(nested)}
+                if raw.get("type") and raw.get("type") != "function":
+                    continue
+                normalized.append(item)
+                continue
+            kind = str(raw.get("type") or "function").strip().lower()
+            if kind not in {"function", "custom"} or not raw.get("name"):
+                continue
+            function: dict[str, Any] = {"name": str(raw["name"])}
+            for key in ("description", "parameters", "strict"):
+                if raw.get(key) is not None:
+                    function[key] = raw[key]
+            # Responses custom tools use input_schema instead of parameters.
+            if "parameters" not in function and raw.get("input_schema") is not None:
+                function["parameters"] = raw["input_schema"]
+            normalized.append({"type": "function", "function": function})
+        return normalized
+
+    @staticmethod
     def _request_options(payload: dict, reasoning_effort: str = "", streaming: bool = False, *, model: str | None = None, default_effort: str = DEFAULT_GPT_REASONING_EFFORT) -> dict[str, Any]:
         """Forward OpenAI-compatible generation controls to the provider."""
         allowed = {
@@ -1110,6 +1147,8 @@ class AiGatewayService:
             "top_logprobs", "modalities", "prediction", "service_tier",
         }
         options = {key: payload[key] for key in allowed if key in payload and payload[key] is not None}
+        if "tools" in options:
+            options["tools"] = AiGatewayService._normalize_chat_tools(options["tools"])
         resolved_model = model if model is not None else payload.get("model")
         requested_reasoning = effective_gpt_reasoning_effort(payload, resolved_model, default_effort)
         if requested_reasoning is None:

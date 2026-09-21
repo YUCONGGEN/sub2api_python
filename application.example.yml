@@ -192,6 +192,9 @@ rose:
     openai-service-tier-policy: ${ROSE_OPENAI_SERVICE_TIER_POLICY:pass}
     credential-secret: ${ROSE_SUBSCRIPTION_CREDENTIAL_SECRET:}
     oauth-timeout-seconds: ${ROSE_SUBSCRIPTION_OAUTH_TIMEOUT_SECONDS:60}
+    # true：自动扫描即将过期的 OAuth Token；默认在距离过期 1 天内提前刷新。
+    token-refresh-enabled: ${ROSE_SUBSCRIPTION_TOKEN_REFRESH_ENABLED:true}
+    token-refresh-ahead-seconds: ${ROSE_SUBSCRIPTION_TOKEN_REFRESH_AHEAD_SECONDS:86400}
     request-timeout-seconds: ${ROSE_SUBSCRIPTION_REQUEST_TIMEOUT_SECONDS:600}
     connect-timeout-seconds: ${ROSE_SUBSCRIPTION_CONNECT_TIMEOUT_SECONDS:10}
     # Windows/macOS 会通过 Python 系统代理发现机制读取操作系统代理；Linux

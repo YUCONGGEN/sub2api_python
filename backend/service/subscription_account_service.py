@@ -7,9 +7,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-from springbootai import Autowired, PostConstruct, Service, Slf4j, Transactional, get_config
+from springbootai import Autowired, PostConstruct, Scheduled, Service, Slf4j, Transactional, get_config
 
-from backend.common.subscription_providers import DEFAULT_MODELS, SUBSCRIPTION_PROVIDERS, provider_label
+from backend.common.subscription_providers import DEFAULT_MODELS, OAUTH_PROVIDERS, SUBSCRIPTION_PROVIDERS, provider_label
 from backend.repository.subscription_repository import SubscriptionRepository
 from backend.service.credential_cipher_service import CredentialCipherService
 from backend.service.subscription_account_pool_service import SubscriptionAccountPoolService
@@ -67,6 +67,8 @@ class SubscriptionAccountService:
         self.cooldown_enabled = True
         self.user_contributions_enabled = True
         self.quota_visible_to_users = True
+        self.auto_token_refresh_enabled = True
+        self.token_refresh_ahead_seconds = 86400
 
     @PostConstruct
     def init(self) -> None:
@@ -74,7 +76,56 @@ class SubscriptionAccountService:
         self.cooldown_enabled = as_bool(cfg.get("account-cooldown-enabled"), True)
         self.user_contributions_enabled = as_bool(cfg.get("user-contributions-enabled"), True)
         self.quota_visible_to_users = as_bool(cfg.get("quota-visible-to-users"), True)
+        self.auto_token_refresh_enabled = as_bool(cfg.get("token-refresh-enabled"), True)
+        self.token_refresh_ahead_seconds = max(
+            300,
+            min(604800, int(cfg.get("token-refresh-ahead-seconds", 86400) or 86400)),
+        )
         self.logger.info("订阅账号临时冷却 enabled=%s", self.cooldown_enabled)
+
+    def _token_refresh_due(
+        self,
+        row: dict[str, Any],
+        credentials: dict[str, Any],
+        now: datetime | None = None,
+    ) -> bool:
+        expires = parse_time(credentials.get("expires_at") or row.get("expires_at"))
+        if not expires:
+            return False
+        refresh_at = (now or datetime.now(timezone.utc)) + timedelta(
+            seconds=int(getattr(self, "token_refresh_ahead_seconds", 86400) or 86400),
+        )
+        return expires <= refresh_at
+
+    @Scheduled(fixed_rate=3600000, initial_delay=60000)
+    async def refresh_expiring_tokens(self) -> None:
+        """Refresh active OAuth tokens before their final 24-hour window."""
+        if not getattr(self, "auto_token_refresh_enabled", True):
+            return
+        now = datetime.now(timezone.utc)
+        refreshed = 0
+        for provider in OAUTH_PROVIDERS:
+            for row in self.repository.list_provider(provider):
+                try:
+                    credentials = self._credentials(row)
+                    if (
+                        not str(credentials.get("refresh_token") or "").strip()
+                        or not self._token_refresh_due(row, credentials, now)
+                    ):
+                        continue
+                    # The scheduler has already applied the configurable
+                    # one-day threshold. Force one refresh here; ordinary
+                    # request-time acquisition keeps its short five-minute
+                    # fallback so it cannot refresh on every API request.
+                    await self.refresh_account(int(row["id"]), force=True)
+                    refreshed += 1
+                except Exception as exc:
+                    self.logger.warning(
+                        "订阅账号令牌提前刷新失败 account_id=%s provider=%s error=%s",
+                        row.get("id"), provider, str(exc)[:300],
+                    )
+        if refreshed:
+            self.logger.info("订阅账号令牌提前刷新完成 count=%s", refreshed)
 
     def _is_cooling(self, row: dict[str, Any], now: datetime | None = None) -> bool:
         if not getattr(self, "cooldown_enabled", True):

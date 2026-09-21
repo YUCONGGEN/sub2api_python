@@ -5,6 +5,7 @@ import json
 import logging
 import uuid
 from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
@@ -293,6 +294,78 @@ def test_account_acquire_falls_back_to_lower_priority_when_refresh_fails():
     selected, _ = asyncio.run(service.acquire("openai", "gpt-test"))
 
     assert selected["id"] == 1
+
+
+def test_scheduled_token_refresh_only_refreshes_accounts_expiring_within_one_day():
+    now = datetime.now(timezone.utc)
+    due = account(1)
+    due["expires_at"] = (now + timedelta(hours=23)).isoformat()
+    due["credentials_encrypted"] = json.dumps({
+        "access_token": "old-due-token",
+        "refresh_token": "refresh-due",
+        "expires_at": due["expires_at"],
+    })
+    later = account(2)
+    later["expires_at"] = (now + timedelta(hours=25)).isoformat()
+    later["credentials_encrypted"] = json.dumps({
+        "access_token": "old-later-token",
+        "refresh_token": "refresh-later",
+        "expires_at": later["expires_at"],
+    })
+
+    class RecordingOAuth:
+        def __init__(self):
+            self.calls = []
+
+        async def refresh(self, provider, refresh_token):
+            self.calls.append((provider, refresh_token))
+            return {
+                "access_token": "fresh-token",
+                "refresh_token": refresh_token,
+                "expires_at": (now + timedelta(days=7)).isoformat(),
+            }
+
+    repository = MemoryRepository([due, later])
+    oauth = RecordingOAuth()
+    service = SubscriptionAccountService(
+        repository, JsonCipher(), oauth, SubscriptionAccountPoolService(),
+    )
+    service.logger = logging.getLogger("test.subscription.token-refresh")
+
+    asyncio.run(service.refresh_expiring_tokens())
+
+    assert oauth.calls == [("openai", "refresh-due")]
+    assert json.loads(repository.find(1)["credentials_encrypted"])["access_token"] == "fresh-token"
+    assert json.loads(repository.find(2)["credentials_encrypted"])["access_token"] == "old-later-token"
+
+
+def test_request_path_keeps_five_minute_refresh_fallback_to_avoid_refresh_storms():
+    now = datetime.now(timezone.utc)
+    row = account(1)
+    row["expires_at"] = (now + timedelta(hours=23)).isoformat()
+    row["credentials_encrypted"] = json.dumps({
+        "access_token": "still-valid-token",
+        "refresh_token": "refresh-token",
+        "expires_at": row["expires_at"],
+    })
+
+    class RecordingOAuth:
+        def __init__(self):
+            self.calls = []
+
+        async def refresh(self, provider, refresh_token):
+            self.calls.append((provider, refresh_token))
+            return {"access_token": "unexpected"}
+
+    oauth = RecordingOAuth()
+    service = SubscriptionAccountService(
+        MemoryRepository([row]), JsonCipher(), oauth, SubscriptionAccountPoolService(),
+    )
+
+    result = asyncio.run(service.refresh_account(1, force=False))
+
+    assert result["credentials"]["access_token"] == "still-valid-token"
+    assert oauth.calls == []
 
 
 def test_gateway_safety_limits_and_hashes_explicit_session_ids():

@@ -1,5 +1,6 @@
 """Configuration-only model removal must not create a phantom API model."""
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,6 +10,7 @@ import yaml
 from backend.controller import config_controller
 from backend.controller.model_controller import ModelController
 from backend.service import ai_service
+from backend.service.ai_service import ReliableOpenAIChatModel
 
 
 def init_gateway(monkeypatch, rose):
@@ -70,10 +72,14 @@ def test_openai_subscription_fallback_rewrites_only_unconfigured_gpt_models(monk
 
     original = {"model": "gpt-5.6-sol", "messages": [{"role": "user", "content": "hi"}]}
     routed = gateway.apply_openai_subscription_fallback(original)
-    assert routed["model"] == "openai"
+    assert routed["model"] == "gpt-5.6-sol"
+    assert routed["_rose_model_id"] == "openai"
+    assert routed["_rose_upstream_model"] == "gpt-5.6-sol"
     assert original["model"] == "gpt-5.6-sol"
     assert gateway.apply_openai_subscription_fallback({"model": "configured-gpt"})["model"] == "configured-gpt"
     assert gateway.apply_openai_subscription_fallback({"model": "claude-opus-5"})["model"] == "claude-opus-5"
+    assert gateway.apply_openai_subscription_fallback({"model": "gpt-image-2"})["_rose_model_id"] == "openai"
+    assert gateway.apply_openai_subscription_fallback({"model": "o4-mini"})["_rose_model_id"] == "openai"
 
 
 @pytest.mark.parametrize("fallback", ["", "missing", "disabled", "not-openai"])
@@ -87,6 +93,70 @@ def test_openai_subscription_fallback_requires_an_enabled_openai_target(monkeypa
     })
     payload = {"model": "gpt-5.6-sol"}
     assert gateway.apply_openai_subscription_fallback(payload) is payload
+
+
+def test_responses_fallback_uses_the_model_requested_by_codex():
+    model = ReliableOpenAIChatModel(
+        api_key="test-key",
+        base_url="https://api.example.com/v1",
+        model="openai",
+        endpoint="Responses",
+    )
+    payload = model._http_payload(
+        [{"role": "user", "content": "hello"}],
+        {
+            "_rose_upstream_model": "gpt-5.6-sol",
+            "reasoning_effort": "high",
+            "max_tokens": 8,
+        },
+        stream=False,
+    )
+    assert model._request_url() == "https://api.example.com/v1/responses"
+    assert payload["model"] == "gpt-5.6-sol"
+    assert payload["input"] == [{"role": "user", "content": "hello"}]
+    assert payload["reasoning"] == {"effort": "high"}
+    assert payload["max_output_tokens"] == 8
+    assert payload["stream"] is False
+    assert "messages" not in payload
+    assert "_rose_upstream_model" not in payload
+
+
+def test_fallback_invocation_uses_openai_client_but_returns_requested_model():
+    calls = []
+
+    class Model:
+        async def acall(self, messages, options=None):
+            calls.append((messages, options))
+            return SimpleNamespace(
+                content=lambda: "ok",
+                metadata={"usage": {"input_tokens": 2, "output_tokens": 1}},
+            )
+
+    gateway = ai_service.AiGatewayService(None)
+    gateway.openai_subscription_fallback_model = "openai"
+    gateway.gpt_default_reasoning_effort = "high"
+    gateway.demo_mode = False
+    gateway.models = {
+        "openai": {
+            "id": "openai",
+            "enabled": True,
+            "provider": "OpenAI",
+            "endpoint": "Responses",
+            "upstream-model": "openai",
+            "demo-mode-when-key-missing": False,
+        }
+    }
+    gateway.clients = {"openai": SimpleNamespace(chat_model=Model())}
+    payload = gateway.apply_openai_subscription_fallback({
+        "model": "gpt-5.6-sol",
+        "messages": [{"role": "user", "content": "hello"}],
+    })
+    answer, usage, model, _ = asyncio.run(gateway.ainvoke_with_trace(payload))
+
+    assert answer == "ok"
+    assert usage == {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3}
+    assert model == "gpt-5.6-sol"
+    assert calls[0][1]["_rose_upstream_model"] == "gpt-5.6-sol"
 
 
 def test_empty_api_catalog_keeps_subscription_models(monkeypatch):

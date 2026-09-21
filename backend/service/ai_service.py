@@ -16,6 +16,7 @@ from springbootai.ai.providers import OpenAIChatModel
 
 from backend.common.multimodal import parse_dsml_tool_calls, text_content as multimodal_text_content
 from backend.common.reasoning import DEFAULT_GPT_REASONING_EFFORT, configured_gpt_reasoning_effort, default_gpt_reasoning_effort, effective_gpt_reasoning_effort, requested_reasoning_effort
+from backend.service.openai_chat_compatibility_service import OpenAIChatCompatibilityService
 from backend.service.store_service import StoreService
 
 
@@ -117,6 +118,7 @@ class ReliableOpenAIChatModel(OpenAIChatModel):
         connect_timeout: float | None = None,
         pool_timeout: float | None = None,
         trust_env: bool = False,
+        endpoint: str = "Chat",
         **kwargs,
     ):
         """Create a SpringBootAI model with reusable transport resources.
@@ -137,6 +139,7 @@ class ReliableOpenAIChatModel(OpenAIChatModel):
         self.connect_timeout = max(0.1, float(connect_timeout if connect_timeout is not None else min(timeout_value, 10.0)))
         self.pool_timeout = max(0.1, float(pool_timeout if pool_timeout is not None else min(timeout_value, 30.0)))
         self.trust_env = bool(trust_env)
+        self.endpoint = "responses" if str(endpoint).strip().lower() == "responses" else "chat"
         self._async_clients: dict[Any, Any] = {}
         self._async_clients_lock = threading.Lock()
         self._sync_sessions: dict[int, Any] = {}
@@ -252,17 +255,35 @@ class ReliableOpenAIChatModel(OpenAIChatModel):
             serialized_messages = messages
         else:
             serialized_messages = [self._serialize_msg(message) for message in messages]
+        request_options = dict(options or {})
+        upstream_model = str(request_options.pop("_rose_upstream_model", "") or self.model)
         payload = {
-            "model": self.model,
+            "model": upstream_model,
             "messages": serialized_messages,
             "temperature": self.temperature,
         }
-        if options:
-            payload.update(options)
+        payload.update(request_options)
         payload["stream"] = bool(stream)
         if not stream:
             payload.pop("stream_options", None)
+        if getattr(self, "endpoint", "chat") == "responses":
+            outgoing = OpenAIChatCompatibilityService().to_responses(payload)
+            outgoing["stream"] = bool(stream)
+            for key in ("max_output_tokens", "max_completion_tokens", "max_tokens"):
+                if payload.get(key) is not None:
+                    outgoing["max_output_tokens"] = payload[key]
+                    break
+            return outgoing
         return payload
+
+    def _request_url(self) -> str:
+        suffix = "responses" if getattr(self, "endpoint", "chat") == "responses" else "chat/completions"
+        return f"{self.base_url}/{suffix}"
+
+    def _wire_response(self, data: dict[str, Any], requested_model: str) -> ChatResponse:
+        if getattr(self, "endpoint", "chat") == "responses":
+            data = OpenAIChatCompatibilityService().from_responses(data, requested_model)
+        return self._chat_response(data)
 
     def _chat_response(self, data: dict[str, Any]) -> ChatResponse:
         choices = data.get("choices") or [{}]
@@ -340,7 +361,7 @@ class ReliableOpenAIChatModel(OpenAIChatModel):
             # repeated TCP/TLS handshake on every request.
             client = self._async_client()
             response = await client.post(
-                f"{self.base_url}/chat/completions",
+                self._request_url(),
                 json=payload,
                 headers={
                     "Authorization": f"Bearer {self.api_key}",
@@ -353,7 +374,7 @@ class ReliableOpenAIChatModel(OpenAIChatModel):
         if response.status_code < 200 or response.status_code >= 300:
             raise UpstreamRequestError(response.status_code, self._provider_error(response))
         try:
-            return self._chat_response(self._response_json(response))
+            return self._wire_response(self._response_json(response), str(payload.get("model") or self.model))
         except (UnicodeDecodeError, ValueError, TypeError) as exc:
             raise RuntimeError("上游返回了无法解析的 JSON") from exc
 
@@ -369,7 +390,7 @@ class ReliableOpenAIChatModel(OpenAIChatModel):
             client = self._async_client()
             async with client.stream(
                 "POST",
-                f"{self.base_url}/chat/completions",
+                self._request_url(),
                 json=payload,
                 headers={
                     "Authorization": f"Bearer {self.api_key}",
@@ -387,9 +408,16 @@ class ReliableOpenAIChatModel(OpenAIChatModel):
                 # A bytearray avoids allocating/copying the complete pending
                 # buffer for every network chunk while retaining strict UTF-8
                 # decoding for Chinese and other non-ASCII output.
+                byte_stream = response.aiter_bytes()
+                if getattr(self, "endpoint", "chat") == "responses":
+                    byte_stream = OpenAIChatCompatibilityService().stream_from_responses(
+                        byte_stream,
+                        str(payload.get("model") or self.model),
+                        include_usage=True,
+                    )
                 buffer = bytearray()
                 done = False
-                async for chunk in response.aiter_bytes():
+                async for chunk in byte_stream:
                     buffer.extend(chunk)
                     while True:
                         newline = buffer.find(b"\n")
@@ -444,29 +472,17 @@ class ReliableOpenAIChatModel(OpenAIChatModel):
         """
         import requests
 
-        serialized_messages = messages if isinstance(messages, list) and (not messages or isinstance(messages[0], dict)) else [self._serialize_msg(message) for message in messages]
-        payload = {
-            "model": self.model,
-            "messages": serialized_messages,
-            "temperature": self.temperature,
-        }
-        if options:
-            payload.update(options)
+        request_options = dict(options or {})
         if tool_registry is not None and hasattr(tool_registry, "names") and tool_registry.names():
-            payload["tools"] = tool_registry.schemas()
-
-        # ``stream_options`` is only valid together with stream=true.  It can
-        # be added by OpenAI clients even for a normal request; do not send it
-        # to providers such as DeepSeek in that case.
-        if not payload.get("stream"):
-            payload.pop("stream_options", None)
+            request_options["tools"] = tool_registry.schemas()
+        payload = self._http_payload(messages, request_options, stream=False)
 
         attempts = max(1, int(getattr(self, "max_retries", 0) or 0) + 1)
         response = None
         for attempt in range(attempts):
             try:
                 response = self._sync_session().post(
-                    f"{self.base_url}/chat/completions",
+                    self._request_url(),
                     json=payload,
                     headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
                     timeout=self._requests_timeout(),
@@ -489,6 +505,8 @@ class ReliableOpenAIChatModel(OpenAIChatModel):
         except (UnicodeDecodeError, ValueError, TypeError) as exc:
             raise RuntimeError("上游返回了无法解析的 JSON") from exc
 
+        if getattr(self, "endpoint", "chat") == "responses":
+            return self._wire_response(data, str(payload.get("model") or self.model))
         choices = data.get("choices") or [{}]
         choice = choices[0] if isinstance(choices[0], dict) else {}
         message = choice.get("message") or {}
@@ -514,15 +532,15 @@ class ReliableOpenAIChatModel(OpenAIChatModel):
         """
         import time as _time
 
-        serialized_messages = messages if isinstance(messages, list) and (not messages or isinstance(messages[0], dict)) else [self._serialize_msg(m) for m in messages]
-        payload = {
-            "model": self.model,
-            "messages": serialized_messages,
-            "temperature": self.temperature,
-            "stream": True,
-        }
-        if options:
-            payload.update(options)
+        # The public HTTP routes use the native async streaming path below.
+        # Keep SpringBootAI's legacy sync iterator compatible with Responses
+        # by buffering one normal response instead of posting Chat JSON to the
+        # wrong endpoint.
+        if getattr(self, "endpoint", "chat") == "responses":
+            yield self._call_via_http(messages, options=options)
+            return
+
+        payload = self._http_payload(messages, options, stream=True)
         max_attempts = max(1, int(getattr(self, "max_retries", 0) or 0) + 1)
         retry_delay = max(0.0, float(getattr(self, "retry_delay_ms", 0) or 0)) / 1000.0
         for attempt in range(max_attempts):
@@ -756,6 +774,7 @@ class AiGatewayService:
                     connect_timeout=float(spec.get("connect-timeout-seconds", self._transport["connect-timeout-seconds"])),
                     pool_timeout=float(spec.get("pool-timeout-seconds", self._transport["pool-timeout-seconds"])),
                     trust_env=self._model_uses_proxy(spec),
+                    endpoint=str(spec.get("endpoint") or "Chat"),
                     max_retries=int(spec.get("max-retries", self._transport["max-retries"])),
                     retry_delay_ms=int(spec.get("retry-delay-ms", self._transport["retry-delay-ms"])),
                 )
@@ -834,6 +853,12 @@ class AiGatewayService:
             raise ValueError(f"模型已停用: {selected}")
         return spec
 
+    @staticmethod
+    def _is_openai_fallback_model(model: str) -> bool:
+        """Recognize OpenAI model families without freezing a model catalog."""
+        value = str(model or "").strip().lower()
+        return bool(re.match(r"^(?:gpt-|o\d(?:-|$)|codex(?:-|$))", value))
+
     def apply_openai_subscription_fallback(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Select the configured API model after the subscription pool declines.
 
@@ -846,7 +871,7 @@ class AiGatewayService:
         requested = str(payload.get("model") or self.model_name).strip()
         if not fallback_id or requested in self.models:
             return payload
-        if default_gpt_reasoning_effort(requested, self.gpt_default_reasoning_effort) is None:
+        if not self._is_openai_fallback_model(requested):
             return payload
         fallback = self.models.get(fallback_id)
         if not fallback or not fallback.get("enabled", True):
@@ -854,7 +879,11 @@ class AiGatewayService:
         provider = str(fallback.get("provider") or "").strip().lower()
         if provider not in {"openai", "openai compatible", "openai-compatible"}:
             return payload
-        return {**payload, "model": fallback_id}
+        return {
+            **payload,
+            "_rose_model_id": fallback_id,
+            "_rose_upstream_model": requested,
+        }
 
     def get_pricing(self, model_id: str | None) -> dict[str, Any]:
         return dict(self.model_spec(model_id).get("pricing", {}))
@@ -988,7 +1017,11 @@ class AiGatewayService:
                 if isinstance(items, list) and items:
                     ids = {str(item.get("id")) for item in items if isinstance(item, dict) and item.get("id")}
                     upstream_model = str(spec.get("upstream-model") or spec["id"])
-                    if ids and upstream_model not in ids:
+                    passthrough_model = (
+                        spec["id"] == self.openai_subscription_fallback_model
+                        and str(spec.get("endpoint") or "").strip().lower() == "responses"
+                    )
+                    if ids and upstream_model not in ids and not passthrough_model:
                         return self._health_record(spec, "model_missing", f"上游未返回模型 {upstream_model}", latency_ms=latency)
                 return self._health_record(spec, "ok", "上游连接正常", latency_ms=latency)
         except HTTPError as exc:
@@ -1034,7 +1067,12 @@ class AiGatewayService:
         return cls.estimate_tokens(text)
 
     def estimate_cost(self, model_id: str, prompt_tokens: int, completion_tokens: int) -> float:
-        spec = self.model_spec(model_id)
+        pricing_model = model_id
+        if pricing_model not in self.models:
+            fallback = self.openai_subscription_fallback_model
+            if fallback and self._is_openai_fallback_model(pricing_model):
+                pricing_model = fallback
+        spec = self.model_spec(pricing_model)
         cfg = spec.get("pricing", {})
         multiplier = float(cfg.get("multiplier", 1.0))
         currency = str(spec.get("currency") or "USD").upper()
@@ -1073,6 +1111,9 @@ class AiGatewayService:
                 requested_reasoning = reasoning_effort
         if requested_reasoning is not None and requested_reasoning != "":
             options["reasoning_effort"] = str(requested_reasoning)
+        upstream_model = str(payload.get("_rose_upstream_model") or "").strip()
+        if upstream_model:
+            options["_rose_upstream_model"] = upstream_model
         if streaming:
             # OpenAI-compatible providers return token usage in the final SSE
             # event when this option is enabled. Older providers simply ignore
@@ -1087,14 +1128,14 @@ class AiGatewayService:
         callers. Protocol adapters use this trace-aware variant to persist the
         upstream response metadata alongside the generated answer.
         """
-        spec = self.model_spec(payload.get("model"))
-        model = spec["id"]
+        spec = self.model_spec(payload.get("_rose_model_id") or payload.get("model"))
+        model = str(payload.get("model") or spec["id"])
         messages = payload.get("messages") or []
         # Protocol requests are forwarded as-is.  In particular, do not
         # rebuild tool messages and accidentally discard tool_call_id.
         spring_messages = messages
         prompt_tokens = 0
-        client = self.clients.get(model)
+        client = self.clients.get(spec["id"])
         demo_mode = self._as_bool(spec.get("demo-mode-when-key-missing", self.demo_mode), self.demo_mode)
         if client is None:
             if not demo_mode:
@@ -1104,7 +1145,8 @@ class AiGatewayService:
             usage = {"prompt_tokens": prompt_tokens, "completion_tokens": self.estimate_tokens(answer), "total_tokens": prompt_tokens + self.estimate_tokens(answer)}
             return answer, usage, model, {"demo": True}
         reasoning_effort = str(spec.get("reasoning-effort") or "").strip()
-        options = self._request_options(payload, reasoning_effort=reasoning_effort, model=spec.get("upstream-model") or model, default_effort=self.gpt_default_reasoning_effort)
+        wire_model = payload.get("_rose_upstream_model") or spec.get("upstream-model") or model
+        options = self._request_options(payload, reasoning_effort=reasoning_effort, model=wire_model, default_effort=self.gpt_default_reasoning_effort)
         # Call the SpringBootAI ChatModel directly so request options reach
         # OpenAI-compatible HTTP providers.  This remains within the
         # SpringBootAI abstraction and avoids provider-specific SDK coupling.
@@ -1131,10 +1173,10 @@ class AiGatewayService:
 
     async def ainvoke_with_trace(self, payload: dict) -> tuple[str, dict[str, int], str, dict[str, Any]]:
         """Async counterpart used by HTTP handlers for every configured model."""
-        spec = self.model_spec(payload.get("model"))
-        model = spec["id"]
+        spec = self.model_spec(payload.get("_rose_model_id") or payload.get("model"))
+        model = str(payload.get("model") or spec["id"])
         messages = payload.get("messages") or []
-        client = self.clients.get(model)
+        client = self.clients.get(spec["id"])
         demo_mode = self._as_bool(spec.get("demo-mode-when-key-missing", self.demo_mode), self.demo_mode)
         if client is None:
             if not demo_mode:
@@ -1144,7 +1186,8 @@ class AiGatewayService:
             completion_tokens = self.estimate_tokens(answer)
             return answer, {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens, "total_tokens": prompt_tokens + completion_tokens}, model, {"demo": True}
         reasoning_effort = str(spec.get("reasoning-effort") or "").strip()
-        options = self._request_options(payload, reasoning_effort=reasoning_effort, model=spec.get("upstream-model") or model, default_effort=self.gpt_default_reasoning_effort)
+        wire_model = payload.get("_rose_upstream_model") or spec.get("upstream-model") or model
+        options = self._request_options(payload, reasoning_effort=reasoning_effort, model=wire_model, default_effort=self.gpt_default_reasoning_effort)
         response = await client.chat_model.acall(messages, options=options or None)
         answer = response.content()
         metadata = response.metadata or {}
@@ -1165,12 +1208,12 @@ class AiGatewayService:
         The caller can consume this iterator from an async response one chunk
         at a time.  No artificial post-hoc slicing is performed.
         """
-        spec = self.model_spec(payload.get("model"))
-        model = spec["id"]
+        spec = self.model_spec(payload.get("_rose_model_id") or payload.get("model"))
+        model = str(payload.get("model") or spec["id"])
         messages = payload.get("messages") or []
         spring_messages = messages
         prompt_tokens = 0
-        client = self.clients.get(model)
+        client = self.clients.get(spec["id"])
         demo_mode = self._as_bool(spec.get("demo-mode-when-key-missing", self.demo_mode), self.demo_mode)
         if client is None:
             if not demo_mode:
@@ -1180,7 +1223,8 @@ class AiGatewayService:
             yield {"delta": answer, "model": model, "prompt_tokens": prompt_tokens, "metadata": {"demo": True}}
             return
         reasoning_effort = str(spec.get("reasoning-effort") or "").strip()
-        options = self._request_options(payload, reasoning_effort=reasoning_effort, streaming=True, model=spec.get("upstream-model") or model, default_effort=self.gpt_default_reasoning_effort)
+        wire_model = payload.get("_rose_upstream_model") or spec.get("upstream-model") or model
+        options = self._request_options(payload, reasoning_effort=reasoning_effort, streaming=True, model=wire_model, default_effort=self.gpt_default_reasoning_effort)
         for response in client.chat_model.stream(spring_messages, options=options or None):
             delta = response.content() if response else ""
             metadata = response.metadata if response else {}
@@ -1204,10 +1248,10 @@ class AiGatewayService:
 
     async def astream_with_trace(self, payload: dict):
         """Yield provider SSE chunks without a worker-thread hop."""
-        spec = self.model_spec(payload.get("model"))
-        model = spec["id"]
+        spec = self.model_spec(payload.get("_rose_model_id") or payload.get("model"))
+        model = str(payload.get("model") or spec["id"])
         messages = payload.get("messages") or []
-        client = self.clients.get(model)
+        client = self.clients.get(spec["id"])
         demo_mode = self._as_bool(spec.get("demo-mode-when-key-missing", self.demo_mode), self.demo_mode)
         if client is None:
             if not demo_mode:
@@ -1216,7 +1260,8 @@ class AiGatewayService:
             yield {"delta": answer, "model": model, "prompt_tokens": self.estimate_message_tokens(messages), "metadata": {"demo": True}}
             return
         reasoning_effort = str(spec.get("reasoning-effort") or "").strip()
-        options = self._request_options(payload, reasoning_effort=reasoning_effort, streaming=True, model=spec.get("upstream-model") or model, default_effort=self.gpt_default_reasoning_effort)
+        wire_model = payload.get("_rose_upstream_model") or spec.get("upstream-model") or model
+        options = self._request_options(payload, reasoning_effort=reasoning_effort, streaming=True, model=wire_model, default_effort=self.gpt_default_reasoning_effort)
         prompt_tokens = 0
         async for response in client.chat_model.astream(messages, options=options or None):
             delta = response.content() if response else ""

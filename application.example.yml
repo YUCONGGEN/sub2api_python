@@ -277,8 +277,9 @@ rose:
     # - id: openai
     #   enabled: true
     #   provider: OpenAI
-    #   endpoint: Chat
+    #   endpoint: Responses
     #   group: OpenAI API Fallback
+    #   # 兜底时实际透传客户端请求的 OpenAI 模型名。
     #   upstream-model: openai
     #   base-url: ${ROSE_OPENAI_FALLBACK_BASE_URL:https://api.example.com/v1}
     #   api-key: ${ROSE_OPENAI_FALLBACK_API_KEY:}

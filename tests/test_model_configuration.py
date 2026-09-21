@@ -11,6 +11,7 @@ from backend.controller import config_controller
 from backend.controller.model_controller import ModelController
 from backend.service import ai_service
 from backend.service.ai_service import ReliableOpenAIChatModel
+from backend.service.user_group_service import UserGroupService
 
 
 def init_gateway(monkeypatch, rose):
@@ -157,6 +158,30 @@ def test_fallback_invocation_uses_openai_client_but_returns_requested_model():
     assert usage == {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3}
     assert model == "gpt-5.6-sol"
     assert calls[0][1]["_rose_upstream_model"] == "gpt-5.6-sol"
+
+
+def test_group_model_mapping_is_applied_before_openai_fallback():
+    gateway = ai_service.AiGatewayService(None)
+    gateway.openai_subscription_fallback_model = "openai"
+    gateway.models = {"openai": {"id": "openai", "enabled": True, "provider": "OpenAI"}}
+    user = {"group_model_mappings": [{
+        "enabled": True,
+        "source_model": "gpt-6-astra",
+        "source_effort": "max",
+        "target_model": "gpt-5.6-sol",
+        "target_effort": "high",
+    }]}
+    mapped, matched = UserGroupService.apply_model_mapping(
+        user,
+        {"model": "gpt-6-astra", "reasoning": {"effort": "max"}},
+    )
+    routed = gateway.apply_openai_subscription_fallback(mapped)
+
+    assert matched is not None
+    assert routed["model"] == "gpt-5.6-sol"
+    assert routed["reasoning"] == {"effort": "high"}
+    assert routed["_rose_model_id"] == "openai"
+    assert routed["_rose_upstream_model"] == "gpt-5.6-sol"
 
 
 def test_empty_api_catalog_keeps_subscription_models(monkeypatch):

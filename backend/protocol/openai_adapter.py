@@ -419,6 +419,14 @@ async def openai_responses(request: Request):
         messages = _responses_input_to_messages(payload.get("input"))
         if not messages:
             return JSONResponse({"error": {"message": "input is required", "type": "invalid_request_error"}}, status_code=400)
+        instructions = payload.get("instructions")
+        if isinstance(instructions, str) and instructions.strip():
+            # Responses 的 instructions（系统提示词）在转普通 Chat 上游时需显式
+            # 转成 system 角色消息，否则会在 fallback 路径被静默丢弃。
+            if messages[0].get("role") == "system":
+                messages[0]["content"] = f"{instructions.strip()}\n\n{messages[0].get('content', '')}"
+            else:
+                messages.insert(0, {"role": "system", "content": instructions.strip()})
         response_id = "resp_" + uuid.uuid4().hex
         conversation_task = asyncio.create_task(asyncio.to_thread(
             conversations.begin, user["id"], "responses",

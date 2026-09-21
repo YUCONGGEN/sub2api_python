@@ -149,6 +149,28 @@ def test_responses_tools_are_normalized_for_chat_upstreams():
     ]
 
 
+@pytest.mark.parametrize("choice_type", ["function", "custom"])
+def test_responses_tool_choice_is_normalized_for_chat_upstreams(choice_type):
+    options = AiGatewayService._request_options({
+        "model": "deepseek-v4-pro",
+        "tools": [{"type": "function", "name": "lookup", "parameters": {"type": "object"}}],
+        "tool_choice": {"type": choice_type, "name": "lookup"},
+    })
+    assert options["tool_choice"] == {"type": "function", "function": {"name": "lookup"}}
+
+
+def test_unsupported_responses_builtin_tool_and_choice_are_omitted():
+    options = AiGatewayService._request_options({
+        "model": "deepseek-v4-pro",
+        "tools": [{"type": "apply_patch"}],
+        "tool_choice": {"type": "apply_patch"},
+        "parallel_tool_calls": True,
+    })
+    assert "tools" not in options
+    assert "tool_choice" not in options
+    assert "parallel_tool_calls" not in options
+
+
 def test_developer_role_is_normalized_only_for_chat_wire_payloads():
     model = ReliableOpenAIChatModel.__new__(ReliableOpenAIChatModel)
     model.model = "deepseek-v4-pro"

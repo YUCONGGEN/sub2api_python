@@ -1157,6 +1157,32 @@ class AiGatewayService:
         options = {key: payload[key] for key in allowed if key in payload and payload[key] is not None}
         if "tools" in options:
             options["tools"] = AiGatewayService._normalize_chat_tools(options["tools"])
+            if not options["tools"]:
+                options.pop("tools", None)
+                options.pop("tool_choice", None)
+                options.pop("parallel_tool_calls", None)
+        tool_choice = options.get("tool_choice")
+        if isinstance(tool_choice, dict):
+            choice_type = str(tool_choice.get("type") or "").strip().lower()
+            choice_name = str(tool_choice.get("name") or "").strip()
+            nested_choice = tool_choice.get("function")
+            if isinstance(nested_choice, dict) and nested_choice.get("name"):
+                options["tool_choice"] = {
+                    "type": "function",
+                    "function": {"name": str(nested_choice["name"])},
+                }
+            elif choice_type in {"function", "custom"} and choice_name:
+                options["tool_choice"] = {
+                    "type": "function",
+                    "function": {"name": choice_name},
+                }
+            else:
+                # Responses built-ins (apply_patch, shell, web search, MCP,
+                # etc.) have no generic Chat Completions equivalent.
+                options.pop("tool_choice", None)
+        if not options.get("tools"):
+            options.pop("tool_choice", None)
+            options.pop("parallel_tool_calls", None)
         resolved_model = model if model is not None else payload.get("model")
         requested_reasoning = effective_gpt_reasoning_effort(payload, resolved_model, default_effort)
         if requested_reasoning is None:

@@ -709,6 +709,18 @@ async def openai_models(request: Request):
         if item.get("id") in seen:
             continue
         seen.add(item.get("id"))
+        reasoning_levels = list(item.get("reasoning_levels") or ["none", "low", "medium", "high", "xhigh"])
+        # Codex's model catalog does not use a plain string list here.  Each
+        # level is a preset object (the OpenAI-compatible clients may still
+        # consume the legacy ``supported_reasoning_efforts`` string list).
+        reasoning_presets = [
+            {
+                "effort": str(level),
+                "description": f"Reasoning effort: {level}",
+            }
+            for level in reasoning_levels
+        ]
+        default_reasoning_level = item.get("reasoning_effort") or "high"
         data.append({
             "id": item["id"],
             # Codex's model manager uses ``slug`` as the stable model key;
@@ -716,9 +728,10 @@ async def openai_models(request: Request):
             "slug": item["id"],
             "display_name": item.get("id", "Rose model"),
             "description": item.get("description", "OpenAI-compatible model"),
-            "supported_reasoning_efforts": list(item.get("reasoning_levels") or ["none", "low", "medium", "high", "xhigh"]),
-            "supported_reasoning_levels": list(item.get("reasoning_levels") or ["none", "low", "medium", "high", "xhigh"]),
-            "default_reasoning_effort": item.get("reasoning_effort") or "high",
+            "supported_reasoning_efforts": reasoning_levels,
+            "supported_reasoning_levels": reasoning_presets,
+            "default_reasoning_effort": default_reasoning_level,
+            "default_reasoning_level": default_reasoning_level,
             "input_modalities": ["text", "image"] if item.get("supports_image") else ["text"],
             "output_modalities": ["text"],
             "supports_reasoning_summaries": True,

@@ -273,11 +273,13 @@ rose:
   # 每个 URL/API Key/Model ID 可在自己的模型条目内单独设置 use-proxy；
   # false 表示直连，true 表示读取服务器代理环境变量。旧字段 trust-env 仍兼容。
   models: []
-    # 与 subscription-gateway.openai-fallback-model 配套的 API 兜底示例：
+    # 与 subscription-gateway.openai-fallback-model 配套的 API 兜底示例。
+    # 外部 Codex 仍访问本站 Responses；这里的 endpoint 按实际第三方上游填写。
+    # 仅支持 Chat Completions 的上游必须填 Chat，由网关负责协议转换。
     # - id: openai
     #   enabled: true
     #   provider: OpenAI
-    #   endpoint: Responses
+    #   endpoint: Chat
     #   group: OpenAI API Fallback
     #   # 兜底时实际透传客户端请求的 OpenAI 模型名。
     #   upstream-model: openai
@@ -362,8 +364,10 @@ rose:
     # 余额低于 0.001 元时拒绝模型请求；任何扣费后余额都不会低于 -0.1 元。
     min-usable-balance: 0.001
     minimum-balance: -0.1
-  # Codex CLI / App / IDE 的配置来源。前端教程和部署脚本可据此生成
-  # ~/.codex/config.toml；密钥字段仍支持环境变量覆盖。
+  # Codex CLI / App / IDE 的展示配置。客户端必须访问 Rose 公网网关，
+  # 不能填写上面的 ROSE_OPENAI_BASE_URL（它只是网关内部备用上游）。
+  # 前端实际使用 rose.api.public-base-url 生成 ~/.codex/config.toml，
+  # 下方 provider 仅保留为运维示例，密钥不应写入服务器配置文件。
   codex:
     model: gpt-5.6-sol
     model-provider: rose
@@ -374,8 +378,8 @@ rose:
     providers:
       rose:
         name: Rose API
-        base-url: ${ROSE_OPENAI_BASE_URL:https://coloful-rose.com/v1}
-        experimental-bearer-token: ${ROSE_OPENAI_API_KEY:}
+        base-url: ${ROSE_PUBLIC_API_BASE_URL:http://www.yucg.cn:8241}/v1
+        experimental-bearer-token: ${ROSE_CODEX_CLIENT_API_KEY:}
         wire-api: responses
         supports-websockets: false
   payment:

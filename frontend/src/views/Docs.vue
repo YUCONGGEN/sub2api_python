@@ -19,7 +19,7 @@
         <section id="codex" class="codex-tutorial">
           <span class="eyebrow">{{ showTraeTutorial ? '04' : '03' }} / CODEX</span>
           <h2>在 Codex 中调用 GPT 模型</h2>
-          <p>Codex 通过 Responses API 调用本站模型。下面以 Windows 为例，将本站创建的 API Key 直接写入用户级 <code>config.toml</code>，无需额外设置环境变量。</p>
+          <p>Codex 通过 Responses API 调用本站模型。下面以 Windows 为例，将本站创建的 API Key 直接写入用户级 <code>config.toml</code>，无需额外设置环境变量。<strong>配置中的 <code>base_url</code> 必须指向本站网关，不能填写网关内部使用的第三方上游地址。</strong></p>
 
           <div class="codex-overview">
             <div><span>接口协议</span><strong>Responses API</strong><small>Codex 自定义供应商仅使用 responses 协议</small></div>
@@ -72,7 +72,7 @@
 
           <div class="codex-troubleshooting">
             <h3>常见问题</h3>
-            <dl><div><dt>401 Unauthorized</dt><dd>确认 <code>experimental_bearer_token</code> 填写的是当前本站生成的完整 <code>sk-api-...</code> 密钥，且该密钥未撤销、未过期。旧站 Key、上游订阅 Token 和掩码文本均不可用。响应头 <code>X-Rose-Error-Source: local_auth</code> 表示请求尚未发往上游，是本站鉴权失败。</dd></div><div><dt>404 Not Found</dt><dd>确认 <code>base_url</code> 以一个 <code>/v1</code> 结尾，不要写成 <code>/v1/v1</code> 或追加 <code>/responses</code>。</dd></div><div><dt>429 Too Many Requests</dt><dd>查看 <code>X-Rose-Error-Source</code>：<code>local_rate_limit</code> 是本站单账号 RPM 上限，<code>local_queue</code> 是本站队列已满；其他情况通常来自上游。请按 <code>Retry-After</code> 稍后重试。账号正在处理另一个 Codex 长任务时会在本地排队，不再按旧逻辑于 30 秒后返回 429。</dd></div><div><dt>503 upstream_capacity</dt><dd>上游模型暂时满载。网关会在尚未输出正文或工具参数时自动切换账号并退避重试 2 次；重试耗尽才返回此错误。已经开始输出后不会重放，以免重复回答或重复工具调用。</dd></div><div><dt>503 local_queue_timeout</dt><dd>表示所有可用订阅账号持续繁忙。管理员可将 <code>ROSE_SUBSCRIPTION_QUEUE_TIMEOUT_SECONDS</code> 调大，或设为 <code>0</code> 一直等待；不要通过重复提交任务增加队列压力。即使无限等待，超过 <code>ROSE_SUBSCRIPTION_MAX_QUEUED_REQUESTS</code> 仍会立即拒绝，以保护服务。</dd></div><div><dt>模型不存在</dt><dd>复制模型广场里的真实模型 ID，或执行时使用 <code>-m</code> 覆盖默认模型。</dd></div><div><dt>配置无法识别</dt><dd>运行 <code>codex doctor</code> 和 <code>codex --strict-config</code> 查看诊断信息。</dd></div></dl>
+            <dl><div><dt>401 Unauthorized</dt><dd>先确认 <code>base_url</code> 是本页显示的本站地址；本站当前为 <code>http://www.yucg.cn:8241/v1</code>，不要填写 <code>coloful-rose.com</code> 等内部上游地址。再确认 <code>experimental_bearer_token</code> 填写的是当前本站生成的完整 <code>sk-api-...</code> 密钥，且该密钥未撤销、未过期。旧站 Key、上游订阅 Token 和掩码文本均不可用。响应头 <code>X-Rose-Error-Source: local_auth</code> 表示请求已到本站但鉴权失败；没有该响应头且返回第三方错误，通常表示入口地址填错。</dd></div><div><dt>404 Not Found</dt><dd>确认 <code>base_url</code> 以一个 <code>/v1</code> 结尾，不要写成 <code>/v1/v1</code> 或追加 <code>/responses</code>。</dd></div><div><dt>429 Too Many Requests</dt><dd>查看 <code>X-Rose-Error-Source</code>：<code>local_rate_limit</code> 是本站单账号 RPM 上限，<code>local_queue</code> 是本站队列已满；其他情况通常来自上游。请按 <code>Retry-After</code> 稍后重试。账号正在处理另一个 Codex 长任务时会在本地排队，不再按旧逻辑于 30 秒后返回 429。</dd></div><div><dt>503 upstream_capacity</dt><dd>上游模型暂时满载。网关会在尚未输出正文或工具参数时自动切换账号并退避重试 2 次；重试耗尽才返回此错误。已经开始输出后不会重放，以免重复回答或重复工具调用。</dd></div><div><dt>503 local_queue_timeout</dt><dd>表示所有可用订阅账号持续繁忙。管理员可将 <code>ROSE_SUBSCRIPTION_QUEUE_TIMEOUT_SECONDS</code> 调大，或设为 <code>0</code> 一直等待；不要通过重复提交任务增加队列压力。即使无限等待，超过 <code>ROSE_SUBSCRIPTION_MAX_QUEUED_REQUESTS</code> 仍会立即拒绝，以保护服务。</dd></div><div><dt>模型不存在</dt><dd>复制模型广场里的真实模型 ID，或执行时使用 <code>-m</code> 覆盖默认模型。</dd></div><div><dt>配置无法识别</dt><dd>运行 <code>codex doctor</code> 和 <code>codex --strict-config</code> 查看诊断信息。</dd></div></dl>
           </div>
 
           <div class="docs-callout codex-callout"><b>安全</b><span><code>experimental_bearer_token</code> 会让密钥以明文保存在用户级配置中，请限制该文件的读取权限。远程接入请使用 HTTPS，不要把 API Key、Codex <code>auth.json</code> 或订阅账号 Token 发到聊天、截图、代码仓库中。</span></div>

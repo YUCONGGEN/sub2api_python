@@ -36,7 +36,7 @@ from backend.common.subscription_providers import (
     provider_base_url,
 )
 from backend.service.store_service import StoreService
-from backend.service.subscription_account_service import SubscriptionAccountService
+from backend.service.subscription_account_service import SubscriptionAccountService, parse_time
 from backend.service.user_group_service import user_group_runtime
 
 
@@ -232,7 +232,7 @@ class SubscriptionGatewayService:
 
     @Scheduled(fixed_rate=3600000, initial_delay=3600000)
     async def recover_low_quota_accounts(self) -> None:
-        """Recheck system-disabled accounts once per hour.
+        """Recheck system-disabled accounts on the persisted staged cadence.
 
         Only rows explicitly marked LOW_QUOTA are eligible.  A manual admin
         disable is marked MANUAL and therefore remains disabled indefinitely.
@@ -241,7 +241,8 @@ class SubscriptionGatewayService:
             return
         list_disabled = getattr(self.accounts, "list_system_disabled_accounts", None)
         enable_recovered = getattr(self.accounts, "enable_after_quota_recovery", None)
-        if not callable(list_disabled) or not callable(enable_recovered):
+        record_attempt = getattr(self.accounts, "record_low_quota_recovery_attempt", None)
+        if not callable(list_disabled) or not callable(enable_recovered) or not callable(record_attempt):
             return
         try:
             rows = list_disabled() or []
@@ -249,31 +250,53 @@ class SubscriptionGatewayService:
             self.logger.warning("系统停用账号额度复查失败 error=%s", str(exc)[:300])
             return
         threshold = float(getattr(self, "weekly_quota_disable_threshold", 1.0) or 0)
+        if threshold <= 0:
+            return
+        now = datetime.now(timezone.utc)
+        max_attempts = int(getattr(self.accounts, "LOW_QUOTA_RECOVERY_MAX_ATTEMPTS", 44) or 44)
         recovered = 0
+        checked = 0
         for row in rows:
             account_id = int(row.get("id") or 0)
             if account_id <= 0:
                 continue
+            attempts = max(0, int(row.get("quota_recovery_attempts") or 0))
+            if attempts >= max_attempts:
+                continue
+            next_at = parse_time(row.get("quota_recovery_next_at"))
+            if next_at is None and attempts == 0:
+                # Old system-disabled rows predate the persisted schedule.
+                # Initialize them without consuming a recovery attempt.
+                try:
+                    record_attempt(account_id, 0, now)
+                except Exception as exc:
+                    self.logger.warning(
+                        "系统停用账号复查计划初始化失败 account_id=%s error=%s",
+                        account_id, str(exc)[:300],
+                    )
+                continue
+            if next_at and next_at > now:
+                continue
             try:
+                checked += 1
                 quota = await self.query_account_quota(account_id, force=True)
                 long_window = quota.get("long_window") if isinstance(quota, dict) else None
                 remaining = self._quota_float(long_window.get("remaining_percent"), -1.0) if isinstance(long_window, dict) else -1.0
                 window_seconds = self._quota_int(long_window.get("limit_window_seconds")) if isinstance(long_window, dict) else 0
-                if (
-                    threshold > 0
-                    and remaining > threshold
-                    and window_seconds >= 5 * 24 * 3600
-                    and enable_recovered(account_id)
-                ):
+                if remaining > threshold and window_seconds >= 5 * 24 * 3600 and enable_recovered(account_id):
                     recovered += 1
                     self.logger.info("系统停用账号额度恢复，自动启用 account_id=%s remaining=%.2f%%", account_id, remaining)
+                elif window_seconds >= 5 * 24 * 3600 and remaining >= 0:
+                    record_attempt(account_id, attempts + 1, now)
+                    if attempts + 1 >= max_attempts:
+                        self.logger.info("系统停用账号额度复查已耗尽，等待管理员启用 account_id=%s", account_id)
             except Exception as exc:
                 self.logger.warning(
                     "系统停用账号额度复查失败 account_id=%s error=%s",
                     account_id, str(exc)[:300],
                 )
         if rows:
-            self.logger.info("系统停用账号额度复查完成 checked=%s recovered=%s", len(rows), recovered)
+            self.logger.info("系统停用账号额度复查完成 eligible=%s checked=%s recovered=%s", len(rows), checked, recovered)
 
     def _account_semaphore(self, account_id: int) -> asyncio.Semaphore:
         loop = asyncio.get_running_loop()
@@ -1829,7 +1852,7 @@ class SubscriptionGatewayService:
             })
             warnings: list[str] = []
             if account_disabled:
-                warnings.append(f"每周订阅剩余量低于 {threshold:g}%，账号已停用并等待管理员处理")
+                warnings.append(f"每周订阅剩余量低于 {threshold:g}%，账号已停用并进入阶梯复查；复查耗尽后需管理员手动启用")
             if detail_warning:
                 warnings.append(detail_warning)
             if warnings:

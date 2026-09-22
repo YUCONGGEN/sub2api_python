@@ -280,6 +280,8 @@ CREATE TABLE IF NOT EXISTS upstream_subscription_accounts (
   error_count INTEGER NOT NULL DEFAULT 0,
   last_error TEXT NOT NULL DEFAULT '',
   disable_reason TEXT NOT NULL DEFAULT '',
+  quota_recovery_attempts INTEGER NOT NULL DEFAULT 0,
+  quota_recovery_next_at TEXT,
   expires_at TEXT,
   cooldown_until TEXT,
   last_used_at TEXT,

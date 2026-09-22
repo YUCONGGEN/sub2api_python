@@ -49,6 +49,13 @@ def as_bool(value: Any, default: bool = False) -> bool:
 @Service("subscription_account_service")
 @Slf4j
 class SubscriptionAccountService:
+    LOW_QUOTA_RECOVERY_MAX_ATTEMPTS = 44
+    LOW_QUOTA_RECOVERY_INTERVALS = (
+        (8, 3 * 60 * 60),
+        (20, 2 * 60 * 60),
+        (44, 1 * 60 * 60),
+    )
+
     @Autowired
     def __init__(
         self,
@@ -442,6 +449,8 @@ class SubscriptionAccountService:
             "error_count": 0,
             "last_error": "",
             "disable_reason": "" if as_bool(body.get("enabled"), True) else "MANUAL",
+            "quota_recovery_attempts": 0,
+            "quota_recovery_next_at": None,
             "expires_at": expires_at,
             "cooldown_until": None,
             "last_used_at": None,
@@ -553,6 +562,9 @@ class SubscriptionAccountService:
             changes["last_error"] = ""
             changes["error_count"] = 0
             changes["disable_reason"] = "" if enabled else "MANUAL"
+            changes["quota_recovery_attempts"] = 0
+            # MyBatis 的动态更新需要区分“不更新”和“清空”；空字符串在读取时按无计划处理。
+            changes["quota_recovery_next_at"] = ""
         for key, label, minimum, maximum, default in (
             ("priority", "优先级", -1000, 1000, int(existing.get("priority") or 0)),
             ("weight", "权重", 1, 100, int(existing.get("weight") or 1)),
@@ -839,10 +851,12 @@ class SubscriptionAccountService:
         if not as_bool(row.get("enabled"), True) and str(row.get("disable_reason") or "").upper() == "MANUAL":
             return False
         now = utc_now()
-        detail = f"每周订阅剩余量 {remaining:.2f}% 低于 {limit:.2f}%，已停用并等待管理员处理"
+        detail = f"每周订阅剩余量 {remaining:.2f}% 低于 {limit:.2f}%，已停用并进入自动复查"
+        recovery_next_at = (datetime.now(timezone.utc) + timedelta(seconds=3 * 60 * 60)).isoformat()
         self.repository.disable_rate_limited(
             int(row["id"]), error_count=int(row.get("error_count") or 0),
-            last_error=detail[:1000], last_used_at=now, updated_at=now,
+            last_error=detail[:1000], recovery_next_at=recovery_next_at,
+            last_used_at=now, updated_at=now,
         )
         self.pool.forget(int(row["id"]))
         return True
@@ -854,6 +868,27 @@ class SubscriptionAccountService:
     def enable_after_quota_recovery(self, account_id: int) -> bool:
         """Re-enable an account only when its disable reason is LOW_QUOTA."""
         return self.repository.enable_system_recovered(int(account_id), updated_at=utc_now())
+
+    @classmethod
+    def low_quota_recovery_delay(cls, attempts: int) -> int | None:
+        """Return seconds until the next low-quota check after ``attempts``."""
+        completed = max(0, int(attempts))
+        for limit, seconds in cls.LOW_QUOTA_RECOVERY_INTERVALS:
+            if completed < limit:
+                return seconds
+        return None
+
+    def record_low_quota_recovery_attempt(self, account_id: int, attempts: int, now: datetime | None = None) -> bool:
+        """Persist a failed recovery check and its next scheduled time."""
+        completed = max(0, min(self.LOW_QUOTA_RECOVERY_MAX_ATTEMPTS, int(attempts)))
+        delay = self.low_quota_recovery_delay(completed)
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=timezone.utc)
+        next_at = (current.astimezone(timezone.utc) + timedelta(seconds=delay)).isoformat() if delay else None
+        return self.repository.update_low_quota_recovery(
+            int(account_id), attempts=completed, next_at=next_at, updated_at=utc_now(),
+        )
 
     @classmethod
     def cost(cls, row: dict[str, Any], input_tokens: int, output_tokens: int, model_id: str | None = None) -> float:

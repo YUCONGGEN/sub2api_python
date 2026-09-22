@@ -163,6 +163,8 @@ class StoreRepository:
         self._ensure_column(conn, "upstream_subscription_accounts", "owner_user_id", "INTEGER")
         self._ensure_column(conn, "upstream_subscription_accounts", "model_pricing_json", "TEXT NOT NULL DEFAULT '{}'")
         self._ensure_column(conn, "upstream_subscription_accounts", "disable_reason", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column(conn, "upstream_subscription_accounts", "quota_recovery_attempts", "INTEGER NOT NULL DEFAULT 0")
+        self._ensure_column(conn, "upstream_subscription_accounts", "quota_recovery_next_at", "TEXT")
         conn.execute(
             """
             UPDATE upstream_subscription_accounts
@@ -239,6 +241,8 @@ class StoreRepository:
                 "owner_user_id": "BIGINT",
                 "model_pricing_json": "LONGTEXT NOT NULL",
                 "disable_reason": "VARCHAR(30) NOT NULL DEFAULT ''",
+                "quota_recovery_attempts": "INT NOT NULL DEFAULT 0",
+                "quota_recovery_next_at": "VARCHAR(40)",
             },
             "upstream_config_requests": {
                 "use_proxy": "TINYINT NOT NULL DEFAULT 0",

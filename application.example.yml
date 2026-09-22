@@ -234,7 +234,8 @@ rose:
     # 普通用户（包括账号所有者）随页面查询并复用 5 分钟缓存；只有管理员可强制刷新上游。
     quota-visible-to-users: ${ROSE_SUBSCRIPTION_QUOTA_VISIBLE_TO_USERS:true}
     # 只有真实上游 429 后才检查每周窗口；低于该百分比时系统停用。默认低于 1% 才停用。
-    # 系统停用账号每小时复查，恢复到大于阈值后自动启用；管理员手动停用不会自动启用。
+    # 系统停用账号按 3 小时×8 次、2 小时×12 次、1 小时×24 次阶梯复查；
+    # 恢复到大于阈值后自动启用，累计仍低于阈值则停止复查；管理员手动停用不会自动启用。
     weekly-quota-disable-threshold-percent: ${ROSE_SUBSCRIPTION_WEEKLY_DISABLE_THRESHOLD_PERCENT:1}
   user-groups:
     # true：普通用户可查看自己当前生效分组的策略和汇总用量。

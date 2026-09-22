@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <mapper namespace="backend.mappers.subscription_mapper.SubscriptionMapper">
-    <sql id="AccountColumns">id, owner_user_id, provider, name, auth_type, email, account_ref, credentials_encrypted, models_json, model_pricing_json, enabled, priority, weight, input_price_cny, output_price_cny, price_multiplier, status, error_count, last_error, disable_reason, expires_at, cooldown_until, last_used_at, compliance_confirmed_at, created_at, updated_at</sql>
+    <sql id="AccountColumns">id, owner_user_id, provider, name, auth_type, email, account_ref, credentials_encrypted, models_json, model_pricing_json, enabled, priority, weight, input_price_cny, output_price_cny, price_multiplier, status, error_count, last_error, disable_reason, quota_recovery_attempts, quota_recovery_next_at, expires_at, cooldown_until, last_used_at, compliance_confirmed_at, created_at, updated_at</sql>
     <sql id="RequestColumns">id, user_id, base_url, api_key_encrypted, model_id, use_proxy, status, admin_note, created_at, updated_at</sql>
 
     <select id="count_accounts" resultType="int">
@@ -53,6 +53,8 @@
             <if test="changes.error_count != null">error_count = #{changes.error_count},</if>
             <if test="changes.last_error != null">last_error = #{changes.last_error},</if>
             <if test="changes.disable_reason != null">disable_reason = #{changes.disable_reason},</if>
+            <if test="changes.quota_recovery_attempts != null">quota_recovery_attempts = #{changes.quota_recovery_attempts},</if>
+            <if test="changes.quota_recovery_next_at != null">quota_recovery_next_at = #{changes.quota_recovery_next_at},</if>
             <if test="changes.expires_at != null">expires_at = #{changes.expires_at},</if>
             <if test="changes.cooldown_until != null">cooldown_until = #{changes.cooldown_until},</if>
             <if test="changes.updated_at != null">updated_at = #{changes.updated_at},</if>
@@ -76,7 +78,8 @@
     <update id="disable_rate_limited_account">
         UPDATE upstream_subscription_accounts
         SET enabled = 0, status = 'DISABLED', error_count = #{error_count},
-            last_error = #{last_error}, disable_reason = 'LOW_QUOTA', cooldown_until = NULL,
+            last_error = #{last_error}, disable_reason = 'LOW_QUOTA', quota_recovery_attempts = 0,
+            quota_recovery_next_at = #{recovery_next_at}, cooldown_until = NULL,
             last_used_at = #{last_used_at}, updated_at = #{updated_at}
         WHERE id = #{account_id} AND enabled = 1 AND (disable_reason IS NULL OR disable_reason = '')
     </update>
@@ -88,7 +91,13 @@
     <update id="enable_system_recovered_account">
         UPDATE upstream_subscription_accounts
         SET enabled = 1, status = 'READY', error_count = 0, last_error = '',
-            disable_reason = '', cooldown_until = NULL, updated_at = #{updated_at}
+            disable_reason = '', quota_recovery_attempts = 0, quota_recovery_next_at = NULL,
+            cooldown_until = NULL, updated_at = #{updated_at}
+        WHERE id = #{account_id} AND enabled = 0 AND status = 'DISABLED' AND disable_reason = 'LOW_QUOTA'
+    </update>
+    <update id="update_low_quota_recovery">
+        UPDATE upstream_subscription_accounts
+        SET quota_recovery_attempts = #{attempts}, quota_recovery_next_at = #{next_at}, updated_at = #{updated_at}
         WHERE id = #{account_id} AND enabled = 0 AND status = 'DISABLED' AND disable_reason = 'LOW_QUOTA'
     </update>
     <delete id="delete_account">DELETE FROM upstream_subscription_accounts WHERE id = #{account_id}</delete>

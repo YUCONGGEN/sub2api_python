@@ -638,6 +638,14 @@ class QuotaAccounts(RecordingAccounts):
                 return True
         return False
 
+    def record_low_quota_recovery_attempt(self, account_id, attempts, now=None):
+        for row in self.recovery_rows:
+            if int(row.get("id") or 0) == int(account_id) and row.get("disable_reason") == "LOW_QUOTA" and not row.get("enabled"):
+                row["quota_recovery_attempts"] = int(attempts)
+                row["quota_recovery_next_at"] = None if int(attempts) >= 44 else "2000-01-01T00:00:00+00:00"
+                return True
+        return False
+
     async def refresh_account(self, account_id, force=False):
         row = next((dict(item) for item in self.recovery_rows if int(item.get("id") or 0) == int(account_id)), account(int(account_id)))
         row["account_ref"] = "account-ref-3"
@@ -877,7 +885,7 @@ def test_only_low_weekly_quota_disables_subscription_account():
     assert result["long_window"]["remaining_percent"] == 1.5
     assert result["account_disabled"] is True
     assert accounts.weekly_disables == [(3, 1.5, 2.0)]
-    assert "等待管理员处理" in result["warning"]
+    assert "进入阶梯复查" in result["warning"]
 
 
 def test_quota_display_does_not_disable_low_weekly_quota_account():
@@ -914,7 +922,10 @@ def test_hourly_recovery_reenables_only_system_disabled_account_above_threshold(
     }
     accounts = QuotaAccounts()
     disabled = account(3)
-    disabled.update({"enabled": 0, "status": "DISABLED", "disable_reason": "LOW_QUOTA"})
+    disabled.update({
+        "enabled": 0, "status": "DISABLED", "disable_reason": "LOW_QUOTA",
+        "quota_recovery_attempts": 0, "quota_recovery_next_at": "2000-01-01T00:00:00+00:00",
+    })
     accounts.recovery_rows = [disabled]
     client = SequenceClient([
         httpx.Response(200, json=usage),
@@ -943,6 +954,47 @@ def test_hourly_recovery_does_not_touch_manual_disabled_account():
 
     assert accounts.recovery_rows[0]["enabled"] == 0
     assert accounts.recovery_rows[0]["disable_reason"] == "MANUAL"
+
+
+def test_low_quota_recovery_schedule_has_three_stages_and_exhaustion():
+    assert SubscriptionAccountService.low_quota_recovery_delay(0) == 3 * 60 * 60
+    assert SubscriptionAccountService.low_quota_recovery_delay(7) == 3 * 60 * 60
+    assert SubscriptionAccountService.low_quota_recovery_delay(8) == 2 * 60 * 60
+    assert SubscriptionAccountService.low_quota_recovery_delay(19) == 2 * 60 * 60
+    assert SubscriptionAccountService.low_quota_recovery_delay(20) == 1 * 60 * 60
+    assert SubscriptionAccountService.low_quota_recovery_delay(43) == 1 * 60 * 60
+    assert SubscriptionAccountService.low_quota_recovery_delay(44) is None
+
+
+def test_hourly_recovery_stops_after_44_low_quota_checks():
+    usage = {
+        "rate_limit": {
+            "allowed": True,
+            "limit_reached": False,
+            "primary_window": {"used_percent": 0, "limit_window_seconds": 18000},
+            "secondary_window": {"used_percent": 99.5, "limit_window_seconds": 604800},
+        },
+    }
+    accounts = QuotaAccounts()
+    exhausted = account(3)
+    exhausted.update({
+        "enabled": 0, "status": "DISABLED", "disable_reason": "LOW_QUOTA",
+        "quota_recovery_attempts": 43, "quota_recovery_next_at": "2000-01-01T00:00:00+00:00",
+    })
+    accounts.recovery_rows = [exhausted]
+    client = SequenceClient([
+        httpx.Response(200, json=usage),
+        httpx.Response(404, json={"detail": "not available"}),
+    ])
+    gateway = configured_gateway(accounts, RecordingStore(), client)
+    gateway.enabled = True
+    gateway.weekly_quota_disable_threshold = 1
+
+    asyncio.run(gateway.recover_low_quota_accounts())
+
+    assert accounts.recovery_rows[0]["enabled"] == 0
+    assert accounts.recovery_rows[0]["quota_recovery_attempts"] == 44
+    assert accounts.recovery_rows[0]["quota_recovery_next_at"] is None
 
 
 def configured_chat_bridge(monkeypatch, client):
@@ -1800,6 +1852,23 @@ def test_manual_disable_is_not_eligible_for_automatic_recovery():
     assert service.list_system_disabled_accounts() == []
     assert service.enable_after_quota_recovery(3) is False
     assert repository.find(3)["disable_reason"] == "MANUAL"
+
+
+def test_admin_reenable_resets_low_quota_recovery_state():
+    repository = MemoryRepository([account(3)])
+    service = SubscriptionAccountService(
+        repository, JsonCipher(), NoopOAuth(), SubscriptionAccountPoolService(),
+    )
+    service.disable_for_weekly_quota(repository.find(3), 0.5)
+    repository.update(3, {"quota_recovery_attempts": 17, "quota_recovery_next_at": "2099-01-01T00:00:00+00:00"})
+
+    service.update(3, {"enabled": True})
+
+    saved = repository.find(3)
+    assert saved["enabled"] == 1
+    assert saved["disable_reason"] == ""
+    assert saved["quota_recovery_attempts"] == 0
+    assert saved["quota_recovery_next_at"] == ""
 
 
 def test_client_request_error_never_updates_account_failure_state():

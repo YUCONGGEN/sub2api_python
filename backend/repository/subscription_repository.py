@@ -47,6 +47,9 @@ class SubscriptionRepository:
     def list_provider(self, provider: str) -> list[dict[str, Any]]:
         return [dict(row) for row in self.mapper.list_provider_accounts(str(provider))]
 
+    def list_system_disabled_accounts(self) -> list[dict[str, Any]]:
+        return [dict(row) for row in self.mapper.list_system_disabled_accounts()]
+
     def create(self, account: dict[str, Any]) -> dict[str, Any]:
         self.mapper.insert_account(account)
         return self.find(int(account["id"])) or account
@@ -68,6 +71,9 @@ class SubscriptionRepository:
         self.mapper.disable_rate_limited_account(
             int(account_id), int(error_count), str(last_error), last_used_at, updated_at,
         )
+
+    def enable_system_recovered(self, account_id: int, *, updated_at: str) -> bool:
+        return bool(self.mapper.enable_system_recovered_account(int(account_id), updated_at))
 
     def delete(self, account_id: int) -> bool:
         return bool(self.mapper.delete_account(int(account_id)))

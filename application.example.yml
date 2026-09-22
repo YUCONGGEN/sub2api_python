@@ -233,8 +233,9 @@ rose:
     # true：普通用户可只读查看共享 OpenAI/Codex 账号的订阅剩余量；管理员始终可见。
     # 普通用户（包括账号所有者）随页面查询并复用 5 分钟缓存；只有管理员可强制刷新上游。
     quota-visible-to-users: ${ROSE_SUBSCRIPTION_QUOTA_VISIBLE_TO_USERS:true}
-    # 只看每周窗口；剩余量低于该百分比时停用账号，等待管理员处理。5 小时窗口不参与判断。
-    weekly-quota-disable-threshold-percent: ${ROSE_SUBSCRIPTION_WEEKLY_DISABLE_THRESHOLD_PERCENT:2}
+    # 只有真实上游 429 后才检查每周窗口；低于该百分比时系统停用。默认低于 1% 才停用。
+    # 系统停用账号每小时复查，恢复到大于阈值后自动启用；管理员手动停用不会自动启用。
+    weekly-quota-disable-threshold-percent: ${ROSE_SUBSCRIPTION_WEEKLY_DISABLE_THRESHOLD_PERCENT:1}
   user-groups:
     # true：普通用户可查看自己当前生效分组的策略和汇总用量。
     # false：隐藏普通用户的“我的分组”入口并禁止访问概况接口；管理员始终可见。

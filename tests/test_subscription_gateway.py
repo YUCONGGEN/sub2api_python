@@ -44,6 +44,10 @@ class MemoryRepository:
         self.rows[int(account_id)].update(changes)
         return self.find(account_id)
 
+    def update(self, account_id, changes):
+        self.rows[int(account_id)].update(changes)
+        return self.find(account_id)
+
     def mark_result(self, account_id, **changes):
         self.rows[int(account_id)].update(changes)
 
@@ -52,8 +56,34 @@ class MemoryRepository:
             **changes,
             "enabled": 0,
             "status": "DISABLED",
+            "disable_reason": "LOW_QUOTA",
             "cooldown_until": None,
         })
+
+    def list_system_disabled_accounts(self):
+        return [
+            dict(row) for row in self.rows.values()
+            if row.get("provider") == "openai"
+            and not row.get("enabled")
+            and row.get("status") == "DISABLED"
+            and row.get("disable_reason") == "LOW_QUOTA"
+        ]
+
+    def enable_after_quota_recovery(self, account_id, **changes):
+        row = self.rows[int(account_id)]
+        if row.get("enabled") or row.get("disable_reason") != "LOW_QUOTA":
+            return False
+        row.update({
+            **changes,
+            "enabled": 1,
+            "status": "READY",
+            "disable_reason": "",
+            "last_error": "",
+        })
+        return True
+
+    def enable_system_recovered(self, account_id, **changes):
+        return self.enable_after_quota_recovery(account_id, **changes)
 
 
 class JsonCipher:
@@ -83,6 +113,7 @@ def account(account_id, *, priority=0, weight=1, models=None):
         "credentials_encrypted": json.dumps({"access_token": f"token-{account_id}"}),
         "expires_at": None,
         "cooldown_until": None,
+        "disable_reason": "",
         "error_count": 0,
         "input_price_cny": 2,
         "output_price_cny": 8,
@@ -581,7 +612,7 @@ class RecordingAccounts:
     def record_failure(self, row, status, detail, retry_after=None):
         self.failures.append((int(row["id"]), int(status), str(detail)))
 
-    def disable_for_weekly_quota(self, row, remaining_percent, threshold=2.0):
+    def disable_for_weekly_quota(self, row, remaining_percent, threshold=1.0):
         if float(remaining_percent) >= float(threshold):
             return False
         self.weekly_disables.append((int(row["id"]), float(remaining_percent), float(threshold)))
@@ -593,8 +624,22 @@ class RecordingAccounts:
 
 
 class QuotaAccounts(RecordingAccounts):
+    def __init__(self):
+        super().__init__()
+        self.recovery_rows = []
+
+    def list_system_disabled_accounts(self):
+        return [dict(row) for row in self.recovery_rows if row.get("disable_reason") == "LOW_QUOTA" and not row.get("enabled")]
+
+    def enable_after_quota_recovery(self, account_id, **changes):
+        for row in self.recovery_rows:
+            if int(row.get("id") or 0) == int(account_id) and row.get("disable_reason") == "LOW_QUOTA" and not row.get("enabled"):
+                row.update(enabled=1, status="READY", disable_reason="", last_error="", **changes)
+                return True
+        return False
+
     async def refresh_account(self, account_id, force=False):
-        row = account(int(account_id))
+        row = next((dict(item) for item in self.recovery_rows if int(item.get("id") or 0) == int(account_id)), account(int(account_id)))
         row["account_ref"] = "account-ref-3"
         return {
             "account": row,
@@ -856,6 +901,48 @@ def test_quota_display_does_not_disable_low_weekly_quota_account():
     assert result["long_window"]["remaining_percent"] == 1.5
     assert result["account_disabled"] is False
     assert accounts.weekly_disables == []
+
+
+def test_hourly_recovery_reenables_only_system_disabled_account_above_threshold():
+    usage = {
+        "rate_limit": {
+            "allowed": True,
+            "limit_reached": False,
+            "primary_window": {"used_percent": 0, "limit_window_seconds": 18000},
+            "secondary_window": {"used_percent": 98.5, "limit_window_seconds": 604800},
+        },
+    }
+    accounts = QuotaAccounts()
+    disabled = account(3)
+    disabled.update({"enabled": 0, "status": "DISABLED", "disable_reason": "LOW_QUOTA"})
+    accounts.recovery_rows = [disabled]
+    client = SequenceClient([
+        httpx.Response(200, json=usage),
+        httpx.Response(404, json={"detail": "not available"}),
+    ])
+    gateway = configured_gateway(accounts, RecordingStore(), client)
+    gateway.enabled = True
+    gateway.weekly_quota_disable_threshold = 1
+
+    asyncio.run(gateway.recover_low_quota_accounts())
+
+    assert accounts.recovery_rows[0]["enabled"] == 1
+    assert accounts.recovery_rows[0]["status"] == "READY"
+    assert accounts.recovery_rows[0]["disable_reason"] == ""
+
+
+def test_hourly_recovery_does_not_touch_manual_disabled_account():
+    accounts = QuotaAccounts()
+    manual = account(3)
+    manual.update({"enabled": 0, "status": "DISABLED", "disable_reason": "MANUAL"})
+    accounts.recovery_rows = [manual]
+    gateway = configured_gateway(accounts, RecordingStore(), SequenceClient([]))
+    gateway.enabled = True
+
+    asyncio.run(gateway.recover_low_quota_accounts())
+
+    assert accounts.recovery_rows[0]["enabled"] == 0
+    assert accounts.recovery_rows[0]["disable_reason"] == "MANUAL"
 
 
 def configured_chat_bridge(monkeypatch, client):
@@ -1689,6 +1776,30 @@ def test_confirmed_low_weekly_quota_permanently_disables_account():
     assert saved["status"] == "DISABLED"
     assert "每周订阅剩余量 1.99%" in saved["last_error"]
     assert service.has_route("openai", "gpt-test") is False
+
+
+def test_low_quota_guard_defaults_to_one_percent_and_marks_system_disable():
+    repository = MemoryRepository([account(3)])
+    service = SubscriptionAccountService(
+        repository, JsonCipher(), NoopOAuth(), SubscriptionAccountPoolService(),
+    )
+
+    assert service.disable_for_weekly_quota(repository.find(3), 1.0) is False
+    assert service.disable_for_weekly_quota(repository.find(3), 0.99) is True
+    saved = repository.find(3)
+    assert saved["enabled"] == 0
+    assert saved["disable_reason"] == "LOW_QUOTA"
+
+
+def test_manual_disable_is_not_eligible_for_automatic_recovery():
+    repository = MemoryRepository([account(3)])
+    service = SubscriptionAccountService(
+        repository, JsonCipher(), NoopOAuth(), SubscriptionAccountPoolService(),
+    )
+    service.update(3, {"enabled": False})
+    assert service.list_system_disabled_accounts() == []
+    assert service.enable_after_quota_recovery(3) is False
+    assert repository.find(3)["disable_reason"] == "MANUAL"
 
 
 def test_client_request_error_never_updates_account_failure_state():

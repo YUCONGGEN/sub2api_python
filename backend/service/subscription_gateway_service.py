@@ -183,7 +183,7 @@ class SubscriptionGatewayService:
         self.max_queued_requests = max(1, min(10000, int(cfg.get("max-queued-requests", 200) or 200)))
         self.session_affinity_ttl = max(60.0, min(86400.0, float(cfg.get("session-affinity-ttl-seconds", 3600) or 3600)))
         self.quota_cache_ttl = max(30.0, min(3600.0, float(cfg.get("quota-cache-seconds", 300) or 300)))
-        self.weekly_quota_disable_threshold = max(0.0, min(100.0, float(cfg.get("weekly-quota-disable-threshold-percent", 2) or 0)))
+        self.weekly_quota_disable_threshold = max(0.0, min(100.0, float(cfg.get("weekly-quota-disable-threshold-percent", 1) or 0)))
         self.logger.info(
             "订阅网关保护已启用 per_account_concurrency=%s per_account_rpm=%s queue_timeout=%s max_queue=%s capacity_retries=%s session_affinity_ttl=%ss",
             self.per_account_concurrency, self.per_account_rpm,
@@ -229,6 +229,51 @@ class SubscriptionGatewayService:
                     getattr(self, attribute),
                     str(exc)[:300],
                 )
+
+    @Scheduled(fixed_rate=3600000, initial_delay=3600000)
+    async def recover_low_quota_accounts(self) -> None:
+        """Recheck system-disabled accounts once per hour.
+
+        Only rows explicitly marked LOW_QUOTA are eligible.  A manual admin
+        disable is marked MANUAL and therefore remains disabled indefinitely.
+        """
+        if not getattr(self, "enabled", False):
+            return
+        list_disabled = getattr(self.accounts, "list_system_disabled_accounts", None)
+        enable_recovered = getattr(self.accounts, "enable_after_quota_recovery", None)
+        if not callable(list_disabled) or not callable(enable_recovered):
+            return
+        try:
+            rows = list_disabled() or []
+        except Exception as exc:
+            self.logger.warning("系统停用账号额度复查失败 error=%s", str(exc)[:300])
+            return
+        threshold = float(getattr(self, "weekly_quota_disable_threshold", 1.0) or 0)
+        recovered = 0
+        for row in rows:
+            account_id = int(row.get("id") or 0)
+            if account_id <= 0:
+                continue
+            try:
+                quota = await self.query_account_quota(account_id, force=True)
+                long_window = quota.get("long_window") if isinstance(quota, dict) else None
+                remaining = self._quota_float(long_window.get("remaining_percent"), -1.0) if isinstance(long_window, dict) else -1.0
+                window_seconds = self._quota_int(long_window.get("limit_window_seconds")) if isinstance(long_window, dict) else 0
+                if (
+                    threshold > 0
+                    and remaining > threshold
+                    and window_seconds >= 5 * 24 * 3600
+                    and enable_recovered(account_id)
+                ):
+                    recovered += 1
+                    self.logger.info("系统停用账号额度恢复，自动启用 account_id=%s remaining=%.2f%%", account_id, remaining)
+            except Exception as exc:
+                self.logger.warning(
+                    "系统停用账号额度复查失败 account_id=%s error=%s",
+                    account_id, str(exc)[:300],
+                )
+        if rows:
+            self.logger.info("系统停用账号额度复查完成 checked=%s recovered=%s", len(rows), recovered)
 
     def _account_semaphore(self, account_id: int) -> asyncio.Semaphore:
         loop = asyncio.get_running_loop()

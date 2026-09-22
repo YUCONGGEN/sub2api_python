@@ -22,6 +22,9 @@ class SubscriptionMapper:
     def list_provider_accounts(self, provider: str) -> list[dict]:
         pass
 
+    def list_system_disabled_accounts(self) -> list[dict]:
+        pass
+
     def insert_account(self, account: Mapping[str, Any]) -> int:
         pass
 
@@ -35,6 +38,9 @@ class SubscriptionMapper:
         pass
 
     def disable_rate_limited_account(self, account_id: int, error_count: int, last_error: str, last_used_at: str, updated_at: str) -> int:
+        pass
+
+    def enable_system_recovered_account(self, account_id: int, updated_at: str) -> int:
         pass
 
     def delete_account(self, account_id: int) -> int:

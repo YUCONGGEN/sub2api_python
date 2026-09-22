@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <mapper namespace="backend.mappers.subscription_mapper.SubscriptionMapper">
-    <sql id="AccountColumns">id, owner_user_id, provider, name, auth_type, email, account_ref, credentials_encrypted, models_json, model_pricing_json, enabled, priority, weight, input_price_cny, output_price_cny, price_multiplier, status, error_count, last_error, expires_at, cooldown_until, last_used_at, compliance_confirmed_at, created_at, updated_at</sql>
+    <sql id="AccountColumns">id, owner_user_id, provider, name, auth_type, email, account_ref, credentials_encrypted, models_json, model_pricing_json, enabled, priority, weight, input_price_cny, output_price_cny, price_multiplier, status, error_count, last_error, disable_reason, expires_at, cooldown_until, last_used_at, compliance_confirmed_at, created_at, updated_at</sql>
     <sql id="RequestColumns">id, user_id, base_url, api_key_encrypted, model_id, use_proxy, status, admin_note, created_at, updated_at</sql>
 
     <select id="count_accounts" resultType="int">
@@ -24,12 +24,12 @@
         INSERT INTO upstream_subscription_accounts(
           owner_user_id,provider,name,auth_type,email,account_ref,credentials_encrypted,models_json,model_pricing_json,
           enabled,priority,weight,input_price_cny,output_price_cny,price_multiplier,
-          status,error_count,last_error,expires_at,cooldown_until,last_used_at,
+          status,error_count,last_error,disable_reason,expires_at,cooldown_until,last_used_at,
           compliance_confirmed_at,created_at,updated_at
         ) VALUES(
           #{account.owner_user_id},#{account.provider},#{account.name},#{account.auth_type},#{account.email},#{account.account_ref},#{account.credentials_encrypted},#{account.models_json},#{account.model_pricing_json},
           #{account.enabled},#{account.priority},#{account.weight},#{account.input_price_cny},#{account.output_price_cny},#{account.price_multiplier},
-          #{account.status},#{account.error_count},#{account.last_error},#{account.expires_at},#{account.cooldown_until},#{account.last_used_at},
+          #{account.status},#{account.error_count},#{account.last_error},#{account.disable_reason},#{account.expires_at},#{account.cooldown_until},#{account.last_used_at},
           #{account.compliance_confirmed_at},#{account.created_at},#{account.updated_at}
         )
     </insert>
@@ -52,6 +52,7 @@
             <if test="changes.status != null">status = #{changes.status},</if>
             <if test="changes.error_count != null">error_count = #{changes.error_count},</if>
             <if test="changes.last_error != null">last_error = #{changes.last_error},</if>
+            <if test="changes.disable_reason != null">disable_reason = #{changes.disable_reason},</if>
             <if test="changes.expires_at != null">expires_at = #{changes.expires_at},</if>
             <if test="changes.cooldown_until != null">cooldown_until = #{changes.cooldown_until},</if>
             <if test="changes.updated_at != null">updated_at = #{changes.updated_at},</if>
@@ -61,7 +62,9 @@
     <update id="update_credentials">
         UPDATE upstream_subscription_accounts
         SET credentials_encrypted = #{credentials_encrypted}, email = #{email}, account_ref = #{account_ref},
-            expires_at = #{expires_at}, status = 'READY', error_count = 0, last_error = '', cooldown_until = NULL, updated_at = #{updated_at}
+            expires_at = #{expires_at},
+            status = CASE WHEN enabled = 0 THEN 'DISABLED' ELSE 'READY' END,
+            error_count = 0, last_error = '', cooldown_until = NULL, updated_at = #{updated_at}
         WHERE id = #{account_id}
     </update>
     <update id="mark_account_result">
@@ -73,9 +76,20 @@
     <update id="disable_rate_limited_account">
         UPDATE upstream_subscription_accounts
         SET enabled = 0, status = 'DISABLED', error_count = #{error_count},
-            last_error = #{last_error}, cooldown_until = NULL,
+            last_error = #{last_error}, disable_reason = 'LOW_QUOTA', cooldown_until = NULL,
             last_used_at = #{last_used_at}, updated_at = #{updated_at}
-        WHERE id = #{account_id}
+        WHERE id = #{account_id} AND enabled = 1 AND (disable_reason IS NULL OR disable_reason = '')
+    </update>
+    <select id="list_system_disabled_accounts">
+        SELECT <include refid="AccountColumns"/> FROM upstream_subscription_accounts
+        WHERE provider = 'openai' AND enabled = 0 AND status = 'DISABLED' AND disable_reason = 'LOW_QUOTA'
+        ORDER BY updated_at ASC, id ASC
+    </select>
+    <update id="enable_system_recovered_account">
+        UPDATE upstream_subscription_accounts
+        SET enabled = 1, status = 'READY', error_count = 0, last_error = '',
+            disable_reason = '', cooldown_until = NULL, updated_at = #{updated_at}
+        WHERE id = #{account_id} AND enabled = 0 AND status = 'DISABLED' AND disable_reason = 'LOW_QUOTA'
     </update>
     <delete id="delete_account">DELETE FROM upstream_subscription_accounts WHERE id = #{account_id}</delete>
 

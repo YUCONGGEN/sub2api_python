@@ -162,6 +162,16 @@ class StoreRepository:
         self._ensure_column(conn, "api_keys", "key_last4", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column(conn, "upstream_subscription_accounts", "owner_user_id", "INTEGER")
         self._ensure_column(conn, "upstream_subscription_accounts", "model_pricing_json", "TEXT NOT NULL DEFAULT '{}'")
+        self._ensure_column(conn, "upstream_subscription_accounts", "disable_reason", "TEXT NOT NULL DEFAULT ''")
+        conn.execute(
+            """
+            UPDATE upstream_subscription_accounts
+            SET disable_reason = 'LOW_QUOTA'
+            WHERE enabled = 0 AND status = 'DISABLED'
+              AND (disable_reason IS NULL OR disable_reason = '')
+              AND last_error LIKE '每周订阅剩余量%已停用%'
+            """
+        )
         self._ensure_column(conn, "upstream_config_requests", "use_proxy", "INTEGER NOT NULL DEFAULT 0")
         for column, definition in {
             "billing_source": "TEXT NOT NULL DEFAULT 'WALLET'",
@@ -228,6 +238,7 @@ class StoreRepository:
             "upstream_subscription_accounts": {
                 "owner_user_id": "BIGINT",
                 "model_pricing_json": "LONGTEXT NOT NULL",
+                "disable_reason": "VARCHAR(30) NOT NULL DEFAULT ''",
             },
             "upstream_config_requests": {
                 "use_proxy": "TINYINT NOT NULL DEFAULT 0",
@@ -239,6 +250,15 @@ class StoreRepository:
             for column, definition in columns.items():
                 if column not in existing:
                     cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        cursor.execute(
+            """
+            UPDATE upstream_subscription_accounts
+            SET disable_reason = 'LOW_QUOTA'
+            WHERE enabled = 0 AND status = 'DISABLED'
+              AND (disable_reason IS NULL OR disable_reason = '')
+              AND last_error LIKE '每周订阅剩余量%已停用%'
+            """
+        )
         cursor.execute("SHOW INDEX FROM api_keys WHERE Key_name='idx_api_key_hash'")
         if not cursor.fetchone():
             cursor.execute("CREATE UNIQUE INDEX idx_api_key_hash ON api_keys(api_key_hash)")

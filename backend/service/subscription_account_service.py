@@ -441,6 +441,7 @@ class SubscriptionAccountService:
             "status": "READY" if as_bool(body.get("enabled"), True) else "DISABLED",
             "error_count": 0,
             "last_error": "",
+            "disable_reason": "" if as_bool(body.get("enabled"), True) else "MANUAL",
             "expires_at": expires_at,
             "cooldown_until": None,
             "last_used_at": None,
@@ -551,6 +552,7 @@ class SubscriptionAccountService:
             changes["status"] = "READY" if enabled else "DISABLED"
             changes["last_error"] = ""
             changes["error_count"] = 0
+            changes["disable_reason"] = "" if enabled else "MANUAL"
         for key, label, minimum, maximum, default in (
             ("priority", "优先级", -1000, 1000, int(existing.get("priority") or 0)),
             ("weight", "权重", 1, 100, int(existing.get("weight") or 1)),
@@ -607,7 +609,7 @@ class SubscriptionAccountService:
             if account_ref:
                 changes["account_ref"] = account_ref
             changes["credentials_encrypted"] = self.cipher.encrypt(credentials)
-            changes["status"] = "READY"
+            changes["status"] = "READY" if as_bool(existing.get("enabled"), True) else "DISABLED"
             changes["last_error"] = ""
             changes["error_count"] = 0
         updated = self.repository.update(account_id, changes)
@@ -794,8 +796,8 @@ class SubscriptionAccountService:
         if code == 429:
             # A 429 may only describe the short (for example five-hour)
             # window. It must not persistently disable or cool an account.
-            # Persistent disabling is driven exclusively by an explicit
-            # weekly-quota snapshot below the configured threshold.
+            # A real upstream 429 is handled asynchronously by the gateway,
+            # which checks the weekly quota before deciding whether to disable.
             return
         normalized_detail = str(detail or "").strip().lower()
         if any(marker in normalized_detail for marker in NO_COOLDOWN_ERROR_MARKERS):
@@ -825,14 +827,16 @@ class SubscriptionAccountService:
             last_used_at=utc_now(), updated_at=utc_now(),
         )
 
-    def disable_for_weekly_quota(self, row: dict[str, Any], remaining_percent: float, threshold: float = 2.0) -> bool:
-        """Persistently disable an account only for a confirmed low weekly quota."""
+    def disable_for_weekly_quota(self, row: dict[str, Any], remaining_percent: float, threshold: float = 1.0) -> bool:
+        """System-disable only an enabled account with a confirmed low quota."""
         try:
             remaining = float(remaining_percent)
             limit = float(threshold)
         except (TypeError, ValueError):
             return False
         if not math.isfinite(remaining) or not math.isfinite(limit) or remaining < 0 or remaining >= limit:
+            return False
+        if not as_bool(row.get("enabled"), True) and str(row.get("disable_reason") or "").upper() == "MANUAL":
             return False
         now = utc_now()
         detail = f"每周订阅剩余量 {remaining:.2f}% 低于 {limit:.2f}%，已停用并等待管理员处理"
@@ -842,6 +846,14 @@ class SubscriptionAccountService:
         )
         self.pool.forget(int(row["id"]))
         return True
+
+    def list_system_disabled_accounts(self) -> list[dict[str, Any]]:
+        """Return only accounts disabled by the automatic low-quota guard."""
+        return self.repository.list_system_disabled_accounts()
+
+    def enable_after_quota_recovery(self, account_id: int) -> bool:
+        """Re-enable an account only when its disable reason is LOW_QUOTA."""
+        return self.repository.enable_system_recovered(int(account_id), updated_at=utc_now())
 
     @classmethod
     def cost(cls, row: dict[str, Any], input_tokens: int, output_tokens: int, model_id: str | None = None) -> float:

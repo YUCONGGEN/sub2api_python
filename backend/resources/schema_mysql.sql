@@ -228,6 +228,7 @@ CREATE TABLE IF NOT EXISTS upstream_subscription_accounts (
   status VARCHAR(30) NOT NULL DEFAULT 'READY',
   error_count INT NOT NULL DEFAULT 0,
   last_error TEXT NOT NULL,
+  disable_reason VARCHAR(30) NOT NULL DEFAULT '',
   expires_at VARCHAR(40),
   cooldown_until VARCHAR(40),
   last_used_at VARCHAR(40),

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 import uuid
 
@@ -18,6 +19,9 @@ from backend.protocol.subscription_adapter import (
     maybe_proxy_openai_chat_subscription,
     maybe_proxy_openai_subscription,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 def _beans(request: Request) -> tuple[AiGatewayService, AuthService, ConversationService]:
@@ -702,6 +706,10 @@ async def openai_responses(request: Request):
                     yield _responses_event("response.completed", {"type": "response.completed", "sequence_number": next_sequence(), "response": response_body})
                     yield "data: [DONE]\n\n"
                 except (asyncio.CancelledError, GeneratorExit):
+                    logger.info(
+                        "Responses 直连流被客户端取消 requested_model=%s effective_model=%s",
+                        payload.get("model"), payload.get("_rose_model_id") or payload.get("model"),
+                    )
                     answer = "".join(answer_parts)
                     usage = {
                         "prompt_tokens": prompt_tokens or _estimate_payload_tokens(service, payload, "input"),
@@ -723,6 +731,11 @@ async def openai_responses(request: Request):
                         pass
                     raise
                 except Exception as exc:
+                    logger.warning(
+                        "Responses 直连上游失败 requested_model=%s effective_model=%s error_type=%s detail=%s",
+                        payload.get("model"), payload.get("_rose_model_id") or payload.get("model"),
+                        type(exc).__name__, str(exc)[:500],
+                    )
                     await fail_conversation(exc)
                     yield _responses_event("error", {"type": "error", "error": {"message": str(exc), "type": "upstream_error"}})
                     yield "data: [DONE]\n\n"

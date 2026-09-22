@@ -50,10 +50,21 @@ def _direct_api_activity(request: Request, service: AiGatewayService, payload: d
         begin = getattr(gateway, "begin_api_activity", None)
         if not callable(begin):
             return ""
-        model = str(payload.get("model") or service.model_name)
-        spec = getattr(service, "models", {}).get(model, {})
+        requested_model = str(payload.get("model") or service.model_name)
+        # A subscription fallback keeps the client-facing model unchanged but
+        # stores the effective direct model in ``_rose_model_id``.  Use that
+        # model for telemetry, otherwise a DeepSeek Chat fallback is shown as
+        # an anonymous OpenAI request and appears not to have been called.
+        effective_id = str(payload.get("_rose_model_id") or requested_model)
+        spec = getattr(service, "models", {}).get(effective_id, {})
         if not isinstance(spec, dict):
             spec = {}
+        model = str(
+            payload.get("_rose_upstream_model")
+            or spec.get("upstream-model")
+            or effective_id
+            or requested_model
+        )
         reasoning = payload.get("reasoning") if isinstance(payload.get("reasoning"), dict) else {}
         effort = reasoning.get("effort") or payload.get("reasoning_effort") or payload.get("reasoning-effort") or ""
         return str(begin(

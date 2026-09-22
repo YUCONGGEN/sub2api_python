@@ -30,7 +30,7 @@ class StoreMapper:
     def insert_user(self, user: Mapping[str, Any]) -> int:
         pass
 
-    def update_login(self, user_id: int, last_login: str) -> int:
+    def update_login(self, user_id: int, last_login: str, daily_login_bonus: float = 0, business_date: str = "") -> int:
         pass
 
     def update_password(self, user_id: int, password_hash: str) -> int:

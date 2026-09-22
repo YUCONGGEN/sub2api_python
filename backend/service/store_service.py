@@ -267,7 +267,16 @@ class StoreService:
         return user, key
 
     def update_login(self, user_id: int) -> None:
-        self.mapper.update_login(int(user_id), utc_now())
+        billing = get_config().get("rose", {}).get("billing", {})
+        try:
+            daily_bonus = float(billing.get("daily-login-bonus", 10)) if isinstance(billing, dict) else 10.0
+        except (TypeError, ValueError):
+            daily_bonus = 10.0
+        if not math.isfinite(daily_bonus) or daily_bonus < 0:
+            daily_bonus = 0.0
+        self.mapper.update_login(
+            int(user_id), utc_now(), daily_bonus, business_date_keys(1)[0],
+        )
 
     def update_password(self, user_id: int, password_hash: str) -> None:
         self.mapper.update_password(int(user_id), str(password_hash))

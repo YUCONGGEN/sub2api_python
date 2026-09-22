@@ -304,6 +304,7 @@ def test_registration_returns_the_first_api_key_once():
     assert response.data["api_key_id"] == 9
     assert response.data["token"] == "signed-token"
     assert auth.store.created is not None
+    assert auth.store.created[1]["balance"] == 50.0
 
 
 def test_admin_user_creation_returns_the_first_api_key_once():

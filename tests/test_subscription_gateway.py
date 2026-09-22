@@ -514,6 +514,34 @@ def test_gateway_admin_metrics_identify_queued_and_active_users():
     asyncio.run(scenario())
 
 
+def test_gateway_admin_metrics_include_direct_api_activity_without_exposing_it_publicly():
+    class UserStore:
+        @staticmethod
+        def find_user(user_id):
+            return {"id": user_id, "username": "api-user"}
+
+    gateway = SubscriptionGatewayService(None, UserStore())
+    gateway.queue_timeout = 30
+    gateway.per_account_concurrency = 1
+    gateway.max_queued_requests = 200
+    activity_id = gateway.begin_api_activity(
+        "DeepSeek", "deepseek-v4-pro", 12, "high", "chat.completions", "chatcmpl-live",
+    )
+
+    admin = gateway.metrics(include_users=True)
+    public = gateway.metrics()
+
+    assert admin["api_active_requests"] == 1
+    assert admin["api_users"][0]["username"] == "api-user"
+    assert admin["api_users"][0]["provider"] == "api"
+    assert admin["api_users"][0]["api_provider"] == "DeepSeek"
+    assert admin["api_users"][0]["model"] == "deepseek-v4-pro"
+    assert "api_users" not in public
+
+    gateway.finish_api_activity(activity_id)
+    assert gateway.metrics(include_users=True)["api_users"] == []
+
+
 def test_gateway_extracts_reasoning_effort_from_supported_request_shapes():
     assert SubscriptionGatewayService._reasoning_effort({"reasoning": {"effort": "xhigh"}}) == "xhigh"
     assert SubscriptionGatewayService._reasoning_effort({"reasoning_effort": "medium"}) == "medium"

@@ -36,7 +36,15 @@
         INSERT INTO users(username,password_hash,email,role,balance,enabled,api_key,created_at,group_id)
         VALUES(#{user.username},#{user.password_hash},#{user.email},#{user.role},#{user.balance},#{user.enabled},#{user.api_key},#{user.created_at},#{user.group_id})
     </insert>
-    <update id="update_login">UPDATE users SET last_login = #{last_login} WHERE id = #{user_id}</update>
+    <update id="update_login">
+        UPDATE users
+        SET last_login = #{last_login},
+            balance = balance + CASE
+                WHEN #{daily_login_bonus} &gt; 0
+                 AND (last_login IS NULL OR SUBSTR(last_login, 1, 10) &lt;&gt; #{business_date})
+                THEN #{daily_login_bonus} ELSE 0 END
+        WHERE id = #{user_id}
+    </update>
     <update id="update_password">UPDATE users SET password_hash = #{password_hash}, session_version = session_version + 1 WHERE id = #{user_id} AND deleted_at IS NULL</update>
     <update id="update_user">
         UPDATE users

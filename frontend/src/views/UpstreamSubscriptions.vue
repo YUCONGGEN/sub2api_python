@@ -17,6 +17,7 @@
     </div>
     <div v-if="isAdmin" class="gateway-strip gateway-capacity" aria-label="订阅账号池实时容量">
       <span><small>正在执行</small><b>{{ gatewayMetrics.active_requests || 0 }}</b></span>
+      <span><small>API 直连</small><b>{{ gatewayMetrics.api_active_requests || 0 }}</b></span>
       <span><small>排队请求</small><b>{{ gatewayMetrics.queue_waiting || 0 }} / {{ gatewayMetrics.queue_limit || 0 }}</b></span>
       <span><small>RPM 使用</small><b>{{ gatewayMetrics.rpm_used || 0 }} / {{ gatewayMetrics.rpm_capacity || 0 }}</b></span>
       <span><small>账号冷却</small><b>{{ gatewayMetrics.cooldown_accounts || 0 }} / {{ gatewayMetrics.account_pool_total || 0 }}</b></span>

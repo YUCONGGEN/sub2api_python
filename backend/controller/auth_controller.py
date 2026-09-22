@@ -18,6 +18,16 @@ class AuthController:
         self.auth = auth
         self.password_recovery = PasswordRecoveryService(store)
 
+    @staticmethod
+    def _billing_amount(key: str, default: float) -> float:
+        """Read a non-negative money amount from rose.billing safely."""
+        try:
+            billing = get_config().get("rose", {}).get("billing", {})
+            value = float(billing.get(key, default)) if isinstance(billing, dict) else float(default)
+        except (TypeError, ValueError):
+            value = float(default)
+        return value if value >= 0 else 0.0
+
     @PostMapping("/login")
     def login(self, body: dict = RequestBody(), user_agent: str = RequestHeader(name="User-Agent", required=False), forwarded_for: str = RequestHeader(name="X-Forwarded-For", required=False)):
         username = str(body.get("username", "")).strip()
@@ -26,6 +36,9 @@ class AuthController:
         if not user or not user.get("enabled") or not self.store.verify_password(password, user["password_hash"]):
             return unauthorized("账户或密码错误")
         self.store.update_login(user["id"])
+        # update_login may grant the once-per-business-day login reward; read
+        # the row again so the returned profile shows the current balance.
+        user = self.store.find_by_username(username) or user
         return ok({"ok": True, "token": self.auth.issue_token(user, user_agent, str(forwarded_for or "").split(",")[0].strip()), "user": self.store.public_user(user)})
 
     @PostMapping("/password-recovery/request")
@@ -139,7 +152,12 @@ class AuthController:
         if self.store.find_by_username(username):
             return bad("账户已存在", 409)
         try:
-            user, default_key = self.store.create_user_with_default_key(username, password, email)
+            user, default_key = self.store.create_user_with_default_key(
+                username,
+                password,
+                email,
+                balance=self._billing_amount("registration-initial-balance", 50.0),
+            )
         except Exception:
             return bad("注册失败，请更换账户名", 409)
         return ok({

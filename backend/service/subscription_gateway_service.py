@@ -117,6 +117,12 @@ class SubscriptionGatewayService:
         self._activity_sequence = 0
         self._queued_activities: dict[int, dict[str, Any]] = {}
         self._active_activities: dict[int, dict[str, Any]] = {}
+        # Direct YAML/API upstream calls do not use the shared account
+        # semaphore, but administrators still need the same live visibility.
+        # Keep these activities separate so existing shared-pool counters and
+        # queue semantics remain unchanged.
+        self._api_activity_sequence = 0
+        self._api_active_activities: dict[str, dict[str, Any]] = {}
         self._quota_cache: dict[int, tuple[float, dict[str, Any]]] = {}
         self._quota_locks: dict[tuple[Any, int], asyncio.Lock] = {}
         self._quota_tasks: set[asyncio.Task] = set()
@@ -402,6 +408,41 @@ class SubscriptionGatewayService:
             self._queued_activities.pop(int(activity_id), None)
             self._active_activities.pop(int(activity_id), None)
 
+    def begin_api_activity(
+        self,
+        provider: str,
+        model: str,
+        user_id: int,
+        reasoning_effort: str = "",
+        endpoint: str = "",
+        request_id: str = "",
+    ) -> str:
+        """Register a direct configured-API request for live admin metrics."""
+        with self._safety_lock:
+            self._api_activity_sequence += 1
+            activity_id = str(request_id or f"api-{self._api_activity_sequence}")
+            # A client-controlled X-Request-ID may be reused while an earlier
+            # request is still running; keep the in-memory key unique.
+            if activity_id in self._api_active_activities:
+                activity_id = f"{activity_id}-{self._api_activity_sequence}"
+            self._api_active_activities[activity_id] = {
+                "request_id": activity_id,
+                "user_id": int(user_id),
+                "provider": "api",
+                "api_provider": str(provider or "API"),
+                "model": str(model or ""),
+                "reasoning_effort": str(reasoning_effort or ""),
+                "endpoint": str(endpoint or ""),
+                "started_at": datetime.now(timezone.utc).isoformat(),
+            }
+            return activity_id
+
+    def finish_api_activity(self, activity_id: str) -> None:
+        if not activity_id:
+            return
+        with self._safety_lock:
+            self._api_active_activities.pop(str(activity_id), None)
+
     async def _acquire_account_slot(self, semaphore: asyncio.Semaphore, account_id: int = 0, activity: dict[str, Any] | None = None) -> float:
         """Wait for an account slot and return the queue duration in milliseconds."""
         started_at = time.monotonic()
@@ -466,9 +507,10 @@ class SubscriptionGatewayService:
             snapshot["concurrent_tasks"] = snapshot["active_requests"]
             active_activities = [dict(item) for item in self._active_activities.values()]
             queued_activities = [dict(item) for item in self._queued_activities.values()]
+            api_active_activities = [dict(item) for item in self._api_active_activities.values()]
         if include_users:
             usernames: dict[int, str] = {}
-            for user_id in {int(item["user_id"]) for item in active_activities + queued_activities}:
+            for user_id in {int(item["user_id"]) for item in active_activities + queued_activities + api_active_activities}:
                 try:
                     user = self.store.find_user(user_id) if self.store else None
                 except Exception:
@@ -499,6 +541,10 @@ class SubscriptionGatewayService:
             snapshot["queued_users"] = [
                 with_username(item) for item in sorted(queued_activities, key=lambda row: row.get("queued_at") or "")
             ]
+            snapshot["api_users"] = [
+                with_username(item) for item in sorted(api_active_activities, key=lambda row: row.get("started_at") or "")
+            ]
+        snapshot["api_active_requests"] = len(api_active_activities)
         group_runtime = user_group_runtime()
         if group_runtime:
             group_queue = group_runtime.queue_metrics(include_users=include_users)

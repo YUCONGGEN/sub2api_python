@@ -37,6 +37,53 @@ def _group_service(request: Request):
     return context.get_bean("user_group_service")
 
 
+def _subscription_gateway(request: Request):
+    """Resolve the shared gateway used only for live API activity telemetry."""
+    context = request.app.state.spring_application.application_context
+    return context.get_bean("subscription_gateway_service")
+
+
+def _direct_api_activity(request: Request, service: AiGatewayService, payload: dict, user: dict, request_id: str, endpoint: str) -> str:
+    """Start a live record for a configured YAML/API upstream request."""
+    try:
+        gateway = _subscription_gateway(request)
+        begin = getattr(gateway, "begin_api_activity", None)
+        if not callable(begin):
+            return ""
+        model = str(payload.get("model") or service.model_name)
+        spec = getattr(service, "models", {}).get(model, {})
+        if not isinstance(spec, dict):
+            spec = {}
+        reasoning = payload.get("reasoning") if isinstance(payload.get("reasoning"), dict) else {}
+        effort = reasoning.get("effort") or payload.get("reasoning_effort") or payload.get("reasoning-effort") or ""
+        return str(begin(
+            str(spec.get("provider") or "OpenAI API"), model, int(user["id"]),
+            str(effort), endpoint, request_id,
+        ) or "")
+    except Exception:
+        # Telemetry must never affect a valid upstream request.
+        return ""
+
+
+def _finish_direct_api_activity(request: Request, activity_id: str) -> None:
+    if not activity_id:
+        return
+    try:
+        finish = getattr(_subscription_gateway(request), "finish_api_activity", None)
+        if callable(finish):
+            finish(activity_id)
+    except Exception:
+        pass
+
+
+async def _tracked_stream(stream, request: Request, activity_id: str):
+    try:
+        async for chunk in stream:
+            yield chunk
+    finally:
+        _finish_direct_api_activity(request, activity_id)
+
+
 async def _authenticated_user(request: Request, auth: AuthService):
     cached = request.scope.get("state", {}).get("rose_user")
     if cached:
@@ -105,6 +152,8 @@ async def openai_chat(request: Request):
         return subscription_response
     payload = service.apply_openai_subscription_fallback(payload)
     request_id = "chatcmpl-" + uuid.uuid4().hex
+    direct_activity_id = _direct_api_activity(request, service, payload, user, request_id, "chat.completions")
+    is_stream = bool(payload.get("stream"))
     # Persist only usage metadata.  Run the small bookkeeping insert in the
     # default executor so it overlaps the upstream network wait and cannot
     # hold back the first streamed token (especially with a remote MySQL DB).
@@ -299,7 +348,7 @@ async def openai_chat(request: Request):
                     error_body = {"error": {"message": str(exc), "type": "upstream_error"}}
                     yield f"data: {json.dumps(error_body, ensure_ascii=False)}\n\n"
                     yield "data: [DONE]\n\n"
-            return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+            return StreamingResponse(_tracked_stream(events(), request, direct_activity_id), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
         answer, usage, model, upstream_trace = await service.ainvoke_with_trace(payload)
         conversation = await resolve_conversation()
         ok, cost, record = await asyncio.to_thread(service.charge_and_record, user["id"], model, usage)
@@ -331,6 +380,9 @@ async def openai_chat(request: Request):
     except Exception as exc:
         await fail_conversation(exc)
         return JSONResponse({"error": {"message": str(exc), "type": "upstream_error"}}, status_code=502)
+    finally:
+        if not is_stream:
+            _finish_direct_api_activity(request, direct_activity_id)
 
 
 def _responses_input_to_messages(value):
@@ -428,6 +480,8 @@ async def openai_responses(request: Request):
             else:
                 messages.insert(0, {"role": "system", "content": instructions.strip()})
         response_id = "resp_" + uuid.uuid4().hex
+        direct_activity_id = _direct_api_activity(request, service, payload, user, response_id, "responses")
+        is_stream = bool(payload.get("stream"))
         conversation_task = asyncio.create_task(asyncio.to_thread(
             conversations.begin, user["id"], "responses",
             {"model": payload.get("model")}, None, response_id,
@@ -661,7 +715,7 @@ async def openai_responses(request: Request):
                     await fail_conversation(exc)
                     yield _responses_event("error", {"type": "error", "error": {"message": str(exc), "type": "upstream_error"}})
                     yield "data: [DONE]\n\n"
-            return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+            return StreamingResponse(_tracked_stream(events(), request, direct_activity_id), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
         answer, usage, model, upstream_trace = await service.ainvoke_with_trace({**payload, "messages": messages})
         conversation = await resolve_conversation()
         ok, cost, record = await asyncio.to_thread(service.charge_and_record, user["id"], model, usage)
@@ -697,6 +751,9 @@ async def openai_responses(request: Request):
         row = await resolver() if callable(resolver) else locals().get("conversation")
         await asyncio.to_thread(conversations.fail, row, exc)
         return JSONResponse({"error": {"message": str(exc), "type": "upstream_error"}}, status_code=502)
+    finally:
+        if not locals().get("is_stream", False):
+            _finish_direct_api_activity(request, locals().get("direct_activity_id", ""))
 
 
 async def openai_models(request: Request):
@@ -764,5 +821,3 @@ def register_proxy_route(app):
     app.add_api_route("/chat/completions", openai_chat, methods=["POST"], tags=["OpenAI Compatible"])
     app.add_api_route("/responses", openai_responses, methods=["POST"], tags=["OpenAI Responses Compatible"])
     app.add_api_route("/models", openai_models, methods=["GET"], tags=["OpenAI Compatible"])
-
-

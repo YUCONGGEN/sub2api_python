@@ -28,6 +28,50 @@ class AuthController:
             value = float(default)
         return value if value >= 0 else 0.0
 
+    @staticmethod
+    def _group_routing_notice(user: dict) -> dict:
+        """Build the routing notice shown for the default user group.
+
+        The text is derived from the effective group mapping rather than from
+        a hard-coded model.  A group-wide rule (empty source model and a
+        wildcard/empty effort) is preferred; when there is only one enabled
+        target across the group's mappings it is still safe to summarize it.
+        This keeps the notice honest when an administrator changes mappings.
+        """
+        mappings = user.get("group_model_mappings")
+        mappings = [
+            item for item in (mappings if isinstance(mappings, list) else [])
+            if isinstance(item, dict) and bool(item.get("enabled"))
+        ]
+        universal = [
+            item for item in mappings
+            if not str(item.get("source_model") or "").strip()
+            and str(item.get("source_effort") or "").strip().lower() in {"", "*"}
+        ]
+        candidates = universal or mappings
+        targets: list[tuple[str, str]] = []
+        for item in candidates:
+            model = str(item.get("target_model") or "").strip()
+            effort = str(item.get("target_effort") or "").strip().lower()
+            if model and (model, effort) not in targets:
+                targets.append((model, effort))
+
+        group_name = str(user.get("group_name") or "当前账号分组").strip()
+        if len(targets) == 1:
+            model, effort = targets[0]
+            route = f"所有请求将转向 {model}"
+            if effort:
+                route += f"，推理强度为 {effort}"
+        elif targets:
+            route = "请求将按当前分组的模型映射规则转发"
+        else:
+            route = "请求将按当前分组策略转发"
+        return {
+            "title": "分组路由提示",
+            "group_name": group_name,
+            "message": f"当前账号分组（{group_name}）{route}；如需调整分组，请联系管理员。",
+        }
+
     @PostMapping("/login")
     def login(self, body: dict = RequestBody(), user_agent: str = RequestHeader(name="User-Agent", required=False), forwarded_for: str = RequestHeader(name="X-Forwarded-For", required=False)):
         username = str(body.get("username", "")).strip()
@@ -35,11 +79,25 @@ class AuthController:
         user = self.store.find_by_username(username)
         if not user or not user.get("enabled") or not self.store.verify_password(password, user["password_hash"]):
             return unauthorized("账户或密码错误")
+        # The default user group is intentionally reminded on every login so
+        # users know its routing policy. Other groups are managed explicitly
+        # and should not receive this notice.
+        show_group_notice = (
+            str(user.get("role") or "").upper() != "ADMIN"
+            and bool(user.get("group_is_default"))
+        )
         self.store.update_login(user["id"])
         # update_login may grant the once-per-business-day login reward; read
         # the row again so the returned profile shows the current balance.
         user = self.store.find_by_username(username) or user
-        return ok({"ok": True, "token": self.auth.issue_token(user, user_agent, str(forwarded_for or "").split(",")[0].strip()), "user": self.store.public_user(user)})
+        response = {
+            "ok": True,
+            "token": self.auth.issue_token(user, user_agent, str(forwarded_for or "").split(",")[0].strip()),
+            "user": self.store.public_user(user),
+        }
+        if show_group_notice:
+            response["group_routing_notice"] = self._group_routing_notice(user)
+        return ok(response)
 
     @PostMapping("/password-recovery/request")
     def request_password_recovery(self, body: dict = RequestBody()):

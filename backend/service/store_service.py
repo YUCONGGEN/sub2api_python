@@ -186,6 +186,7 @@ class StoreService:
                 "assigned_group_weight": assigned_group["weight"] if assigned_group else 0,
                 "effective_group_id": effective_group["id"],
                 "group_name": effective_group["name"],
+                "group_is_default": bool(effective_group.get("is_default")),
                 "group_weight": effective_group["weight"],
                 "group_concurrency_limit": effective_group["concurrency_limit"],
                 "group_allowed_models": effective_group["allowed_models"],
@@ -205,7 +206,7 @@ class StoreService:
                 ],
             })
         else:
-            data.update({"assigned_group_id": None, "assigned_group_name": "未分组", "effective_group_id": None, "group_name": "未分组", "group_weight": 0, "group_concurrency_limit": 1, "group_allowed_models": [], "group_model_mappings": [], "group_source": "ASSIGNED", "group_upgrade_candidates": []})
+            data.update({"assigned_group_id": None, "assigned_group_name": "未分组", "effective_group_id": None, "group_name": "未分组", "group_is_default": False, "group_weight": 0, "group_concurrency_limit": 1, "group_allowed_models": [], "group_model_mappings": [], "group_source": "ASSIGNED", "group_upgrade_candidates": []})
         return data
 
     # ------------------------------------------------------------------ users

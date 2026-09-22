@@ -296,6 +296,51 @@ class DefaultKeyAuth:
         return {"id": 1, "role": "ADMIN"} if self.admin else None
 
 
+class FirstLoginStore:
+    def __init__(self):
+        self.user = {
+            "id": 41,
+            "username": "new_user",
+            "password_hash": "hashed",
+            "enabled": 1,
+            "role": "USER",
+            "last_login": None,
+            "group_name": "默认用户组",
+            "group_is_default": True,
+            "group_model_mappings": [{
+                "enabled": True,
+                "source_model": "",
+                "source_effort": "*",
+                "target_model": "gpt-5.6-luna",
+                "target_effort": "medium",
+            }],
+        }
+        self.login_updates = 0
+
+    def find_by_username(self, username):
+        return dict(self.user) if username == self.user["username"] else None
+
+    @staticmethod
+    def verify_password(password, password_hash):
+        return password == "secret12" and password_hash == "hashed"
+
+    def update_login(self, user_id):
+        self.login_updates += 1
+        self.user["last_login"] = "2026-09-22T00:00:00+00:00"
+
+    @staticmethod
+    def public_user(user):
+        data = dict(user)
+        data.pop("password_hash", None)
+        return data
+
+
+class FirstLoginAuth:
+    @staticmethod
+    def issue_token(user, user_agent, ip_address):
+        return "signed-token"
+
+
 def test_registration_returns_the_first_api_key_once():
     auth = DefaultKeyAuth()
     response = AuthController(auth.store, auth).register({"username": "new_user", "password": "secret12", "email": ""}, "browser", "127.0.0.1")
@@ -305,6 +350,30 @@ def test_registration_returns_the_first_api_key_once():
     assert response.data["token"] == "signed-token"
     assert auth.store.created is not None
     assert auth.store.created[1]["balance"] == 50.0
+
+
+def test_default_group_returns_routing_notice_on_every_login():
+    store = FirstLoginStore()
+    controller = AuthController(store, FirstLoginAuth())
+
+    first = controller.login({"username": "new_user", "password": "secret12"}, "browser", "127.0.0.1")
+    assert first.data["group_routing_notice"]["message"] == (
+        "当前账号分组（默认用户组）所有请求将转向 gpt-5.6-luna，推理强度为 medium；如需调整分组，请联系管理员。"
+    )
+    assert store.login_updates == 1
+
+    second = controller.login({"username": "new_user", "password": "secret12"}, "browser", "127.0.0.1")
+    assert second.data["group_routing_notice"]["message"].startswith("当前账号分组（默认用户组）")
+    assert store.login_updates == 2
+
+
+def test_non_default_group_does_not_return_routing_notice():
+    store = FirstLoginStore()
+    store.user["group_is_default"] = False
+    controller = AuthController(store, FirstLoginAuth())
+
+    first = controller.login({"username": "new_user", "password": "secret12"}, "browser", "127.0.0.1")
+    assert "group_routing_notice" not in first.data
 
 
 def test_admin_user_creation_returns_the_first_api_key_once():

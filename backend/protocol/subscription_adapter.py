@@ -191,20 +191,31 @@ async def _ensure_responses_completion(raw_stream, requested_model: str):
             yield recovered_frame()
         yield frame
 
-    async for chunk in raw_stream:
-        if not chunk:
-            continue
-        buffer.extend(chunk)
-        while True:
-            found = _sse_frame_end(buffer)
-            if found is None:
-                break
-            offset, delimiter_length = found
-            end = offset + delimiter_length
-            frame = bytes(buffer[:end])
-            del buffer[:end]
-            async for emitted in emit_frame(frame):
-                yield emitted
+    stream_error: Exception | None = None
+    try:
+        async for chunk in raw_stream:
+            if not chunk:
+                continue
+            buffer.extend(chunk)
+            while True:
+                found = _sse_frame_end(buffer)
+                if found is None:
+                    break
+                offset, delimiter_length = found
+                end = offset + delimiter_length
+                frame = bytes(buffer[:end])
+                del buffer[:end]
+                async for emitted in emit_frame(frame):
+                    yield emitted
+    except (asyncio.CancelledError, GeneratorExit):
+        raise
+    except Exception as exc:
+        # httpx raises a transport error when an upstream closes the socket
+        # before the final SSE frame.  If a usable Responses payload already
+        # reached the caller, finish that response instead of turning it into
+        # a protocol-level disconnect.  An empty/invalid stream still raises
+        # so genuine upstream failures remain visible to the client.
+        stream_error = exc
 
     if buffer.strip():
         frame = bytes(buffer)
@@ -214,6 +225,9 @@ async def _ensure_responses_completion(raw_stream, requested_model: str):
             yield emitted
     if saw_payload and not terminal:
         yield recovered_frame()
+        yield b"data: [DONE]\n\n"
+    elif stream_error is not None and not terminal:
+        raise stream_error
 
 
 async def maybe_proxy_openai_subscription(request: Request, payload: dict[str, Any], user: dict[str, Any]):

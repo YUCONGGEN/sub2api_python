@@ -1306,6 +1306,36 @@ def test_native_responses_stream_recovers_missing_completion_event(monkeypatch):
     assert store.charges[0][3] > 0
 
 
+def test_native_responses_stream_recovers_transport_disconnect_after_output(monkeypatch):
+    class DisconnectingStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b'event: response.created\ndata: {"type":"response.created","sequence_number":1,"response":{"id":"resp_partial","model":"gpt-6-astra","status":"in_progress"}}\n\n'
+            yield b'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","sequence_number":2,"delta":"hello"}\n\n'
+            raise httpx.ReadError("upstream closed before response.completed")
+
+    client = SequenceClient([httpx.Response(
+        200,
+        headers={"content-type": "text/event-stream"},
+        stream=DisconnectingStream(),
+    )])
+    gateway, accounts, store = configured_chat_bridge(monkeypatch, client)
+
+    async def scenario():
+        response = await subscription_adapter.maybe_proxy_openai_subscription(
+            None,
+            {"model": "gpt-6-astra", "input": [{"role": "user", "content": "hello"}], "stream": True},
+            {"id": 9},
+        )
+        raw = b"".join([chunk async for chunk in response.body_iterator])
+        assert raw.endswith(b"data: [DONE]\n\n")
+        assert b'"type":"response.completed"' in raw
+        assert b'"output_text":"hello"' in raw
+
+    asyncio.run(scenario())
+    assert accounts.failures == [(3, 502, "upstream closed before response.completed")]
+    assert store.charges == []
+
+
 def test_non_subscription_chat_bypasses_trae_compatibility(monkeypatch):
     configured_chat_bridge(monkeypatch, SequenceClient([]))
 

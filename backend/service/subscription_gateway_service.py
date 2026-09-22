@@ -257,7 +257,12 @@ class SubscriptionGatewayService:
             if account_id in self._quota_task_accounts:
                 return
             self._quota_task_accounts.add(account_id)
-        task = asyncio.create_task(self.query_account_quota(account_id, force=True))
+        # A quota read for display must never change account availability.  The
+        # only path allowed to disable an account for a low weekly window is
+        # this background check, scheduled after a real upstream 429.
+        task = asyncio.create_task(
+            self.query_account_quota(account_id, force=True, check_low_quota=True),
+        )
         with self._safety_lock:
             self._quota_tasks.add(task)
 
@@ -1701,7 +1706,13 @@ class SubscriptionGatewayService:
             result["warning"] = "重置次数已提交，但最新余量回查失败；请稍后刷新确认，不要重复点击"
         return result
 
-    async def query_account_quota(self, account_id: int, force: bool = False) -> dict[str, Any]:
+    async def query_account_quota(
+        self,
+        account_id: int,
+        force: bool = False,
+        *,
+        check_low_quota: bool = False,
+    ) -> dict[str, Any]:
         account_id = int(account_id)
         now_mono = time.monotonic()
         with self._safety_lock:
@@ -1756,7 +1767,8 @@ class SubscriptionGatewayService:
             long_window = result.get("long_window") if isinstance(result.get("long_window"), dict) else None
             weekly_remaining = self._quota_float(long_window.get("remaining_percent"), 100.0) if long_window else None
             account_disabled = bool(
-                threshold > 0
+                check_low_quota
+                and threshold > 0
                 and long_window
                 and self._quota_int(long_window.get("limit_window_seconds")) >= 5 * 24 * 3600
                 and weekly_remaining is not None

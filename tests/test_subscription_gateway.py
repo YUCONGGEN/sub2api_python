@@ -826,13 +826,36 @@ def test_only_low_weekly_quota_disables_subscription_account():
     accounts = QuotaAccounts()
     gateway = configured_gateway(accounts, RecordingStore(), client)
 
-    result = asyncio.run(gateway.query_account_quota(3))
+    result = asyncio.run(gateway.query_account_quota(3, check_low_quota=True))
 
     assert result["short_window"]["remaining_percent"] == 0
     assert result["long_window"]["remaining_percent"] == 1.5
     assert result["account_disabled"] is True
     assert accounts.weekly_disables == [(3, 1.5, 2.0)]
     assert "等待管理员处理" in result["warning"]
+
+
+def test_quota_display_does_not_disable_low_weekly_quota_account():
+    usage = {
+        "rate_limit": {
+            "allowed": True,
+            "limit_reached": False,
+            "primary_window": {"used_percent": 100, "limit_window_seconds": 18000},
+            "secondary_window": {"used_percent": 98.5, "limit_window_seconds": 604800},
+        },
+    }
+    client = SequenceClient([
+        httpx.Response(200, json=usage),
+        httpx.Response(404, json={"detail": "not available"}),
+    ])
+    accounts = QuotaAccounts()
+    gateway = configured_gateway(accounts, RecordingStore(), client)
+
+    result = asyncio.run(gateway.query_account_quota(3))
+
+    assert result["long_window"]["remaining_percent"] == 1.5
+    assert result["account_disabled"] is False
+    assert accounts.weekly_disables == []
 
 
 def configured_chat_bridge(monkeypatch, client):

@@ -103,7 +103,11 @@ rose:
     # 迁移时只需复制上述目录和这个 Mihomo 主配置；节点/provider 由订阅自动生成。
     profile-path: ${ROSE_PROXY_POOL_PROFILE:./data/proxy-pool/mihomo.yml}
     mihomo-binary: ${ROSE_PROXY_POOL_MIHOMO_BINARY:mihomo}
-    # 定时检查远端订阅变化；管理员新增、删除、启停或手动同步时会立即生效。
+    # 每天按指定时区同步一次远端订阅；管理员新增、删除、启停或手动同步时会立即生效。
+    # 默认每天北京时间 06:00，同步失败会在下一分钟重试，不会替换旧节点池。
+    daily-sync-time: ${ROSE_PROXY_POOL_DAILY_SYNC_TIME:06:00}
+    daily-sync-timezone: ${ROSE_PROXY_POOL_DAILY_SYNC_TIMEZONE:Asia/Shanghai}
+    # 旧配置保留兼容，不再决定每日同步频率。
     sync-interval-seconds: ${ROSE_PROXY_POOL_SYNC_INTERVAL_SECONDS:300}
     max-subscription-bytes: ${ROSE_PROXY_POOL_MAX_SUBSCRIPTION_BYTES:2097152}
     request-timeout-seconds: ${ROSE_PROXY_POOL_REQUEST_TIMEOUT_SECONDS:15}

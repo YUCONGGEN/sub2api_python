@@ -1,6 +1,8 @@
 import asyncio
 import base64
 import json
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 import yaml
@@ -51,6 +53,37 @@ def test_snapshot_reports_core_policy_and_nodes_without_secrets(tmp_path):
     assert result["nodes"][0]["status"] == "active"
     assert result["nodes"][1]["status"] == "ready"
     assert result["subscriptions"] == []
+
+
+def test_daily_sync_uses_configured_timezone_and_schedule(tmp_path):
+    service = configured_service(tmp_path)
+    service.daily_sync_hour = 6
+    service.daily_sync_minute = 0
+    service.daily_sync_timezone = ZoneInfo("Asia/Shanghai")
+
+    before = datetime(2026, 9, 21, 21, 59, tzinfo=timezone.utc)
+    after = datetime(2026, 9, 21, 22, 1, tzinfo=timezone.utc)
+    assert service._daily_sync_status(before) == ("2026-09-22", False)
+    assert service._daily_sync_status(after) == ("2026-09-22", True)
+
+
+def test_daily_sync_marks_date_after_success_and_is_idempotent(tmp_path):
+    service = configured_service(tmp_path)
+    service.profile_path = tmp_path / "mihomo.yml"
+    service._daily_sync_status = lambda: ("2026-09-22", True)
+    calls = []
+
+    async def sync(*, force=False):
+        calls.append(force)
+        return {"changed": True}
+
+    service.synchronize_pool = sync
+    asyncio.run(service.scheduled_pool_sync())
+    assert calls == [True]
+    assert json.loads(service.registry_path.read_text(encoding="utf-8"))["last_daily_sync_date"] == "2026-09-22"
+
+    asyncio.run(service.scheduled_pool_sync())
+    assert calls == [True]
 
 
 def test_policy_update_is_bounded_and_backed_up(tmp_path):

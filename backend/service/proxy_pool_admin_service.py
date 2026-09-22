@@ -25,6 +25,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote, unquote, urlencode, urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 import yaml
@@ -141,6 +142,11 @@ class ProxyPoolAdminService:
         self.mihomo_home: Path | None = None
         self.mihomo_binary = "mihomo"
         self.sync_interval_seconds = 300
+        self.daily_sync_time = "06:00"
+        self.daily_sync_hour = 6
+        self.daily_sync_minute = 0
+        self.daily_sync_timezone_name = "Asia/Shanghai"
+        self.daily_sync_timezone = ZoneInfo("Asia/Shanghai")
         self._last_sync_attempt = 0.0
         self._sync_lock = threading.Lock()
         self.logger = logging.getLogger("proxy_pool_admin")
@@ -172,6 +178,53 @@ class ProxyPoolAdminService:
             self.mihomo_home = self.profile_path.parent.parent if self.profile_path.parent.name == "profiles" else self.profile_path.parent
         self.mihomo_binary = str(options.get("mihomo-binary") or "mihomo").strip()
         self.sync_interval_seconds = max(60, min(int(options.get("sync-interval-seconds", 300) or 300), 86400))
+        configured_time = str(options.get("daily-sync-time") or "06:00").strip()
+        try:
+            hour_text, minute_text = configured_time.split(":", 1)
+            hour = int(hour_text)
+            minute = int(minute_text)
+            if not (0 <= hour <= 23 and 0 <= minute <= 59):
+                raise ValueError
+        except (TypeError, ValueError):
+            self.logger.warning("代理订阅每日同步时间无效，回退到 06:00: %s", configured_time[:32])
+            configured_time, hour, minute = "06:00", 6, 0
+        self.daily_sync_time = f"{hour:02d}:{minute:02d}"
+        self.daily_sync_hour = hour
+        self.daily_sync_minute = minute
+        configured_timezone = str(options.get("daily-sync-timezone") or "Asia/Shanghai").strip()
+        try:
+            self.daily_sync_timezone = ZoneInfo(configured_timezone)
+            self.daily_sync_timezone_name = configured_timezone
+        except ZoneInfoNotFoundError:
+            self.logger.warning("代理订阅每日同步时区无效，回退到 Asia/Shanghai: %s", configured_timezone[:64])
+            self.daily_sync_timezone = ZoneInfo("Asia/Shanghai")
+            self.daily_sync_timezone_name = "Asia/Shanghai"
+
+    def _daily_sync_status(self, now: datetime | None = None) -> tuple[str, bool]:
+        """Return the local schedule date and whether today's run is due.
+
+        The deployment host may use a different OS timezone, so this converts
+        to the configured timezone instead of relying on the host's timezone.
+        """
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=self.daily_sync_timezone)
+        local = current.astimezone(self.daily_sync_timezone)
+        schedule_date = local.date().isoformat()
+        due = (local.hour, local.minute) >= (self.daily_sync_hour, self.daily_sync_minute)
+        return schedule_date, due
+
+    def _daily_sync_marker(self) -> str:
+        registry = self._read_json(self.registry_path, {})
+        return str(registry.get("last_daily_sync_date") or "") if isinstance(registry, dict) else ""
+
+    def _mark_daily_sync(self, schedule_date: str) -> None:
+        registry = self._read_json(self.registry_path, {})
+        if not isinstance(registry, dict):
+            registry = {"subscriptions": []}
+        registry.setdefault("subscriptions", [])
+        registry["last_daily_sync_date"] = schedule_date
+        self._atomic_json(self.registry_path, registry)
 
     def _ensure_enabled(self) -> None:
         if not self.enabled:
@@ -924,12 +977,18 @@ class ProxyPoolAdminService:
     async def scheduled_pool_sync(self) -> None:
         if not self.enabled or not self.profile_path:
             return
-        if time.monotonic() - self._last_sync_attempt < self.sync_interval_seconds:
+        schedule_date, due = self._daily_sync_status()
+        if not due or self._daily_sync_marker() == schedule_date:
             return
         try:
-            await self.synchronize_pool()
+            await self.synchronize_pool(force=True)
+            self._mark_daily_sync(schedule_date)
+            self.logger.info(
+                "代理订阅每日同步完成 date=%s time=%s timezone=%s",
+                schedule_date, self.daily_sync_time, self.daily_sync_timezone_name,
+            )
         except Exception as exc:
-            self.logger.warning("代理订阅自动同步失败，保留原节点池: %s", exc)
+            self.logger.warning("代理订阅每日同步失败，保留原节点池，下一分钟重试: %s", exc)
 
     @staticmethod
     def _subscription_node_count(raw: bytes) -> int:

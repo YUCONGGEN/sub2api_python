@@ -15,7 +15,7 @@ from springbootai.ai.core import ChatClientBuilder, Message, ChatResponse, Gener
 from springbootai.ai.providers import OpenAIChatModel
 
 from backend.common.multimodal import parse_dsml_tool_calls, text_content as multimodal_text_content
-from backend.common.reasoning import DEFAULT_GPT_REASONING_EFFORT, configured_gpt_reasoning_effort, default_gpt_reasoning_effort, effective_gpt_reasoning_effort, requested_reasoning_effort
+from backend.common.reasoning import DEFAULT_GPT_REASONING_EFFORT, SUPPORTED_GPT_REASONING_EFFORTS, configured_gpt_reasoning_effort, default_gpt_reasoning_effort, effective_gpt_reasoning_effort, requested_reasoning_effort
 from backend.service.openai_chat_compatibility_service import OpenAIChatCompatibilityService
 from backend.service.store_service import StoreService
 
@@ -1204,7 +1204,14 @@ class AiGatewayService:
             if requested_reasoning is None:
                 requested_reasoning = reasoning_effort
         if requested_reasoning is not None and requested_reasoning != "":
-            options["reasoning_effort"] = str(requested_reasoning)
+            normalized_reasoning = str(requested_reasoning).strip().lower()
+            # Direct non-GPT providers do not go through the GPT-only
+            # normalizer above. Keep official tiers intact, but never forward
+            # vendor/UI values such as ``none`` or ``ultra`` to a Chat
+            # upstream (DeepSeek returns 422 for ``ultra``).
+            if normalized_reasoning not in SUPPORTED_GPT_REASONING_EFFORTS:
+                normalized_reasoning = DEFAULT_GPT_REASONING_EFFORT
+            options["reasoning_effort"] = normalized_reasoning
         upstream_model = str(payload.get("_rose_upstream_model") or "").strip()
         if upstream_model:
             options["_rose_upstream_model"] = upstream_model

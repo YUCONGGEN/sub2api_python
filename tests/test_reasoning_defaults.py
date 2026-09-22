@@ -132,6 +132,8 @@ def test_api_options_preserve_explicit_effort_and_use_resolved_upstream_name():
     assert AiGatewayService._request_options({"model": "gpt-6-astra"}, model="deepseek-v4-flash") == {}
     assert AiGatewayService._request_options({"model": "custom-alias"}, model="gpt-5.6-sol") == {"reasoning_effort": "high"}
     assert AiGatewayService._request_options({"model": "deepseek-v4-flash"}, reasoning_effort="medium") == {"reasoning_effort": "medium"}
+    assert AiGatewayService._request_options({"model": "deepseek-v4-pro", "reasoning_effort": "ultra"}) == {"reasoning_effort": "high"}
+    assert AiGatewayService._request_options({"model": "deepseek-v4-pro", "reasoning": {"effort": "none"}}) == {"reasoning_effort": "high"}
 
 
 def test_responses_tools_are_normalized_for_chat_upstreams():

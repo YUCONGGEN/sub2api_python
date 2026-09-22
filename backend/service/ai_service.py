@@ -868,12 +868,15 @@ class AiGatewayService:
         return bool(re.match(r"^(?:gpt-|o\d(?:-|$)|codex(?:-|$))", value))
 
     def apply_openai_subscription_fallback(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Select the configured API model after the subscription pool declines.
+        """Select the configured direct model after subscriptions decline.
 
         Protocol adapters call this only after every subscription adapter has
         returned ``None``.  Keep already configured API models untouched and
         limit the alias to GPT reasoning families so Claude/Grok/Kimi requests
-        cannot accidentally leak into an OpenAI fallback.
+        cannot accidentally leak into a direct fallback.  The historical
+        configuration key is named ``openai-fallback-model`` because the first
+        use case was an OpenAI-compatible endpoint, but the target may be any
+        enabled Chat/Responses model (for example DeepSeek Chat).
         """
         fallback_id = self.openai_subscription_fallback_model
         requested = str(payload.get("model") or self.model_name).strip()
@@ -885,12 +888,23 @@ class AiGatewayService:
         if not fallback or not fallback.get("enabled", True):
             return payload
         provider = str(fallback.get("provider") or "").strip().lower()
-        if provider not in {"openai", "openai compatible", "openai-compatible"}:
+        endpoint = str(fallback.get("endpoint") or "Chat").strip().lower()
+        if endpoint not in {"chat", "responses"}:
+            return payload
+        # OpenAI-compatible fallback endpoints can accept the arbitrary model
+        # name sent by Codex.  Other providers (such as DeepSeek) require the
+        # model configured for that provider; sending the original GPT name
+        # makes the request look like a model-not-found error upstream.
+        passthrough_model = provider in {"openai", "openai compatible", "openai-compatible"}
+        upstream_model = requested if passthrough_model else str(
+            fallback.get("upstream-model") or fallback_id
+        ).strip()
+        if not upstream_model:
             return payload
         return {
             **payload,
             "_rose_model_id": fallback_id,
-            "_rose_upstream_model": requested,
+            "_rose_upstream_model": upstream_model,
         }
 
     def get_pricing(self, model_id: str | None) -> dict[str, Any]:

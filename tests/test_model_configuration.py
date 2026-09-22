@@ -83,17 +83,37 @@ def test_openai_subscription_fallback_rewrites_only_unconfigured_gpt_models(monk
     assert gateway.apply_openai_subscription_fallback({"model": "o4-mini"})["_rose_model_id"] == "openai"
 
 
-@pytest.mark.parametrize("fallback", ["", "missing", "disabled", "not-openai"])
-def test_openai_subscription_fallback_requires_an_enabled_openai_target(monkeypatch, fallback):
+@pytest.mark.parametrize("fallback", ["", "missing", "disabled", "unsupported"])
+def test_subscription_fallback_requires_an_enabled_chat_target(monkeypatch, fallback):
     gateway = init_gateway(monkeypatch, {
         "subscription-gateway": {"openai-fallback-model": fallback},
         "models": [
             {"id": "disabled", "provider": "OpenAI", "enabled": False},
-            {"id": "not-openai", "provider": "Custom", "enabled": True},
+            {"id": "unsupported", "provider": "Custom", "endpoint": "Embeddings", "enabled": True},
         ],
     })
     payload = {"model": "gpt-5.6-sol"}
     assert gateway.apply_openai_subscription_fallback(payload) is payload
+
+
+def test_subscription_fallback_uses_configured_model_for_deepseek_chat(monkeypatch):
+    gateway = init_gateway(monkeypatch, {
+        "subscription-gateway": {"openai-fallback-model": "deepseek-v4-pro"},
+        "models": [{
+            "id": "deepseek-v4-pro",
+            "provider": "DeepSeek",
+            "endpoint": "Chat",
+            "upstream-model": "deepseek-v4-pro",
+            "enabled": True,
+        }],
+    })
+    payload = gateway.apply_openai_subscription_fallback({
+        "model": "gpt-5.6-sol",
+        "messages": [{"role": "user", "content": "hello"}],
+    })
+    assert payload["model"] == "gpt-5.6-sol"
+    assert payload["_rose_model_id"] == "deepseek-v4-pro"
+    assert payload["_rose_upstream_model"] == "deepseek-v4-pro"
 
 
 def test_responses_fallback_uses_the_model_requested_by_codex():

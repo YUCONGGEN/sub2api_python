@@ -181,7 +181,8 @@ rose:
     # 使用独立密钥加密；生产环境必须设置为随机值，修改后旧凭据需要重新授权。
     enabled: ${ROSE_SUBSCRIPTION_GATEWAY_ENABLED:true}
     # OpenAI/Codex 订阅账号优先；没有可用订阅账号时，将 GPT 请求转给这里指定的
-    # rose.models 模型 ID。留空表示不启用 API 兜底，不会影响 Claude/Kimi 等请求。
+    # rose.models 模型 ID。目标可以是 Chat 或 Responses（例如 DeepSeek Chat）；
+    # 留空表示不启用 API 兜底，不会影响 Claude/Kimi 等请求。
     openai-fallback-model: ${ROSE_SUBSCRIPTION_OPENAI_FALLBACK_MODEL:}
     # Codex 订阅传输的版本兼容标识（不是模型授权）。留空时每 6 小时从官方
     # GitHub release 自动同步；显式填写后固定版本，不再自动更新。

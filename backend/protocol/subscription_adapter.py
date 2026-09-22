@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
+import uuid
 from typing import Any
 
 from fastapi import Request
@@ -76,12 +78,153 @@ def as_response(result: SubscriptionGatewayResponse):
     )
 
 
+def _sse_frame_end(buffer: bytearray) -> tuple[int, int] | None:
+    """Return the end offset and delimiter length of the next SSE frame."""
+    candidates = []
+    for delimiter in (b"\r\n\r\n", b"\n\n"):
+        index = buffer.find(delimiter)
+        if index >= 0:
+            candidates.append((index, len(delimiter)))
+    return min(candidates, key=lambda item: item[0]) if candidates else None
+
+
+def _sse_payload(frame: bytes) -> dict[str, Any] | str | None:
+    for raw_line in frame.splitlines():
+        line = raw_line.strip()
+        if not line.startswith(b"data:"):
+            continue
+        value = line[5:].strip()
+        if value == b"[DONE]":
+            return "[DONE]"
+        try:
+            payload = json.loads(value.decode("utf-8"))
+        except (UnicodeDecodeError, TypeError, json.JSONDecodeError):
+            continue
+        return payload if isinstance(payload, dict) else None
+    return None
+
+
+async def _ensure_responses_completion(raw_stream, requested_model: str):
+    """Preserve a Responses stream and recover a missing terminal event.
+
+    A shared subscription can close its HTTP stream after delivering the
+    answer but before sending ``response.completed``. Codex treats that as a
+    transport failure. Complete streams are yielded byte-for-byte; recovery
+    only runs when the upstream has sent usable Responses events but no
+    terminal event.
+    """
+    buffer = bytearray()
+    response: dict[str, Any] = {}
+    text_parts: list[str] = []
+    tool_items: dict[str, dict[str, Any]] = {}
+    max_sequence = 0
+    saw_payload = False
+    terminal = False
+
+    def observe(payload: dict[str, Any] | str | None) -> None:
+        nonlocal max_sequence, saw_payload, terminal
+        if payload == "[DONE]":
+            return
+        if not isinstance(payload, dict):
+            return
+        saw_payload = True
+        try:
+            max_sequence = max(max_sequence, int(payload.get("sequence_number") or 0))
+        except (TypeError, ValueError):
+            pass
+        event_type = str(payload.get("type") or "")
+        embedded = payload.get("response")
+        if isinstance(embedded, dict):
+            response.update(embedded)
+        if event_type in {"response.completed", "response.done", "response.incomplete", "response.failed", "response.error", "error"}:
+            terminal = True
+        elif event_type in {"response.output_text.delta", "response.refusal.delta"}:
+            text_parts.append(str(payload.get("delta") or ""))
+        elif event_type == "response.output_text.done" and not text_parts:
+            text_parts.append(str(payload.get("text") or ""))
+        elif event_type in {"response.output_item.added", "response.output_item.done"}:
+            item = payload.get("item")
+            if isinstance(item, dict) and str(item.get("type") or "") in {"function_call", "custom_tool_call"}:
+                key = str(item.get("id") or item.get("call_id") or uuid.uuid4().hex)
+                current = tool_items.setdefault(key, {})
+                current.update(item)
+
+    def recovered_frame() -> bytes:
+        answer = "".join(text_parts)
+        body = dict(response)
+        body.setdefault("id", "resp_recovered_" + uuid.uuid4().hex)
+        body.setdefault("object", "response")
+        body.setdefault("created_at", int(time.time()))
+        body.setdefault("model", str(requested_model or ""))
+        output: list[dict[str, Any]] = []
+        if answer:
+            output.append({
+                "id": "msg_" + uuid.uuid4().hex,
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": answer, "annotations": []}],
+            })
+        output.extend(tool_items.values())
+        body["output"] = output
+        body["output_text"] = answer
+        body["status"] = "completed"
+        body.setdefault("usage", {})
+        payload = {
+            "type": "response.completed",
+            "sequence_number": max_sequence + 1,
+            "response": body,
+        }
+        return (
+            b"event: response.completed\n"
+            + b"data: "
+            + json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            + b"\n\n"
+        )
+
+    async def emit_frame(frame: bytes):
+        nonlocal terminal
+        payload = _sse_payload(frame)
+        observe(payload)
+        if payload == "[DONE]" and saw_payload and not terminal:
+            terminal = True
+            yield recovered_frame()
+        yield frame
+
+    async for chunk in raw_stream:
+        if not chunk:
+            continue
+        buffer.extend(chunk)
+        while True:
+            found = _sse_frame_end(buffer)
+            if found is None:
+                break
+            offset, delimiter_length = found
+            end = offset + delimiter_length
+            frame = bytes(buffer[:end])
+            del buffer[:end]
+            async for emitted in emit_frame(frame):
+                yield emitted
+
+    if buffer.strip():
+        frame = bytes(buffer)
+        if not frame.endswith((b"\n\n", b"\r\n\r\n")):
+            frame += b"\n\n"
+        async for emitted in emit_frame(frame):
+            yield emitted
+    if saw_payload and not terminal:
+        yield recovered_frame()
+
+
 async def maybe_proxy_openai_subscription(request: Request, payload: dict[str, Any], user: dict[str, Any]):
     gateway, _ = _beans(request)
     model = str(payload.get("model") or "").strip()
     for provider in RESPONSES_PROVIDERS:
         if gateway.should_route(provider, model):
-            return as_response(await gateway.proxy_responses(provider, payload, int(user["id"])))
+            result = await gateway.proxy_responses(provider, payload, int(user["id"]))
+            if provider == "openai" and result.stream is not None:
+                result.stream = _ensure_responses_completion(result.stream, model)
+            return as_response(result)
     return None
 
 

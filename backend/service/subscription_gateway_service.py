@@ -1414,6 +1414,14 @@ class SubscriptionGatewayService:
                     provider, model, int(account["id"]), user_id, not overloaded, terminal_failure[:300],
                 )
                 return
+            # Some subscription providers close a successful stream without
+            # sending a usage event.  Keep billing conservative but non-zero
+            # when the response contained bytes, especially when the protocol
+            # adapter has recovered a missing response.completed event.
+            if not usage.get("input_tokens"):
+                usage["input_tokens"] = max(0, int(fallback_input_tokens or 0))
+            if not usage.get("output_tokens") and observed_bytes:
+                usage["output_tokens"] = max(1, observed_bytes // 12)
             billing_started = True
             billing_error = await self._bill(user_id, model, account, usage)
             if billing_error:

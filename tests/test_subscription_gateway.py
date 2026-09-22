@@ -1277,6 +1277,35 @@ def test_trae_stream_emits_text_before_upstream_completion_and_releases_account(
     asyncio.run(scenario())
 
 
+def test_native_responses_stream_recovers_missing_completion_event(monkeypatch):
+    source = b"".join([
+        b'event: response.created\ndata: {"type":"response.created","sequence_number":1,"response":{"id":"resp_partial","created_at":789,"model":"gpt-6-astra","status":"in_progress"}}\n\n',
+        b'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","sequence_number":2,"delta":"hello"}\n\n',
+        # The upstream closes after [DONE] without response.completed.
+        b"data: [DONE]\n\n",
+    ])
+    client = SequenceClient([streaming_response(source[:67], source[67:])])
+    gateway, accounts, store = configured_chat_bridge(monkeypatch, client)
+
+    async def scenario():
+        response = await subscription_adapter.maybe_proxy_openai_subscription(
+            None,
+            {"model": "gpt-6-astra", "input": [{"role": "user", "content": "hello"}], "stream": True},
+            {"id": 9},
+        )
+        raw = b"".join([chunk async for chunk in response.body_iterator])
+        assert raw.endswith(b"data: [DONE]\n\n")
+        assert b'"type":"response.completed"' in raw
+        assert b'"output_text":"hello"' in raw
+
+    asyncio.run(scenario())
+    assert client.calls == 1
+    assert accounts.successes == [3]
+    assert store.charges[0][0:2] == (9, "gpt-6-astra")
+    assert store.charges[0][2] > 0
+    assert store.charges[0][3] > 0
+
+
 def test_non_subscription_chat_bypasses_trae_compatibility(monkeypatch):
     configured_chat_bridge(monkeypatch, SequenceClient([]))
 

@@ -1139,6 +1139,26 @@ class AiGatewayService:
         for raw in value:
             if not isinstance(raw, dict):
                 continue
+            kind = str(raw.get("type") or "function").strip().lower()
+            if kind == "namespace":
+                namespace = str(raw.get("name") or "").strip()
+                children = raw.get("tools") if isinstance(raw.get("tools"), list) else raw.get("children")
+                if not namespace or not isinstance(children, list):
+                    continue
+                for child in children:
+                    if not isinstance(child, dict) or str(child.get("type") or "function").lower() != "function":
+                        continue
+                    name = str(child.get("name") or "").strip()
+                    if not name:
+                        continue
+                    function = {"name": f"{namespace}__{name}"}
+                    for key in ("description", "parameters", "strict"):
+                        if child.get(key) is not None:
+                            function[key] = child[key]
+                    if "parameters" not in function and child.get("input_schema") is not None:
+                        function["parameters"] = child["input_schema"]
+                    normalized.append({"type": "function", "function": function})
+                continue
             nested = raw.get("function")
             if isinstance(nested, dict):
                 item = {"type": "function", "function": dict(nested)}
@@ -1146,7 +1166,6 @@ class AiGatewayService:
                     continue
                 normalized.append(item)
                 continue
-            kind = str(raw.get("type") or "function").strip().lower()
             if kind not in {"function", "custom"} or not raw.get("name"):
                 continue
             function: dict[str, Any] = {"name": str(raw["name"])}

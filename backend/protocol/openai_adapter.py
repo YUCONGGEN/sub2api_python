@@ -436,6 +436,10 @@ def _responses_input_to_messages(value):
                     continue
                 if item_type == "function_call":
                     call_id = str(item.get("call_id") or item.get("id") or "")
+                    namespace = str(item.get("namespace") or "").strip()
+                    name = str(item.get("name") or "")
+                    if namespace and name:
+                        name = f"{namespace}__{name}"
                     messages.append({
                         "role": "assistant",
                         "content": "",
@@ -443,7 +447,7 @@ def _responses_input_to_messages(value):
                             "id": call_id,
                             "type": "function",
                             "function": {
-                                "name": str(item.get("name") or ""),
+                                "name": name,
                                 "arguments": str(item.get("arguments") or "{}"),
                             },
                         }],
@@ -464,6 +468,48 @@ def _responses_input_to_messages(value):
                 current.append(part)
         return normalize_chat_messages(messages)
     return []
+
+
+def _responses_namespace_map(payload: dict) -> dict[str, tuple[str, str]]:
+    """Map flattened Chat tool names back to Responses namespaces."""
+    declared = list(payload.get("tools") or []) if isinstance(payload.get("tools"), list) else []
+    input_items = payload.get("input")
+    if isinstance(input_items, list):
+        for item in input_items:
+            if isinstance(item, dict) and item.get("type") == "additional_tools" and isinstance(item.get("tools"), list):
+                declared.extend(item["tools"])
+    result: dict[str, tuple[str, str]] = {}
+    for tool in declared:
+        if not isinstance(tool, dict) or str(tool.get("type") or "").lower() != "namespace":
+            continue
+        namespace = str(tool.get("name") or "").strip()
+        children = tool.get("tools") if isinstance(tool.get("tools"), list) else tool.get("children")
+        if not namespace or not isinstance(children, list):
+            continue
+        for child in children:
+            if not isinstance(child, dict) or not child.get("name"):
+                continue
+            name = str(child["name"])
+            result[f"{namespace}__{name}"] = (namespace, name)
+            result[f"{namespace}.{name}"] = (namespace, name)
+    return result
+
+
+def _responses_tool_output(call: dict, namespaces: dict[str, tuple[str, str]]) -> dict:
+    function = call.get("function") or {}
+    raw_name = str(function.get("name") or "")
+    namespace, name = namespaces.get(raw_name, ("", raw_name))
+    call_id = str(call.get("id") or ("call_" + uuid.uuid4().hex))
+    arguments = function.get("arguments") or "{}"
+    if not isinstance(arguments, str):
+        arguments = json.dumps(arguments, ensure_ascii=False)
+    item = {
+        "id": call_id, "type": "function_call", "status": "completed",
+        "call_id": call_id, "name": name, "arguments": arguments,
+    }
+    if namespace:
+        item["namespace"] = namespace
+    return item
 
 
 async def openai_responses(request: Request):
@@ -491,6 +537,7 @@ async def openai_responses(request: Request):
         return subscription_response
     payload = service.apply_openai_subscription_fallback(payload)
     try:
+        namespace_tools = _responses_namespace_map(payload)
         messages = _responses_input_to_messages(payload.get("input"))
         if not messages:
             return JSONResponse({"error": {"message": "input is required", "type": "invalid_request_error"}}, status_code=400)
@@ -646,15 +693,9 @@ async def openai_responses(request: Request):
                     if tool_calls:
                         output_items = []
                         for index, call in enumerate(tool_calls):
-                            function = call.get("function") or {}
-                            call_id = str(call.get("id") or ("call_" + uuid.uuid4().hex))
-                            name = str(function.get("name") or "")
-                            arguments = function.get("arguments") or "{}"
-                            arguments = arguments if isinstance(arguments, str) else json.dumps(arguments, ensure_ascii=False)
-                            function_item = {
-                                "id": call_id, "type": "function_call", "status": "completed",
-                                "call_id": call_id, "name": name, "arguments": arguments,
-                            }
+                            function_item = _responses_tool_output(call, namespace_tools)
+                            call_id = function_item["call_id"]
+                            arguments = function_item["arguments"]
                             output_items.append(function_item)
                             yield _responses_event("response.output_item.added", {
                                 "type": "response.output_item.added", "sequence_number": next_sequence(),
@@ -753,13 +794,20 @@ async def openai_responses(request: Request):
         if not ok:
             await complete_conversation(await resolve_conversation(), {"error": {"message": "Insufficient balance"}}, "", usage, 0, "BILLING_FAILED", "Insufficient balance")
             return JSONResponse({"error": {"message": "Insufficient balance", "type": "insufficient_quota"}}, status_code=402)
+        output_tool_calls = (upstream_trace or {}).get("tool_calls") if isinstance(upstream_trace, dict) else []
+        if output_tool_calls:
+            output = [_responses_tool_output(call, namespace_tools) for call in output_tool_calls]
+            output_text = ""
+        else:
+            output = [{"id": "msg_" + uuid.uuid4().hex, "type": "message", "role": "assistant", "content": [{"type": "output_text", "text": answer}]}]
+            output_text = answer
         response_body = {
             "id": response_id,
             "object": "response",
             "created_at": int(time.time()),
             "model": model,
-            "output": [{"id": "msg_" + uuid.uuid4().hex, "type": "message", "role": "assistant", "content": [{"type": "output_text", "text": answer}]}],
-            "output_text": answer,
+            "output": output,
+            "output_text": output_text,
             "status": "completed",
             "usage": {"input_tokens": usage["prompt_tokens"], "output_tokens": usage["completion_tokens"], "total_tokens": usage["total_tokens"]},
             "rose": {"cost_cny": cost, "usage_id": record.get("id") if record else None},

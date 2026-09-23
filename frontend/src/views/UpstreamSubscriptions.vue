@@ -362,8 +362,9 @@ export default {
 @media(max-width:850px){.model-pricing-list article{grid-template-columns:1fr 1fr}.model-pricing-name{grid-column:1/-1}.pricing-defaults{grid-template-columns:1fr}.pricing-backdrop{padding:10px}.pricing-dialog{max-height:calc(100vh - 20px)}}
 /* Account pool cards follow the compact visual language used by plan management. */
 .account-list {
-  grid-template-columns:repeat(4,minmax(0,1fr));
-  gap:12px;
+  /* Give subscription names, dates and usage values room to remain visible. */
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:14px;
 }
 .account-card {
   position:relative;
@@ -411,21 +412,19 @@ export default {
 .account-identity { min-width:0; }
 .account-id {
   display:block;
-  overflow:hidden;
+  overflow-wrap:anywhere;
   color:#7892a2;
   font:11px var(--mono);
   letter-spacing:.1em;
-  text-overflow:ellipsis;
-  white-space:nowrap;
+  white-space:normal;
 }
 .account-identity h3 {
-  overflow:hidden;
+  overflow-wrap:anywhere;
   margin:5px 0 0;
   color:#22435e;
   font-size:15px;
   line-height:1.25;
-  text-overflow:ellipsis;
-  white-space:nowrap;
+  white-space:normal;
 }
 .status-chip { flex:0 0 auto;font-size:11px;padding:4px 7px; }
 .account-summary {
@@ -460,12 +459,11 @@ export default {
 .account-card.claude .account-facts div { background:#fff5ed; }
 .account-facts dt { font:11px var(--mono); }
 .account-facts dd {
-  overflow:hidden;
+  overflow-wrap:anywhere;
   margin-top:4px;
   color:#2a506d;
   font:500 12px var(--mono);
-  text-overflow:ellipsis;
-  white-space:nowrap;
+  white-space:normal;
 }
 .account-quota {
   display:grid;
@@ -548,11 +546,10 @@ export default {
 }
 .quota-reset-value button:disabled { opacity:.6;cursor:wait; }
 .quota-reset b {
-  overflow:hidden;
+  overflow-wrap:anywhere;
   color:#355a70;
   font:500 10px var(--mono);
-  text-overflow:ellipsis;
-  white-space:nowrap;
+  white-space:normal;
 }
 .quota-warning { margin:0;color:#8f723d;font-size:10px;line-height:1.5; }
 .account-error { margin:9px 0 0;font-size:12px; }
@@ -652,5 +649,6 @@ export default {
 
 @media(max-width:1240px){.account-list{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:1050px){.account-list{grid-template-columns:repeat(2,minmax(0,1fr))}.endpoint-grid{grid-template-columns:1fr 1fr}}
+@media(max-width:850px){.account-list{grid-template-columns:1fr}}
 @media(max-width:600px){.account-list,.endpoint-grid{grid-template-columns:1fr}.account-actions{grid-template-columns:repeat(2,minmax(0,1fr))}}
 </style>

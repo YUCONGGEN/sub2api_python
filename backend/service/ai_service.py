@@ -1160,6 +1160,25 @@ class AiGatewayService:
         return normalized
 
     @staticmethod
+    def _responses_additional_tools(value: Any) -> list[dict[str, Any]]:
+        """Extract Codex ``additional_tools`` from Responses input items.
+
+        Newer Codex clients put executable tools in an input item instead of
+        the top-level ``tools`` field. Chat-only upstreams still need those
+        schemas or the model falls back to emitting DSML markup as text.
+        """
+        if not isinstance(value, list):
+            return []
+        tools: list[dict[str, Any]] = []
+        for item in value:
+            if not isinstance(item, dict) or item.get("type") != "additional_tools":
+                continue
+            declared = item.get("tools")
+            if isinstance(declared, list):
+                tools.extend(tool for tool in declared if isinstance(tool, dict))
+        return tools
+
+    @staticmethod
     def _request_options(payload: dict, reasoning_effort: str = "", streaming: bool = False, *, model: str | None = None, default_effort: str = DEFAULT_GPT_REASONING_EFFORT) -> dict[str, Any]:
         """Forward OpenAI-compatible generation controls to the provider."""
         allowed = {
@@ -1169,6 +1188,9 @@ class AiGatewayService:
             "top_logprobs", "modalities", "prediction", "service_tier",
         }
         options = {key: payload[key] for key in allowed if key in payload and payload[key] is not None}
+        additional_tools = AiGatewayService._responses_additional_tools(payload.get("input"))
+        if additional_tools:
+            options["tools"] = list(options.get("tools") or []) + additional_tools
         if "tools" in options:
             options["tools"] = AiGatewayService._normalize_chat_tools(options["tools"])
             if not options["tools"]:

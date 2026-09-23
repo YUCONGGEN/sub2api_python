@@ -1,6 +1,10 @@
 import axios from 'axios'
 
 const client = axios.create({ baseURL: import.meta.env.VITE_API_BASE || '', timeout: 30000 })
+// SMTP delivery can take longer than ordinary API calls, especially when the
+// mailbox provider is synchronizing a roaming message.  Keep the normal API
+// timeout short, but give password-recovery mail requests up to two minutes.
+const passwordRecoveryTimeout = 120000
 const AUTH_CACHE_TTL_MS = 15000
 let authCache = { token: '', value: null, expiresAt: 0, promise: null }
 
@@ -63,11 +67,11 @@ export const api = {
   publicConfig: () => client.get('/api/config/public'),
   login: body => client.post('/api/auth/login', body),
   register: body => client.post('/api/auth/register', body),
-  requestPasswordRecovery: body => client.post('/api/auth/password-recovery/request', body),
+  requestPasswordRecovery: body => client.post('/api/auth/password-recovery/request', body, { timeout: passwordRecoveryTimeout }),
   lookupPasswordRecovery: body => client.post('/api/auth/password-recovery/lookup', body),
-  requestPasswordRecoveryCode: body => client.post('/api/auth/password-recovery/request-code', body),
+  requestPasswordRecoveryCode: body => client.post('/api/auth/password-recovery/request-code', body, { timeout: passwordRecoveryTimeout }),
   verifyPasswordRecoveryCode: body => client.post('/api/auth/password-recovery/verify-code', body),
-  contactPasswordRecovery: body => client.post('/api/auth/password-recovery/contact', body),
+  contactPasswordRecovery: body => client.post('/api/auth/password-recovery/contact', body, { timeout: passwordRecoveryTimeout }),
   resetPassword: body => client.post('/api/auth/password-recovery/reset', body),
   me: options => loadCurrentUser(!!options?.force),
   currentAnnouncement: () => client.get('/api/auth/announcement'),

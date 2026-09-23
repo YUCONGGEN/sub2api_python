@@ -67,10 +67,10 @@ class SubscriptionRepository:
     def mark_result(self, account_id: int, *, status: str, error_count: int, last_error: str, cooldown_until: str | None, last_used_at: str | None, updated_at: str) -> None:
         self.mapper.mark_account_result(int(account_id), status, int(error_count), str(last_error), cooldown_until, last_used_at, updated_at)
 
-    def disable_rate_limited(self, account_id: int, *, error_count: int, last_error: str, recovery_next_at: str, last_used_at: str, updated_at: str) -> None:
-        self.mapper.disable_rate_limited_account(
+    def disable_rate_limited(self, account_id: int, *, error_count: int, last_error: str, recovery_next_at: str, last_used_at: str, updated_at: str) -> bool:
+        return bool(self.mapper.disable_rate_limited_account(
             int(account_id), int(error_count), str(last_error), recovery_next_at, last_used_at, updated_at,
-        )
+        ))
 
     def enable_system_recovered(self, account_id: int, *, updated_at: str) -> bool:
         return bool(self.mapper.enable_system_recovered_account(int(account_id), updated_at))

@@ -325,6 +325,33 @@ class PasswordRecoveryService:
         )
         return {"message": "申请已发送给管理员，请等待管理员核实处理。"}
 
+    def send_admin_notification(self, subject: str, content: str, recipient: str = "") -> None:
+        """Send a server-side notification through the configured SMTP account.
+
+        Subscription quota alerts reuse the same direct QQ SMTP path as
+        password recovery.  When no dedicated recipient is configured, send
+        to the SMTP sender/username (the mailbox that actually sends the
+        message), then fall back to the configured recovery administrator.
+        """
+        cfg = self.config()
+        smtp_cfg = cfg.get("smtp", {}) if isinstance(cfg.get("smtp"), dict) else {}
+        candidates = [
+            str(recipient or "").strip(),
+            str(smtp_cfg.get("sender") or "").strip(),
+            str(smtp_cfg.get("username") or "").strip(),
+            str(cfg.get("admin-email") or "").strip(),
+        ]
+        target = next(
+            (
+                value for value in candidates
+                if value and value.lower() not in {"admin@example.com", "example@example.com"}
+            ),
+            "",
+        )
+        if not target:
+            raise RuntimeError("管理员通知邮箱未配置")
+        self._send_mail(target, str(subject).strip()[:200], str(content))
+
     def _send_mail(self, recipient: str, subject: str, content: str) -> None:
         cfg = self.config()
         smtp_cfg = cfg.get("smtp", {}) if isinstance(cfg.get("smtp"), dict) else {}

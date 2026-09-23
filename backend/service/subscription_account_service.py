@@ -49,6 +49,11 @@ def as_bool(value: Any, default: bool = False) -> bool:
 @Service("subscription_account_service")
 @Slf4j
 class SubscriptionAccountService:
+    # The automatic guard performs one recovery check after the upstream
+    # quota window has reset.  Keep the old cadence constants as compatibility
+    # metadata for callers that may still import them; the gateway no longer
+    # uses that staged 3h/2h/1h schedule.
+    LOW_QUOTA_RECOVERY_MAX_CHECKS = 1
     LOW_QUOTA_RECOVERY_MAX_ATTEMPTS = 44
     LOW_QUOTA_RECOVERY_INTERVALS = (
         (8, 3 * 60 * 60),
@@ -839,7 +844,13 @@ class SubscriptionAccountService:
             last_used_at=utc_now(), updated_at=utc_now(),
         )
 
-    def disable_for_weekly_quota(self, row: dict[str, Any], remaining_percent: float, threshold: float = 1.0) -> bool:
+    def disable_for_weekly_quota(
+        self,
+        row: dict[str, Any],
+        remaining_percent: float,
+        threshold: float = 1.0,
+        reset_at: str | None = None,
+    ) -> bool:
         """System-disable only an enabled account with a confirmed low quota."""
         try:
             remaining = float(remaining_percent)
@@ -852,12 +863,19 @@ class SubscriptionAccountService:
             return False
         now = utc_now()
         detail = f"每周订阅剩余量 {remaining:.2f}% 低于 {limit:.2f}%，已停用并进入自动复查"
-        recovery_next_at = (datetime.now(timezone.utc) + timedelta(seconds=3 * 60 * 60)).isoformat()
-        self.repository.disable_rate_limited(
+        reset = parse_time(reset_at)
+        recovery_time = reset + timedelta(minutes=1) if reset and reset > datetime.now(timezone.utc) else datetime.now(timezone.utc) + timedelta(minutes=1)
+        recovery_next_at = recovery_time.isoformat()
+        changed = self.repository.disable_rate_limited(
             int(row["id"]), error_count=int(row.get("error_count") or 0),
             last_error=detail[:1000], recovery_next_at=recovery_next_at,
             last_used_at=now, updated_at=now,
         )
+        # Older in-memory/test repositories did not return the mapper row
+        # count.  Treat None as success while respecting an explicit 0/False
+        # from the production mapper, which prevents duplicate notifications.
+        if changed is False:
+            return False
         self.pool.forget(int(row["id"]))
         return True
 
@@ -881,7 +899,12 @@ class SubscriptionAccountService:
     def record_low_quota_recovery_attempt(self, account_id: int, attempts: int, now: datetime | None = None) -> bool:
         """Persist a failed recovery check and its next scheduled time."""
         completed = max(0, min(self.LOW_QUOTA_RECOVERY_MAX_ATTEMPTS, int(attempts)))
-        delay = self.low_quota_recovery_delay(completed)
+        # New automatic recovery is deliberately one-shot.  A failed check
+        # must not recreate the historical 3h/2h/1h polling cadence.
+        if completed >= self.LOW_QUOTA_RECOVERY_MAX_CHECKS:
+            delay = None
+        else:
+            delay = 60
         current = now or datetime.now(timezone.utc)
         if current.tzinfo is None:
             current = current.replace(tzinfo=timezone.utc)

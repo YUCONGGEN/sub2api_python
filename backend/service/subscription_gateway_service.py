@@ -36,6 +36,7 @@ from backend.common.subscription_providers import (
     provider_base_url,
 )
 from backend.service.store_service import StoreService
+from backend.service.password_recovery_service import PasswordRecoveryService
 from backend.service.subscription_account_service import SubscriptionAccountService, parse_time
 from backend.service.user_group_service import user_group_runtime
 
@@ -127,6 +128,8 @@ class SubscriptionGatewayService:
         self._quota_locks: dict[tuple[Any, int], asyncio.Lock] = {}
         self._quota_tasks: set[asyncio.Task] = set()
         self._quota_task_accounts: set[int] = set()
+        self.auto_quota_email_enabled = False
+        self.auto_quota_alert_email = ""
         self.max_queued_requests = 200
         self.codex_client_version = DEFAULT_CODEX_CLIENT_VERSION
         self.claude_client_version = DEFAULT_CLAUDE_CLIENT_VERSION
@@ -190,6 +193,8 @@ class SubscriptionGatewayService:
         self.session_affinity_ttl = max(60.0, min(86400.0, float(cfg.get("session-affinity-ttl-seconds", 3600) or 3600)))
         self.quota_cache_ttl = max(30.0, min(3600.0, float(cfg.get("quota-cache-seconds", 300) or 300)))
         self.weekly_quota_disable_threshold = max(0.0, min(100.0, float(cfg.get("weekly-quota-disable-threshold-percent", 1) or 0)))
+        self.auto_quota_email_enabled = str(cfg.get("auto-quota-alert-email-enabled", True)).strip().lower() in {"1", "true", "yes", "on"}
+        self.auto_quota_alert_email = str(cfg.get("auto-quota-alert-email") or "").strip()
         self.logger.info(
             "订阅网关保护已启用 per_account_concurrency=%s per_account_rpm=%s queue_timeout=%s max_queue=%s capacity_retries=%s session_affinity_ttl=%ss",
             self.per_account_concurrency, self.per_account_rpm,
@@ -236,12 +241,14 @@ class SubscriptionGatewayService:
                     str(exc)[:300],
                 )
 
-    @Scheduled(fixed_rate=3600000, initial_delay=3600000)
+    @Scheduled(fixed_rate=60000, initial_delay=60000)
     async def recover_low_quota_accounts(self) -> None:
-        """Recheck system-disabled accounts on the persisted staged cadence.
+        """Check each system-disabled account once after the quota reset.
 
         Only rows explicitly marked LOW_QUOTA are eligible.  A manual admin
         disable is marked MANUAL and therefore remains disabled indefinitely.
+        The one-minute scheduler is only a lightweight due-date dispatcher;
+        it does not poll upstream quota before the persisted reset time.
         """
         if not getattr(self, "enabled", False):
             return
@@ -259,7 +266,7 @@ class SubscriptionGatewayService:
         if threshold <= 0:
             return
         now = datetime.now(timezone.utc)
-        max_attempts = int(getattr(self.accounts, "LOW_QUOTA_RECOVERY_MAX_ATTEMPTS", 44) or 44)
+        max_attempts = int(getattr(self.accounts, "LOW_QUOTA_RECOVERY_MAX_CHECKS", 1) or 1)
         recovered = 0
         checked = 0
         for row in rows:
@@ -268,7 +275,13 @@ class SubscriptionGatewayService:
                 continue
             attempts = max(0, int(row.get("quota_recovery_attempts") or 0))
             if attempts >= max_attempts:
-                continue
+                # Rows created by the former staged scheduler may contain an
+                # old attempt counter (for example 43).  Let an already-due
+                # legacy row finish once, then leave it exhausted; all new
+                # rows stop after the single reset-time check above.
+                legacy_max = int(getattr(self.accounts, "LOW_QUOTA_RECOVERY_MAX_ATTEMPTS", 44) or 44)
+                if attempts <= max_attempts or attempts >= legacy_max:
+                    continue
             next_at = parse_time(row.get("quota_recovery_next_at"))
             if next_at is None and attempts == 0:
                 # Old system-disabled rows predate the persisted schedule.
@@ -292,10 +305,11 @@ class SubscriptionGatewayService:
                 if remaining > threshold and window_seconds >= 5 * 24 * 3600 and enable_recovered(account_id):
                     recovered += 1
                     self.logger.info("系统停用账号额度恢复，自动启用 account_id=%s remaining=%.2f%%", account_id, remaining)
+                    await self._notify_admin_quota_change("enabled", row, remaining, long_window.get("reset_at") if isinstance(long_window, dict) else None)
                 elif window_seconds >= 5 * 24 * 3600 and remaining >= 0:
                     record_attempt(account_id, attempts + 1, now)
                     if attempts + 1 >= max_attempts:
-                        self.logger.info("系统停用账号额度复查已耗尽，等待管理员启用 account_id=%s", account_id)
+                        self.logger.info("系统停用账号额度复查仍低于阈值，等待管理员启用 account_id=%s", account_id)
             except Exception as exc:
                 self.logger.warning(
                     "系统停用账号额度复查失败 account_id=%s error=%s",
@@ -303,6 +317,58 @@ class SubscriptionGatewayService:
                 )
         if rows:
             self.logger.info("系统停用账号额度复查完成 eligible=%s checked=%s recovered=%s", len(rows), checked, recovered)
+
+    async def _notify_admin_quota_change(
+        self,
+        action: str,
+        account: dict[str, Any],
+        remaining_percent: float,
+        reset_at: str | None = None,
+    ) -> None:
+        """Best-effort email for automatic quota state transitions only."""
+        if not getattr(self, "auto_quota_email_enabled", False):
+            return
+        account_id = int(account.get("id") or 0)
+        label = str(account.get("name") or account.get("account_ref") or f"账号 {account_id}").strip()
+        remaining = float(remaining_percent)
+        reset_text = str(reset_at or "未知").strip()
+        if action == "disabled":
+            subject = f"订阅账号已自动停用：{label}"
+            content = (
+                "订阅网关自动状态通知\n\n"
+                f"账号：{label}\n"
+                f"账号 ID：{account_id}\n"
+                f"剩余额度：{remaining:.2f}%\n"
+                f"预计重置时间：{reset_text}\n\n"
+                "原因：上游返回 429 后确认每周额度低于停用阈值。"
+                "系统将在上游重置时间后 1 分钟复查一次；若仍低于阈值，将保持停用并等待管理员处理。\n"
+                "此邮件由系统自动停用触发，管理员手动停用不会发送。"
+            )
+        else:
+            subject = f"订阅账号已自动恢复：{label}"
+            content = (
+                "订阅网关自动状态通知\n\n"
+                f"账号：{label}\n"
+                f"账号 ID：{account_id}\n"
+                f"当前剩余额度：{remaining:.2f}%\n\n"
+                "原因：额度重置后复查已高于停用阈值，系统已自动启用。\n"
+                "此邮件由系统自动恢复触发，管理员手动启用不会发送。"
+            )
+        try:
+            mailer = PasswordRecoveryService(self.store)
+            await asyncio.to_thread(
+                mailer.send_admin_notification,
+                subject,
+                content,
+                getattr(self, "auto_quota_alert_email", ""),
+            )
+        except Exception as exc:
+            # SMTP failures must never roll back the already completed DB
+            # state transition or break the quota monitor.
+            self.logger.warning(
+                "订阅账号自动状态邮件发送失败 action=%s account_id=%s error=%s",
+                action, account_id, str(exc)[:300],
+            )
 
     def _account_semaphore(self, account_id: int) -> asyncio.Semaphore:
         loop = asyncio.get_running_loop()
@@ -1888,14 +1954,23 @@ class SubscriptionGatewayService:
             threshold = float(getattr(self, "weekly_quota_disable_threshold", 2.0) or 0)
             long_window = result.get("long_window") if isinstance(result.get("long_window"), dict) else None
             weekly_remaining = self._quota_float(long_window.get("remaining_percent"), 100.0) if long_window else None
-            account_disabled = bool(
+            account_disabled = False
+            if (
                 check_low_quota
                 and threshold > 0
                 and long_window
                 and self._quota_int(long_window.get("limit_window_seconds")) >= 5 * 24 * 3600
                 and weekly_remaining is not None
-                and self.accounts.disable_for_weekly_quota(account, weekly_remaining, threshold)
-            )
+            ):
+                disable_for_quota = self.accounts.disable_for_weekly_quota
+                try:
+                    account_disabled = bool(
+                        disable_for_quota(account, weekly_remaining, threshold, long_window.get("reset_at"))
+                    )
+                except TypeError:
+                    # Keep lightweight integrations written against the
+                    # pre-reset_at service signature working during rollout.
+                    account_disabled = bool(disable_for_quota(account, weekly_remaining, threshold))
             result.update({
                 "account_id": account_id,
                 "fetched_at": datetime.now(timezone.utc).isoformat(),
@@ -1906,7 +1981,7 @@ class SubscriptionGatewayService:
             })
             warnings: list[str] = []
             if account_disabled:
-                warnings.append(f"每周订阅剩余量低于 {threshold:g}%，账号已停用并进入阶梯复查；复查耗尽后需管理员手动启用")
+                warnings.append(f"每周订阅剩余量低于 {threshold:g}%，账号已停用并进入阶梯复查（不再阶梯轮询，仅在额度重置后 1 分钟复查一次）")
             if detail_warning:
                 warnings.append(detail_warning)
             if warnings:
@@ -1915,6 +1990,13 @@ class SubscriptionGatewayService:
                 self._quota_cache[account_id] = (
                     time.monotonic() + float(getattr(self, "quota_cache_ttl", 300) or 300),
                     dict(result),
+                )
+            if account_disabled:
+                await self._notify_admin_quota_change(
+                    "disabled",
+                    account,
+                    weekly_remaining,
+                    long_window.get("reset_at") if isinstance(long_window, dict) else None,
                 )
             return result
 

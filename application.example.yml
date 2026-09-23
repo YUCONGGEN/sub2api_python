@@ -235,9 +235,14 @@ rose:
     # 普通用户（包括账号所有者）随页面查询并复用 5 分钟缓存；只有管理员可强制刷新上游。
     quota-visible-to-users: ${ROSE_SUBSCRIPTION_QUOTA_VISIBLE_TO_USERS:true}
     # 只有真实上游 429 后才检查每周窗口；低于该百分比时系统停用。默认低于 1% 才停用。
-    # 系统停用账号按 3 小时×8 次、2 小时×12 次、1 小时×24 次阶梯复查；
-    # 恢复到大于阈值后自动启用，累计仍低于阈值则停止复查；管理员手动停用不会自动启用。
+    # 系统停用后等待上游返回的重置时间，再延迟 1 分钟只复查一次；仍低于阈值就保持停用，
+    # 等待管理员处理。管理员手动停用/启用不会触发自动恢复邮件。
     weekly-quota-disable-threshold-percent: ${ROSE_SUBSCRIPTION_WEEKLY_DISABLE_THRESHOLD_PERCENT:1}
+    # 系统自动停用和自动恢复时给管理员发邮件；手动操作不发。默认使用密码找回配置的
+    # SMTP 发件人/用户名（即发邮箱的管理员），也可用下方字段指定其他收件人。
+    # 邮件发送失败不影响账号状态变更。
+    auto-quota-alert-email-enabled: ${ROSE_SUBSCRIPTION_AUTO_QUOTA_ALERT_EMAIL_ENABLED:true}
+    auto-quota-alert-email: ${ROSE_SUBSCRIPTION_AUTO_QUOTA_ALERT_EMAIL:}
   user-groups:
     # true：普通用户可查看自己当前生效分组的策略和汇总用量。
     # false：隐藏普通用户的“我的分组”入口并禁止访问概况接口；管理员始终可见。

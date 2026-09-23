@@ -384,5 +384,16 @@ class PasswordRecoveryService:
                     server.login(username, password)
                     server.send_message(message)
         except (OSError, smtplib.SMTPException) as exc:
-            logger.warning("密码找回邮件发送失败：%s", type(exc).__name__)
+            # Keep the provider's SMTP code/reason for diagnosis, but never
+            # log credentials or the verification-code body.
+            raw_detail = getattr(exc, "smtp_error", b"")
+            if isinstance(raw_detail, bytes):
+                detail = raw_detail.decode("utf-8", errors="replace")
+            else:
+                detail = str(raw_detail or exc)
+            detail = " ".join(detail.split())[:240]
+            logger.warning(
+                "密码找回邮件发送失败：%s code=%s detail=%s",
+                type(exc).__name__, getattr(exc, "smtp_code", ""), detail,
+            )
             raise RuntimeError("邮件暂时无法发送，请稍后重试或联系管理员") from None

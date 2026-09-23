@@ -48,10 +48,28 @@ def test_standard_dsml_tool_calls_wrapper_remains_supported():
     assert json.loads(calls[0]["function"]["arguments"]) == {"q": "hello & goodbye"}
 
 
+def test_dsml_tags_with_pretty_printed_separator_spaces_are_converted():
+    raw = (
+        '<| | DSML | | calls>'
+        '<| | DSML | | invoke name="exec">'
+        '<| | DSML | | parameter name="cmd" string="true">Get-ChildItem'
+        '</| | DSML | | parameter>'
+        '</| | DSML | | invoke>'
+        '</| | DSML | | calls>'
+    )
+
+    visible, calls = parse_dsml_tool_calls(raw)
+
+    assert visible == ""
+    assert calls[0]["function"]["name"] == "exec"
+    assert json.loads(calls[0]["function"]["arguments"]) == {"cmd": "Get-ChildItem"}
+
+
 def test_dsml_stream_helpers_recognize_calls_alias_and_partial_prefix():
     marker = "<｜｜DSML｜｜calls>"
     assert has_dsml_tool_call_marker(marker)
     assert is_dsml_tool_call_prefix(marker[:8])
+    assert is_dsml_tool_call_prefix("<| | DSML")
     assert not is_dsml_tool_call_prefix("ordinary answer")
 
 

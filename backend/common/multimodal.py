@@ -201,19 +201,19 @@ def iter_image_sources(value: Any):
             yield from iter_image_sources(child)
 
 
-_DSML_SEPARATOR = r"(?:\uff5c{2}|\|{2})"
+_DSML_SEPARATOR = r"(?:\uff5c\s*\uff5c|\|\s*\|)"
 _DSML_WRAPPER_PATTERN = re.compile(
-    rf"</?{_DSML_SEPARATOR}DSML{_DSML_SEPARATOR}(?:tool_)?calls\s*>",
+    rf"</?{_DSML_SEPARATOR}\s*DSML\s*{_DSML_SEPARATOR}\s*(?:tool_)?calls\s*>",
     re.IGNORECASE,
 )
 _DSML_INVOKE_PATTERN = re.compile(
-    rf"<{_DSML_SEPARATOR}DSML{_DSML_SEPARATOR}invoke\s+name=[\"']([^\"']+)[\"'][^>]*>(.*?)"
-    rf"</{_DSML_SEPARATOR}DSML{_DSML_SEPARATOR}invoke\s*>",
+    rf"<{_DSML_SEPARATOR}\s*DSML\s*{_DSML_SEPARATOR}\s*invoke\s+name=[\"']([^\"']+)[\"'][^>]*>(.*?)"
+    rf"</{_DSML_SEPARATOR}\s*DSML\s*{_DSML_SEPARATOR}\s*invoke\s*>",
     re.IGNORECASE | re.DOTALL,
 )
 _DSML_PARAMETER_PATTERN = re.compile(
-    rf"<{_DSML_SEPARATOR}DSML{_DSML_SEPARATOR}parameter\s+name=[\"']([^\"']+)[\"'][^>]*>(.*?)"
-    rf"</{_DSML_SEPARATOR}DSML{_DSML_SEPARATOR}parameter\s*>",
+    rf"<{_DSML_SEPARATOR}\s*DSML\s*{_DSML_SEPARATOR}\s*parameter\s+name=[\"']([^\"']+)[\"'][^>]*>(.*?)"
+    rf"</{_DSML_SEPARATOR}\s*DSML\s*{_DSML_SEPARATOR}\s*parameter\s*>",
     re.IGNORECASE | re.DOTALL,
 )
 _DSML_MARKER_PREFIXES = (
@@ -233,7 +233,14 @@ def has_dsml_tool_call_marker(content: Any) -> bool:
 
 def is_dsml_tool_call_prefix(content: Any) -> bool:
     """Return whether a partial stream could still be a DSML wrapper."""
-    return isinstance(content, str) and any(marker.startswith(content) for marker in _DSML_MARKER_PREFIXES)
+    if not isinstance(content, str) or not content:
+        return False
+    if any(marker.startswith(content) for marker in _DSML_MARKER_PREFIXES):
+        return True
+    # Some providers pretty-print the protocol as ``<｜｜ DSML ｜｜ calls>``.
+    # Ignore whitespace only while matching the short, still-buffered prefix.
+    compact = re.sub(r"\s+", "", content)
+    return any(marker.startswith(compact) for marker in _DSML_MARKER_PREFIXES)
 
 
 def parse_dsml_tool_calls(content: Any) -> tuple[str, list[dict[str, Any]]]:

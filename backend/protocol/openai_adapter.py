@@ -12,7 +12,13 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from backend.service.ai_service import AiGatewayService, UpstreamRequestError
 from backend.service.auth_service import AuthService
 from backend.service.conversation_service import ConversationService
-from backend.common.multimodal import normalize_chat_messages, normalize_content, parse_dsml_tool_calls
+from backend.common.multimodal import (
+    has_dsml_tool_call_marker,
+    is_dsml_tool_call_prefix,
+    normalize_chat_messages,
+    normalize_content,
+    parse_dsml_tool_calls,
+)
 from backend.protocol.subscription_adapter import (
     maybe_proxy_claude_chat_subscription,
     maybe_proxy_compatible_chat_subscription,
@@ -210,7 +216,6 @@ async def openai_chat(request: Request):
                 answer_parts = []
                 pending_text = ""
                 dsml_mode = False
-                dsml_marker = "<\uff5c\uff5cDSML\uff5c\uff5ctool_calls>"
                 streamed_tool_calls = []
                 stream_finish_reason = None
                 prompt_tokens = 0
@@ -237,10 +242,10 @@ async def openai_chat(request: Request):
                             answer_parts.append(delta)
                             if not dsml_mode:
                                 pending_text += delta
-                                if dsml_marker in pending_text:
+                                if has_dsml_tool_call_marker(pending_text):
                                     dsml_mode = True
                                     delta = ""
-                                elif len(pending_text) < len(dsml_marker) and dsml_marker.startswith(pending_text):
+                                elif is_dsml_tool_call_prefix(pending_text):
                                     # Hold only a possible marker prefix; a
                                     # normal answer remains genuinely streamed.
                                     continue
@@ -528,7 +533,6 @@ async def openai_responses(request: Request):
             async def events():
                 iterator = service.astream_with_trace({**payload, "messages": messages})
                 sentinel = object()
-                marker = "<\uff5c\uff5cDSML\uff5c\uff5ctool_calls>"
                 answer_parts: list[str] = []
                 pending_text = ""
                 text_sent = ""
@@ -577,10 +581,10 @@ async def openai_responses(request: Request):
                         if dsml_mode:
                             continue
                         pending_text += delta
-                        if marker in pending_text:
+                        if has_dsml_tool_call_marker(pending_text):
                             dsml_mode = True
                             continue
-                        if len(pending_text) < len(marker) and marker.startswith(pending_text):
+                        if is_dsml_tool_call_prefix(pending_text):
                             continue
                         visible = pending_text
                         pending_text = ""

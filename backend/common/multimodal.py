@@ -201,36 +201,58 @@ def iter_image_sources(value: Any):
             yield from iter_image_sources(child)
 
 
+_DSML_SEPARATOR = r"(?:\uff5c{2}|\|{2})"
+_DSML_WRAPPER_PATTERN = re.compile(
+    rf"</?{_DSML_SEPARATOR}DSML{_DSML_SEPARATOR}(?:tool_)?calls\s*>",
+    re.IGNORECASE,
+)
+_DSML_INVOKE_PATTERN = re.compile(
+    rf"<{_DSML_SEPARATOR}DSML{_DSML_SEPARATOR}invoke\s+name=[\"']([^\"']+)[\"'][^>]*>(.*?)"
+    rf"</{_DSML_SEPARATOR}DSML{_DSML_SEPARATOR}invoke\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+_DSML_PARAMETER_PATTERN = re.compile(
+    rf"<{_DSML_SEPARATOR}DSML{_DSML_SEPARATOR}parameter\s+name=[\"']([^\"']+)[\"'][^>]*>(.*?)"
+    rf"</{_DSML_SEPARATOR}DSML{_DSML_SEPARATOR}parameter\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+_DSML_MARKER_PREFIXES = (
+    "<\uff5c\uff5cDSML\uff5c\uff5ctool_calls>",
+    "<\uff5c\uff5cDSML\uff5c\uff5ccalls>",
+    "<||DSML||tool_calls>",
+    "<||DSML||calls>",
+)
+
+
+def has_dsml_tool_call_marker(content: Any) -> bool:
+    """Return whether text contains a DSML wrapper or invocation tag."""
+    return isinstance(content, str) and bool(
+        _DSML_WRAPPER_PATTERN.search(content) or _DSML_INVOKE_PATTERN.search(content)
+    )
+
+
+def is_dsml_tool_call_prefix(content: Any) -> bool:
+    """Return whether a partial stream could still be a DSML wrapper."""
+    return isinstance(content, str) and any(marker.startswith(content) for marker in _DSML_MARKER_PREFIXES)
+
+
 def parse_dsml_tool_calls(content: Any) -> tuple[str, list[dict[str, Any]]]:
     """Convert DeepSeek DSML tool markup into OpenAI tool-call objects.
 
-    Some compatible upstreams emit ``<｜｜DSML｜｜invoke ...>`` as ordinary
-    assistant text even when the request contains OpenAI ``tools``.  Clients
-    such as Codex cannot execute that text.  Returning the same call shape as
-    an OpenAI provider lets the protocol adapter expose it consistently.
+    DeepSeek-compatible gateways have emitted both ``tool_calls`` and the
+    shorter ``calls`` wrapper, using full-width (or ASCII) separator bars.
+    Parse all variants so the provider markup never reaches Codex as text.
     """
     if not isinstance(content, str):
         return str(content or ""), []
-    open_tag = "<\uff5c\uff5cDSML\uff5c\uff5ctool_calls>"
-    close_tag = "</\uff5c\uff5cDSML\uff5c\uff5ctool_calls>"
-    if open_tag not in content:
+    if not has_dsml_tool_call_marker(content):
         return content, []
-    invoke_open = re.escape("<\uff5c\uff5cDSML\uff5c\uff5cinvoke")
-    invoke_close = re.escape("</\uff5c\uff5cDSML\uff5cinvoke>")
-    invoke_open = re.escape("<" + chr(0xff5c) * 2 + "DSML" + chr(0xff5c) * 2 + "invoke")
-    invoke_close = re.escape("</" + chr(0xff5c) * 2 + "DSML" + chr(0xff5c) * 2 + "invoke>")
-    invoke_pattern = re.compile(invoke_open + r'\s+name=["\']([^"\']+)["\']\s*>(.*?)' + invoke_close, re.DOTALL)
-    parameter_open = re.escape("<" + chr(0xff5c) * 2 + "DSML" + chr(0xff5c) * 2 + "parameter")
-    parameter_close = re.escape("</" + chr(0xff5c) * 2 + "DSML" + chr(0xff5c) * 2 + "parameter>")
-    parameter_pattern = re.compile(
-        parameter_open + r'\s+name=["\']([^"\']+)["\'][^>]*>(.*?)' + parameter_close,
-        re.DOTALL,
-    )
+
     calls: list[dict[str, Any]] = []
-    for index, match in enumerate(invoke_pattern.finditer(content)):
+    for index, match in enumerate(_DSML_INVOKE_PATTERN.finditer(content)):
         name = html.unescape(match.group(1)).strip()
         arguments: dict[str, Any] = {}
-        for parameter in parameter_pattern.finditer(match.group(2)):
+        for parameter in _DSML_PARAMETER_PATTERN.finditer(match.group(2)):
             key = html.unescape(parameter.group(1)).strip()
             value = html.unescape(parameter.group(2))
             arguments[key] = value
@@ -238,12 +260,16 @@ def parse_dsml_tool_calls(content: Any) -> tuple[str, list[dict[str, Any]]]:
         calls.append({
             "id": "call_dsml_" + hashlib.sha256(call_seed.encode("utf-8")).hexdigest()[:24],
             "type": "function",
-            "function": {"name": name, "arguments": json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))},
+            "function": {
+                "name": name,
+                "arguments": json.dumps(arguments, ensure_ascii=False, separators=(",", ":")),
+            },
         })
-    if not calls:
-        return content, []
-    cleaned = invoke_pattern.sub("", content)
-    cleaned = cleaned.replace(open_tag, "").replace(close_tag, "").strip()
+
+    # Remove invocations and wrappers even when a malformed invocation cannot
+    # be converted. This prevents provider protocol text leaking to clients.
+    cleaned = _DSML_INVOKE_PATTERN.sub("", content)
+    cleaned = _DSML_WRAPPER_PATTERN.sub("", cleaned).strip()
     return cleaned, calls
 __all__ = [
     "extract_image_source",
@@ -251,5 +277,7 @@ __all__ = [
     "normalize_chat_messages",
     "text_content",
     "iter_image_sources",
+    "has_dsml_tool_call_marker",
+    "is_dsml_tool_call_prefix",
     "parse_dsml_tool_calls",
 ]

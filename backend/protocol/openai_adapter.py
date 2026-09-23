@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from backend.service.ai_service import AiGatewayService, UpstreamRequestError
 from backend.service.auth_service import AuthService
 from backend.service.conversation_service import ConversationService
-from backend.common.multimodal import normalize_content, parse_dsml_tool_calls
+from backend.common.multimodal import normalize_chat_messages, normalize_content, parse_dsml_tool_calls
 from backend.protocol.subscription_adapter import (
     maybe_proxy_claude_chat_subscription,
     maybe_proxy_compatible_chat_subscription,
@@ -412,7 +412,7 @@ def _responses_input_to_messages(value):
             if isinstance(item, dict) and item.get("role"):
                 message = {
                     "role": str(item.get("role", "user")),
-                    "content": normalize_content(item.get("content", "")),
+                    "content": normalize_content(item.get("content", ""), for_chat=True),
                 }
                 for field in ("tool_call_id", "tool_calls", "function_call", "name"):
                     if field in item:
@@ -446,15 +446,18 @@ def _responses_input_to_messages(value):
                     continue
                 # Responses also permits a flat input array consisting of
                 # input_text/input_image parts without an enclosing role.
+                parts = normalize_content([item], for_chat=True)
+                if not parts:
+                    continue
                 if not messages or messages[-1].get("role") != "user":
                     messages.append({"role": "user", "content": []})
                 current = messages[-1]["content"]
                 if not isinstance(current, list):
                     current = [current]
                     messages[-1]["content"] = current
-                part = normalize_content([item])[0]
+                part = parts[0]
                 current.append(part)
-        return messages
+        return normalize_chat_messages(messages)
     return []
 
 

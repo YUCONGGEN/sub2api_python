@@ -39,16 +39,21 @@ def extract_image_source(part: Any) -> str | None:
     return source or None
 
 
-def normalize_content(content: Any) -> Any:
+def normalize_content(content: Any, *, for_chat: bool = False) -> Any:
     """Normalize supported Responses parts to Chat Completions parts.
 
     Unknown parts are retained as shallow copies so provider extensions are
     not silently discarded.  The returned value is safe to pass as
     ``springbootai.ai.core.Message.content`` at runtime even though older
-    SpringBootAI releases annotate that field as ``str``.
+    SpringBootAI releases annotate that field as ``str``.  When ``for_chat``
+    is true, Responses-only output and reasoning parts are removed or mapped
+    to the Chat Completions vocabulary; strict Chat upstreams (for example
+    DeepSeek) reject those original part names.
     """
     if isinstance(content, str):
         return content
+    if isinstance(content, dict) and for_chat and content.get("type"):
+        content = [content]
     if not isinstance(content, list):
         return content if content is not None else ""
 
@@ -59,7 +64,7 @@ def normalize_content(content: Any) -> Any:
             continue
         part = dict(raw)
         part_type = str(part.get("type") or "").strip().lower()
-        if part_type == "input_text":
+        if part_type in {"input_text", "output_text"}:
             part["type"] = "text"
             part["text"] = str(part.get("text") or "")
         elif part_type == "input_image":
@@ -77,7 +82,91 @@ def normalize_content(content: Any) -> Any:
             source = extract_image_source(part)
             if source and isinstance(part.get("image_url"), str):
                 part["image_url"] = {"url": source}
+        elif for_chat and part_type in {"reasoning", "compaction", "summary_text"}:
+            # These are Responses/Codex bookkeeping parts, not user-visible
+            # Chat Completions content.  Forwarding them causes strict
+            # upstreams to reject the whole request (HTTP 422).
+            continue
+        elif for_chat and part_type == "refusal":
+            # Chat-compatible providers have no refusal part; retain the
+            # visible refusal text without the Responses-only discriminator.
+            part = {"type": "text", "text": str(part.get("refusal") or part.get("text") or "")}
+        elif for_chat and part_type == "input_file":
+            # ``file`` is the closest Chat-compatible representation.  Keep
+            # the provider payload intact while removing the Responses-only
+            # input_ prefix.
+            part["type"] = "file"
+        elif for_chat and part_type not in {"text", "image_url", "file"}:
+            # Do not leak arbitrary Responses event objects into a Chat
+            # request.  If the part has visible text, preserve that text;
+            # otherwise omit it.
+            if part.get("text") is not None:
+                part = {"type": "text", "text": str(part.get("text") or "")}
+            else:
+                continue
         normalized.append(part)
+    return normalized
+
+
+def normalize_chat_messages(messages: Any) -> list[dict[str, Any]]:
+    """Make converted Responses messages valid for strict Chat providers.
+
+    OpenAI Responses history can contain an assistant ``tool_calls`` item
+    without the corresponding ``function_call_output`` item (for example
+    after a cancelled Codex turn).  Chat Completions requires every tool call
+    to be immediately followed by a matching tool message.  Keep complete
+    pairs and remove orphaned calls/messages instead of forwarding a payload
+    that DeepSeek rejects with HTTP 400.
+    """
+    if not isinstance(messages, list):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    index = 0
+    while index < len(messages):
+        raw = messages[index]
+        if not isinstance(raw, dict):
+            index += 1
+            continue
+        message = dict(raw)
+        role = str(message.get("role") or "").strip().lower()
+        tool_calls = message.get("tool_calls")
+        if role != "assistant" or not isinstance(tool_calls, list):
+            if role != "tool":
+                normalized.append(message)
+            index += 1
+            continue
+
+        following: list[dict[str, Any]] = []
+        cursor = index + 1
+        while cursor < len(messages):
+            candidate = messages[cursor]
+            if not isinstance(candidate, dict) or str(candidate.get("role") or "").strip().lower() != "tool":
+                break
+            following.append(dict(candidate))
+            cursor += 1
+        by_call_id = {
+            str(item.get("tool_call_id") or ""): item
+            for item in following
+            if str(item.get("tool_call_id") or "").strip()
+        }
+        valid_calls = [
+            call for call in tool_calls
+            if isinstance(call, dict) and str(call.get("id") or "").strip() in by_call_id
+        ]
+        if valid_calls:
+            message["tool_calls"] = valid_calls
+            normalized.append(message)
+            valid_ids = {str(call.get("id")) for call in valid_calls}
+            normalized.extend(item for item in following if str(item.get("tool_call_id") or "") in valid_ids)
+        else:
+            # A text-bearing assistant message remains useful; an empty
+            # orphan tool-call message is safe to omit completely.
+            message.pop("tool_calls", None)
+            content = message.get("content")
+            if content not in (None, "", []):
+                normalized.append(message)
+        index = cursor
     return normalized
 
 
@@ -156,4 +245,11 @@ def parse_dsml_tool_calls(content: Any) -> tuple[str, list[dict[str, Any]]]:
     cleaned = invoke_pattern.sub("", content)
     cleaned = cleaned.replace(open_tag, "").replace(close_tag, "").strip()
     return cleaned, calls
-__all__ = ["extract_image_source", "normalize_content", "text_content", "iter_image_sources", "parse_dsml_tool_calls"]
+__all__ = [
+    "extract_image_source",
+    "normalize_content",
+    "normalize_chat_messages",
+    "text_content",
+    "iter_image_sources",
+    "parse_dsml_tool_calls",
+]

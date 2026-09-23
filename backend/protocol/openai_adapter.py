@@ -825,6 +825,10 @@ async def openai_models(request: Request):
             "output_modalities": ["text"],
             "supports_reasoning_summaries": True,
             "supports_parallel_tool_calls": True,
+            # Codex 0.153+ 解码模型目录时强制要求该字段（serde 无默认值），
+            # 缺失会导致 list_models 刷新失败。unified_exec 与 OpenAI 官方
+            # 模型目录一致，是非 OpenAI 上游最通用的 shell 工具类型声明。
+            "shell_type": "unified_exec",
             "context_window": 200000,
             "object": "model",
             "created": now,

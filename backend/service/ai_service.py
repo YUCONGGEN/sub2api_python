@@ -1198,11 +1198,16 @@ class AiGatewayService:
             options.pop("tool_choice", None)
             options.pop("parallel_tool_calls", None)
         resolved_model = model if model is not None else payload.get("model")
-        requested_reasoning = effective_gpt_reasoning_effort(payload, resolved_model, default_effort)
-        if requested_reasoning is None:
-            requested_reasoning = requested_reasoning_effort(payload)
+        if default_gpt_reasoning_effort(resolved_model, default_effort) is None:
+            # 非 GPT 推理模型（如 DeepSeek）不接受 OpenAI 专有的
+            # reasoning_effort 参数，注入会让上游返回 4xx 校验错误。
+            requested_reasoning = None
+        else:
+            requested_reasoning = effective_gpt_reasoning_effort(payload, resolved_model, default_effort)
             if requested_reasoning is None:
-                requested_reasoning = reasoning_effort
+                requested_reasoning = requested_reasoning_effort(payload)
+                if requested_reasoning is None:
+                    requested_reasoning = reasoning_effort
         if requested_reasoning is not None and requested_reasoning != "":
             normalized_reasoning = str(requested_reasoning).strip().lower()
             # Direct non-GPT providers do not go through the GPT-only

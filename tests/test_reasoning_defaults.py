@@ -131,9 +131,12 @@ def test_api_options_preserve_explicit_effort_and_use_resolved_upstream_name():
     assert AiGatewayService._request_options({"model": "gpt-6-astra", "reasoning": {"effort": "low"}}) == {"reasoning_effort": "low"}
     assert AiGatewayService._request_options({"model": "gpt-6-astra"}, model="deepseek-v4-flash") == {}
     assert AiGatewayService._request_options({"model": "custom-alias"}, model="gpt-5.6-sol") == {"reasoning_effort": "high"}
-    assert AiGatewayService._request_options({"model": "deepseek-v4-flash"}, reasoning_effort="medium") == {"reasoning_effort": "medium"}
-    assert AiGatewayService._request_options({"model": "deepseek-v4-pro", "reasoning_effort": "ultra"}) == {"reasoning_effort": "high"}
-    assert AiGatewayService._request_options({"model": "deepseek-v4-pro", "reasoning": {"effort": "none"}}) == {"reasoning_effort": "high"}
+    # 非 GPT 上游不接受 OpenAI 专有的 reasoning_effort 参数，避免把
+    # Codex 的强度字段原样转给 DeepSeek 导致请求校验失败。
+    assert AiGatewayService._request_options({"model": "deepseek-v4-flash"}, reasoning_effort="medium") == {}
+    assert AiGatewayService._request_options({"model": "deepseek-v4-flash", "reasoning_effort": "ultra"}) == {}
+    assert AiGatewayService._request_options({"model": "deepseek-v4-pro", "reasoning_effort": "ultra"}) == {}
+    assert AiGatewayService._request_options({"model": "deepseek-v4-pro", "reasoning": {"effort": "none"}}) == {}
 
 
 def test_responses_tools_are_normalized_for_chat_upstreams():

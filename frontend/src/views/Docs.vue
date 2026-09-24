@@ -112,8 +112,8 @@ export default {
   methods: {
     buildConfigs () {
       const codex = this.codexConfig || {}
-      const selectedModel = codex.model || 'gpt-5.6-sol'
-      const configuredSolModels = this.modelOptions.filter(item => String(item.id || '').startsWith('gpt-5.6-sol'))
+      const selectedModel = codex.model === 'gpt-5.6-sol' ? 'gpt-6-sol' : (codex.model || 'gpt-6-sol')
+      const configuredSolModels = this.modelOptions.filter(item => String(item.id || '').startsWith('gpt-6-sol'))
       const models = configuredSolModels.length ? configuredSolModels : [{ id: selectedModel, reasoning_effort: codex.model_reasoning_effort }]
       const gptModels = this.modelOptions
         .map(item => String(item.id || '').trim())
@@ -125,7 +125,7 @@ export default {
         const levels = Array.isArray(item.reasoning_levels) && item.reasoning_levels.length ? `可选 ${item.reasoning_levels.join('/')}` : ''
         return `- ${item.id}${defaultEffort || levels ? `（${[defaultEffort, levels].filter(Boolean).join('，')}）` : ''}`
       }).join('\n')
-      this.openaiConfig = `model_id: ${selectedModel}\nurl: ${this.baseUrl}/v1\nkey: <在 API 密钥页面创建后填入>\n\n可用 gpt-5.6-sol 档位：\n${modelLines}\n\nPOST ${this.baseUrl}/v1/chat/completions\nAuthorization: Bearer <key>`
+      this.openaiConfig = `model_id: ${selectedModel}\nurl: ${this.baseUrl}/v1\nkey: <在 API 密钥页面创建后填入>\n\n可用 gpt-6-sol 档位：\n${modelLines}\n\nPOST ${this.baseUrl}/v1/chat/completions\nAuthorization: Bearer <key>`
       // Keep Codex as the final tutorial section. The gateway URL and provider
       // name come from public server configuration; no upstream key is exposed.
       this.codexWindowsInstallText = `winget install --id 9PLM9XGG6VKS -s msstore`

@@ -7,7 +7,7 @@ function tomlString (value) {
 
 export function buildCodexConfig ({ appName, apiBaseUrl, codexConfig, apiKey }) {
   const codex = codexConfig || {}
-  const selectedModel = codex.model || 'gpt-5.6-sol'
+  const selectedModel = codex.model === 'gpt-5.6-sol' ? 'gpt-6-sol' : (codex.model || 'gpt-6-sol')
   const providerKey = String(codex.model_provider || 'rose').replace(/[^a-zA-Z0-9_-]/g, '') || 'rose'
   const providerName = codex.provider_name || appName || '大模型接口管理'
   const providerBaseUrl = String(codex.provider_base_url || apiBaseUrl || '').replace(/\/$/, '')

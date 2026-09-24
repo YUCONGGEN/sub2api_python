@@ -56,7 +56,7 @@
 
             <article class="codex-step">
               <div class="codex-step-index">03</div>
-              <div class="codex-step-body"><h3>打开、保存或替换用户级 config.toml</h3><p>在对应系统的用户目录中使用 <code>config.toml</code>。浏览器不会未经授权直接写入本机文件：点击“打开配置”后选择 <code>%USERPROFILE%\.codex\config.toml</code>，再点击保存即可替换；不支持文件选择 API 时可下载脚本手动运行。</p><ul class="codex-config-paths"><li><span>Windows 路径：</span><code>C:\Users\用户名\.codex\config.toml</code></li><li><span>Mac/Linux 路径：</span><code>~/.codex/config.toml</code></li></ul><p>写入前必须填入非空本站 API Key。配置只在当前浏览器内存中生成，不会以明文保存到服务器；脚本模式会同时写入 <code>auth.json</code>，便于 CC Switch 导入。</p><div class="codex-key-field"><label for="codex-api-key">本站 API Key</label><input id="codex-api-key" v-model.trim="apiKey" autocomplete="off" spellcheck="false" placeholder="粘贴 sk-api-...；刚注册时会自动填入" /><small>{{ apiKey ? '已填入配置，写入前请确认当前设备可信。' : '尚未填入，禁止写入空 API Key。' }}</small></div><div class="code-block large"><div class="code-head"><span>config.toml 完整文件内容（全部替换）</span><div class="code-head-actions"><button @click="copyCodexConfig">复制完整配置</button><button class="download-config-btn" @click="downloadConfig">下载 config.toml</button></div></div><pre>{{ codexConfigText }}</pre></div><div class="codex-file-actions"><button class="secondary-btn" @click="openCodexConfig">打开配置</button><button class="primary-btn" :disabled="codexFileBusy || !apiKey" @click="saveCodexConfig">保存/替换到已打开文件</button><button class="secondary-btn" :disabled="!apiKey" @click="downloadCodexImportScript">下载 CC Switch 导入脚本</button><small>{{ codexFileStatus }}</small></div><div class="codex-file-command"><code>notepad "$env:USERPROFILE\.codex\config.toml"</code><button @click="copy(codexOpenConfigCommand)">复制打开命令</button></div></div>
+              <div class="codex-step-body"><h3>手动配置用户级 config.toml</h3><p>浏览器不能直接修改本机文件。请复制完整配置或下载 <code>config.toml</code>，然后手动替换对应系统用户目录中的文件。</p><ul class="codex-config-paths"><li><span>Windows 路径：</span><code>C:\Users\用户名\.codex\config.toml</code></li><li><span>Mac/Linux 路径：</span><code>~/.codex/config.toml</code></li></ul><p>写入前必须填入非空本站 API Key。配置只在当前浏览器内存中生成，不会以明文保存到服务器。</p><div class="codex-key-field"><label for="codex-api-key">本站 API Key</label><input id="codex-api-key" v-model.trim="apiKey" autocomplete="off" spellcheck="false" placeholder="粘贴 sk-api-...；刚注册时会自动填入" /><small>{{ apiKey ? '已填入配置，下载前请确认当前设备可信。' : '尚未填入，禁止下载会写入空密钥的配置。' }}</small></div><div class="code-block large"><div class="code-head"><span>config.toml 完整文件内容（全部替换）</span><div class="code-head-actions"><button @click="copyCodexConfig">复制完整配置</button><button class="download-config-btn" @click="downloadConfig">下载 config.toml</button></div></div><pre>{{ codexConfigText }}</pre></div><div class="codex-file-command"><code>notepad "$env:USERPROFILE\.codex\config.toml"</code><button @click="copy(codexOpenConfigCommand)">复制打开命令</button></div></div>
             </article>
 
             <article class="codex-step">
@@ -84,7 +84,7 @@
 </template>
 <script>
 import { copyToClipboard, notify } from '../ui'
-import { buildCodexConfig, buildCodexImportScript, downloadTextFile } from '../config/codex'
+import { buildCodexConfig, downloadTextFile } from '../config/codex'
 
 export default {
   props: { appName: String, apiBaseUrl: String, codexConfig: Object, modelOptions: { type: Array, default: () => [] } },
@@ -104,9 +104,6 @@ export default {
       codexOpenConfigCommand: '',
       codexRunText: '',
       codexModelCommand: '',
-      codexFileHandle: null,
-      codexFileStatus: '',
-      codexFileBusy: false,
       copying: false
     }
   },
@@ -159,74 +156,6 @@ export default {
         return
       }
       this.copy(this.codexConfigText)
-    },
-    async openCodexConfig () {
-      if (typeof window === 'undefined' || typeof window.showOpenFilePicker !== 'function') {
-        notify('当前浏览器不支持直接打开本机文件，请使用下方下载按钮或改用最新版 Chrome/Edge', 'error')
-        return
-      }
-      try {
-        const handles = await window.showOpenFilePicker({
-          multiple: false,
-          types: [{ description: 'Codex 配置文件', accept: { 'text/plain': ['.toml'] } }]
-        })
-        const handle = handles[0]
-        const file = await handle.getFile()
-        if (file.name.toLowerCase() !== 'config.toml') {
-          notify('请选择 Codex 的 config.toml 文件', 'error')
-          return
-        }
-        await file.text()
-        this.codexFileHandle = handle
-        this.codexFileStatus = `已打开 ${file.name}，保存时将替换该文件`
-        notify('已打开 Codex 配置文件', 'success')
-      } catch (error) {
-        if (error?.name !== 'AbortError') notify(error?.message || '打开配置文件失败', 'error')
-      }
-    },
-    async saveCodexConfig () {
-      if (!this.hasApiKey()) {
-        notify('本站 API Key 不能为空，不能写入空密钥', 'error')
-        return
-      }
-      if (typeof window === 'undefined' || typeof window.showSaveFilePicker !== 'function') {
-        notify('当前浏览器不支持直接保存本机文件，请下载 config.toml 或 CC Switch 导入脚本', 'error')
-        return
-      }
-      this.codexFileBusy = true
-      try {
-        let handle = this.codexFileHandle
-        if (!handle) {
-          handle = await window.showSaveFilePicker({
-            suggestedName: 'config.toml',
-            types: [{ description: 'Codex 配置文件', accept: { 'text/plain': ['.toml'] } }]
-          })
-          this.codexFileHandle = handle
-        }
-        if (!await window.confirm('将用当前配置替换所选 config.toml，是否继续？')) return
-        const writable = await handle.createWritable()
-        await writable.write(this.codexConfigText)
-        await writable.close()
-        this.codexFileStatus = `已保存并替换 ${handle.name || 'config.toml'}`
-        notify('Codex 配置已保存；请重启 Codex 或重新打开终端', 'success')
-      } catch (error) {
-        if (error?.name !== 'AbortError') notify(error?.message || '保存配置文件失败', 'error')
-      } finally {
-        this.codexFileBusy = false
-      }
-    },
-    downloadCodexImportScript () {
-      if (!this.hasApiKey()) {
-        notify('本站 API Key 不能为空，不能生成导入脚本', 'error')
-        return
-      }
-      try {
-        const script = buildCodexImportScript({ appName: this.appName, apiBaseUrl: this.baseUrl, codexConfig: this.codexConfig, apiKey: this.apiKey })
-        downloadTextFile('import-codex.ps1', script)
-        notify('CC Switch/Codex 导入脚本已下载，请在本机 PowerShell 中运行', 'success')
-      } catch (error) {
-        notify(error.message || '导入脚本生成失败', 'error')
-      }
     },
     downloadConfig () {
       if (!this.hasApiKey()) {
@@ -515,20 +444,6 @@ export default {
   margin-top: 10px;
   padding: 10px 12px;
   border: 1px dashed var(--line);
-}
-
-.codex-file-actions {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 12px;
-}
-
-.codex-file-actions small {
-  flex: 1 1 100%;
-  color: var(--muted);
-  font-size: 10px;
 }
 
 .codex-config-paths {

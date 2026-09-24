@@ -62,7 +62,7 @@
 @keyframes key-refresh-spin{to{transform:rotate(360deg)}}
 .keys-panel table{table-layout:fixed}
 .keys-panel th:nth-child(1){width:17%}.keys-panel th:nth-child(2){width:31%}.keys-panel th:nth-child(3){width:13%}.keys-panel th:nth-child(4){width:16%}.keys-panel th:nth-child(5){width:15%}.keys-panel th:nth-child(6){width:8%}
-.keys-panel td:nth-child(2) code{display:inline-block;max-width:calc(100% - 44px);overflow:hidden;text-overflow:ellipsis;vertical-align:middle}
+.keys-panel td:nth-child(2) code{display:inline-block;max-width:calc(100% - 100px);overflow:hidden;text-overflow:ellipsis;vertical-align:middle}
 
 /* Full-screen color treatment for authentication pages. */
 .login-shell{background:#173b62;min-height:100dvh}

@@ -135,6 +135,9 @@ rose:
     # API Key 与兑换码使用不同前缀。兑换码由 rose.billing.recharge-code-prefix 控制。
     # 仅影响之后新建的 API Key；已有密钥保持不变，避免现有客户端突然失效。
     api-key-prefix: ${ROSE_API_KEY_PREFIX:sk-api-CODE}
+    # 是否在 API 密钥列表中保留复制按钮；默认开启。
+    # 关闭只隐藏前端按钮，不会撤销或修改已有 API Key。
+    api-key-copy-enabled: ${ROSE_API_KEY_COPY_ENABLED:true}
   bootstrap:
     # 本地系统账户与参考站点账户解耦；生产环境请通过环境变量覆盖。
     admin-username: ${ROSE_ADMIN_USERNAME:admin}

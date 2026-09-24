@@ -263,6 +263,16 @@ def test_public_config_exposes_data_visualization_visibility(monkeypatch):
     assert config_controller.ConfigController().public_config().data["data_visualization_visible"] is False
 
 
+def test_public_config_exposes_api_key_copy_visibility(monkeypatch):
+    monkeypatch.setattr(config_controller, "get_config", lambda: {"rose": {}})
+    assert config_controller.ConfigController().public_config().data["api_key_copy_enabled"] is True
+
+    monkeypatch.setattr(config_controller, "get_config", lambda: {
+        "rose": {"security": {"api-key-copy-enabled": False}}
+    })
+    assert config_controller.ConfigController().public_config().data["api_key_copy_enabled"] is False
+
+
 def test_public_config_expands_one_fallback_connection_into_real_model_ids(monkeypatch):
     monkeypatch.setattr(config_controller, "get_config", lambda: {"rose": {
         "models": [{
@@ -313,6 +323,20 @@ def test_group_editor_uses_public_config_catalog_when_monitoring_is_disabled():
     assert "api.adminModelCatalog()" in admin
     assert "api.models({ page, page_size: 12 })" not in admin
     assert "api.models({" in plaza
+
+
+def test_codex_config_tools_require_a_non_empty_api_key_and_support_local_replace():
+    root = Path(__file__).resolve().parents[1]
+    docs = (root / "frontend/src/views/Docs.vue").read_text(encoding="utf-8")
+    keys = (root / "frontend/src/views/Keys.vue").read_text(encoding="utf-8")
+    builder = (root / "frontend/src/config/codex.js").read_text(encoding="utf-8")
+    assert "本站 API Key 不能为空，不能写入空密钥" in docs
+    assert "showOpenFilePicker" in docs and "showSaveFilePicker" in docs
+    assert "downloadCodexImportScript" in docs
+    assert "copyCodexConfig" in docs
+    assert "apiKeyCopyEnabled" in keys
+    assert "restoreFreshKey" in keys
+    assert "OPENAI_API_KEY" in builder
 
 
 def test_admin_model_catalog_combines_configured_and_subscription_models():

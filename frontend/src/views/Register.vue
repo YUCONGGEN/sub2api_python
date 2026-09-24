@@ -78,6 +78,7 @@ export default {
         if (!data.ok) throw new Error(data.message || '注册失败，请稍后重试')
         localStorage.setItem('rose_token', data.token)
         if (data.api_key) window.sessionStorage.setItem('rose_fresh_api_key', data.api_key)
+        if (data.api_key_id) window.sessionStorage.setItem('rose_fresh_api_key_id', String(data.api_key_id))
         this.$router.push('/docs')
       } catch (e) {
         this.showError(e.message || '注册失败，请稍后重试')

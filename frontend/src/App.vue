@@ -143,6 +143,7 @@
           :codex-config="codexConfig"
           :model-options="modelOptions"
           :subscription-contributions-enabled="subscriptionContributionsEnabled"
+          :api-key-copy-enabled="apiKeyCopyEnabled"
           @refresh-user="refreshUser"
         />
       </main>
@@ -155,6 +156,7 @@
         :codex-config="codexConfig"
         :model-options="modelOptions"
         :password-recovery-enabled="passwordRecoveryEnabled"
+        :api-key-copy-enabled="apiKeyCopyEnabled"
       />
     </div>
   </div>
@@ -177,6 +179,7 @@ export default {
     dataVisualizationVisible: true,
     monitoringEnabled: true,
     passwordRecoveryEnabled: true,
+    apiKeyCopyEnabled: true,
     theme: "light",
     mobileMenuOpen: false,
     healthTimer: null,
@@ -270,6 +273,7 @@ export default {
           data.data_visualization_visible !== false;
         this.monitoringEnabled = data.monitoring_enabled !== false;
         this.passwordRecoveryEnabled = data.password_recovery_enabled !== false;
+        this.apiKeyCopyEnabled = data.api_key_copy_enabled !== false;
         if (!this.monitoringEnabled) {
           this.systemStatus = { text: "监控已关闭", level: "checking" };
           if (this.$route.path === "/monitoring") this.$router.replace("/dashboard");
@@ -408,6 +412,7 @@ export default {
       }
       localStorage.removeItem("rose_token");
       window.sessionStorage.removeItem("rose_fresh_api_key");
+      window.sessionStorage.removeItem("rose_fresh_api_key_id");
       clearAuthCache();
       this.user = null;
       this.clearAnnouncement();

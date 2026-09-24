@@ -383,12 +383,34 @@ class StoreService:
             changes["model_mapping_ids"] = StoreService._normalize_mapping_ids(values.get("model_mapping_ids", []))
         return changes
 
-    def _validate_mapping_ids(self, mapping_ids: list[int]) -> None:
+    @staticmethod
+    def _mapping_source_key(mapping: Mapping[str, Any]) -> tuple[str, str]:
+        return (
+            str(mapping.get("source_model") or "").strip().lower(),
+            str(mapping.get("source_effort") or "").strip().lower(),
+        )
+
+    @classmethod
+    def _validate_mapping_rows_for_group(cls, rows: list[Mapping[str, Any]]) -> None:
+        seen: set[tuple[str, str]] = set()
+        for row in rows:
+            key = cls._mapping_source_key(row)
+            if key in seen:
+                raise ValueError("同一用户组内的请求模型和推理强度映射已存在")
+            seen.add(key)
+
+    def _validate_mapping_ids(self, mapping_ids: list[int], group_id: int | None = None) -> None:
+        rows: list[Mapping[str, Any]] = []
         for mapping_id in mapping_ids:
-            if not self.mapper.find_model_mapping(int(mapping_id)):
+            row = self.mapper.find_model_mapping(int(mapping_id))
+            if not row:
                 raise ValueError(f"模型映射 #{mapping_id} 不存在")
+            rows.append(row)
+        if group_id is not None:
+            self._validate_mapping_rows_for_group(rows)
 
     def _replace_group_model_mappings(self, group_id: int, mapping_ids: list[int]) -> None:
+        self._validate_mapping_ids(mapping_ids, int(group_id))
         self.mapper.delete_group_model_mappings(int(group_id))
         for mapping_id in mapping_ids:
             self.mapper.insert_group_model_mapping(int(group_id), int(mapping_id))
@@ -489,8 +511,6 @@ class StoreService:
     @Transactional()
     def create_model_mapping(self, values: Mapping[str, Any]) -> dict[str, Any]:
         mapping = self._model_mapping_values(values)
-        if self.mapper.find_model_mapping_by_source(mapping["source_model"], mapping["source_effort"], None):
-            raise ValueError("相同请求模型和推理强度的映射已存在")
         now = utc_now()
         mapping.update({"created_at": now, "updated_at": now})
         self.mapper.insert_model_mapping(mapping)
@@ -505,8 +525,14 @@ class StoreService:
         changes = self._model_mapping_values(values, partial=True)
         source_model = changes.get("source_model", existing.get("source_model"))
         source_effort = changes.get("source_effort", existing.get("source_effort"))
-        if self.mapper.find_model_mapping_by_source(source_model, source_effort, int(mapping_id)):
-            raise ValueError("相同请求模型和推理强度的映射已存在")
+        if (source_model, source_effort) != (existing.get("source_model"), existing.get("source_effort")):
+            replacement = {**existing, **changes, "source_model": source_model, "source_effort": source_effort}
+            for group_ref in self.mapper.list_model_mapping_group_ids(int(mapping_id)):
+                group_id = int(group_ref.get("group_id") if isinstance(group_ref, Mapping) else group_ref)
+                rows = []
+                for row in self.mapper.list_group_model_mappings(int(group_id)):
+                    rows.append(replacement if int(row.get("id") or 0) == int(mapping_id) else row)
+                self._validate_mapping_rows_for_group(rows)
         if not changes:
             return self._public_model_mapping(existing)
         changes["updated_at"] = utc_now()

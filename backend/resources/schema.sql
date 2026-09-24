@@ -21,8 +21,7 @@ CREATE TABLE IF NOT EXISTS model_mappings (
   target_effort TEXT NOT NULL,
   enabled INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  UNIQUE(source_model, source_effort)
+  updated_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS user_group_model_mappings (

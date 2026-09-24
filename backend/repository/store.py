@@ -47,6 +47,7 @@ class StoreRepository:
                 conn.executescript(schema_path.read_text(encoding="utf-8"))
                 self._ensure_sqlite_compatibility(conn)
                 self._ensure_sqlite_user_groups(conn)
+                self._ensure_sqlite_model_mapping_scope(conn)
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_users_group ON users(group_id, deleted_at)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_subscription_plans_group ON subscription_plans(group_id)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_group_mapping_mapping ON user_group_model_mappings(mapping_id)")
@@ -204,6 +205,50 @@ class StoreRepository:
             self._ensure_column(conn, "conversation_records", column, definition)
 
     @staticmethod
+    def _ensure_sqlite_model_mapping_scope(conn: sqlite3.Connection) -> None:
+        """Remove the legacy global mapping uniqueness constraint.
+
+        A mapping is selected by a user group, so two groups may intentionally
+        map the same request model/effort to different targets. Older SQLite
+        databases were created with a table-level UNIQUE constraint and SQLite
+        cannot drop that auto-index in place; rebuild the small table once.
+        """
+        indexes = conn.execute("PRAGMA index_list(model_mappings)").fetchall()
+        for index in indexes:
+            name = index[1]
+            unique = bool(index[2])
+            columns = [row[2] for row in conn.execute(f"PRAGMA index_info({name!r})").fetchall()]
+            if not unique or columns != ["source_model", "source_effort"]:
+                continue
+            conn.execute("DROP TABLE IF EXISTS model_mappings_scope_new")
+            conn.execute(
+                """
+                CREATE TABLE model_mappings_scope_new (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  name TEXT NOT NULL,
+                  source_model TEXT NOT NULL,
+                  source_effort TEXT NOT NULL DEFAULT '',
+                  target_model TEXT NOT NULL,
+                  target_effort TEXT NOT NULL,
+                  enabled INTEGER NOT NULL DEFAULT 1,
+                  created_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO model_mappings_scope_new
+                  (id,name,source_model,source_effort,target_model,target_effort,enabled,created_at,updated_at)
+                SELECT id,name,source_model,source_effort,target_model,target_effort,enabled,created_at,updated_at
+                FROM model_mappings
+                """
+            )
+            conn.execute("DROP TABLE model_mappings")
+            conn.execute("ALTER TABLE model_mappings_scope_new RENAME TO model_mappings")
+            break
+
+    @staticmethod
     def _migrate_sqlite_api_keys(conn: sqlite3.Connection) -> None:
         """Replace legacy plaintext API keys with irreversible SHA-256 hashes."""
         rows = conn.execute(
@@ -275,6 +320,9 @@ class StoreRepository:
         cursor.execute("SHOW INDEX FROM upstream_subscription_accounts WHERE Key_name='idx_upstream_subscription_owner'")
         if not cursor.fetchone():
             cursor.execute("CREATE INDEX idx_upstream_subscription_owner ON upstream_subscription_accounts(owner_user_id, created_at)")
+        cursor.execute("SHOW INDEX FROM model_mappings WHERE Key_name='uq_model_mapping_source'")
+        if cursor.fetchone():
+            cursor.execute("ALTER TABLE model_mappings DROP INDEX uq_model_mapping_source")
 
     @staticmethod
     def _ensure_sqlite_user_groups(conn: sqlite3.Connection) -> None:

@@ -169,6 +169,9 @@
     <insert id="insert_group_model_mapping">
         INSERT INTO user_group_model_mappings(group_id,mapping_id) VALUES(#{group_id},#{mapping_id})
     </insert>
+    <select id="list_model_mapping_group_ids">
+        SELECT group_id FROM user_group_model_mappings WHERE mapping_id=#{mapping_id}
+    </select>
     <delete id="delete_model_mapping_assignments">DELETE FROM user_group_model_mappings WHERE mapping_id=#{mapping_id}</delete>
     <select id="find_current_announcement">
         SELECT id,title,content,enabled,created_by,expires_at,created_at,updated_at

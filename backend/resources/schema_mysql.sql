@@ -20,8 +20,7 @@ CREATE TABLE IF NOT EXISTS model_mappings (
   target_effort VARCHAR(20) NOT NULL,
   enabled TINYINT NOT NULL DEFAULT 1,
   created_at VARCHAR(40) NOT NULL,
-  updated_at VARCHAR(40) NOT NULL,
-  UNIQUE KEY uq_model_mapping_source (source_model, source_effort)
+  updated_at VARCHAR(40) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS user_group_model_mappings (

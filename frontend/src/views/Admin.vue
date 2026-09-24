@@ -239,7 +239,7 @@
     <div v-if="activeAdminSection === 'business'" id="admin-business-mappings" class="panel model-mapping-panel business-anchor-target">
       <div class="panel-head"><div><span class="eyebrow">MODEL REQUEST ROUTING</span><h2>模型映射</h2><p class="panel-note">按“请求模型 + 推理强度”改写实际调用的模型与强度；请求模型留空表示全部模型，目标模型留空表示保持原请求模型。只有勾选该规则的用户分组才会生效。</p></div></div>
       <form class="model-mapping-form" @submit.prevent="saveMapping">
-        <div class="mapping-form-title"><span>{{ editingMapping ? '编辑映射' : '新增映射' }}</span><small>计费按实际调用的目标模型计算</small></div>
+        <div class="mapping-form-title"><span>{{ editingMapping ? '编辑映射' : '新增映射' }}</span><small>计费按实际调用的目标模型计算 · 不同用户组可使用不同目标</small></div>
         <label><span>规则名称</span><input v-model.trim="mappingForm.name" maxlength="120" placeholder="例如：Sol xhigh 降为 high" required /></label>
         <label><span>请求模型</span><input v-model.trim="mappingForm.source_model" maxlength="160" placeholder="留空表示全部模型" /></label>
         <label><span>请求强度</span><AppSelect v-model="mappingForm.source_effort" :options="sourceEffortOptions" aria-label="请求推理强度" /></label>

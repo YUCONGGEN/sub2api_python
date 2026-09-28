@@ -103,7 +103,7 @@ class ProxyPoolAdminService:
         "replacement_interval_seconds": "备用复测间隔",
         "quarantine_seconds": "故障隔离时间",
         "quarantine_recheck_seconds": "隔离重试间隔",
-        "standby_probes_per_cycle": "每轮备用检查数",
+        "standby_probes_per_cycle": "每轮候选检查数",
         "standby_interval_seconds": "备用复查间隔",
         "recovery_successes": "恢复确认次数",
         "recovery_interval_seconds": "恢复检查间隔",
@@ -392,8 +392,8 @@ class ProxyPoolAdminService:
             try:
                 connections = self._controller(str(monitor["controller_socket"]), "/connections")
                 approved = set(str(node) for node in monitor.get("nodes", []))
-                for connection in connections.get("connections", []):
-                    matched = approved.intersection(str(node) for node in connection.get("chains", []))
+                for connection in connections.get("connections") or []:
+                    matched = approved.intersection(str(node) for node in connection.get("chains") or [])
                     for node in matched:
                         traffic = connection_traffic.setdefault(node, {"connections": 0, "bytes": 0})
                         traffic["connections"] += 1

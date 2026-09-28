@@ -55,6 +55,19 @@ def test_snapshot_reports_core_policy_and_nodes_without_secrets(tmp_path):
     assert result["subscriptions"] == []
 
 
+def test_snapshot_accepts_no_active_connections(tmp_path):
+    service = configured_service(tmp_path)
+    original_controller = service._controller
+    service._controller = lambda path, route: (
+        {"connections": None} if route == "/connections" else original_controller(path, route)
+    )
+
+    result = service.snapshot()
+
+    assert result["core"]["online"] is True
+    assert all(node["active_connections"] == 0 for node in result["nodes"])
+
+
 def test_daily_sync_uses_configured_timezone_and_schedule(tmp_path):
     service = configured_service(tmp_path)
     service.daily_sync_hour = 6

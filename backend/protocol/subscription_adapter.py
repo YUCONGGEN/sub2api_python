@@ -230,7 +230,73 @@ async def _ensure_responses_completion(raw_stream, requested_model: str):
         raise stream_error
 
 
-async def maybe_proxy_openai_subscription(request: Request, payload: dict[str, Any], user: dict[str, Any]):
+def _client_model_frame(frame: bytes, client_model: str) -> bytes:
+    """Change only response metadata, never generated text or tool arguments."""
+    lines = frame.splitlines(keepends=True)
+    for index, line in enumerate(lines):
+        if not line.startswith(b"data:"):
+            continue
+        try:
+            event = json.loads(line[5:].strip())
+        except (UnicodeDecodeError, ValueError, TypeError):
+            break
+        if not isinstance(event, dict):
+            break
+        changed = False
+        if isinstance(event.get("model"), str):
+            event["model"] = client_model
+            changed = True
+        embedded = event.get("response")
+        if isinstance(embedded, dict) and isinstance(embedded.get("model"), str):
+            embedded["model"] = client_model
+            changed = True
+        if changed:
+            newline = b"\r\n" if line.endswith(b"\r\n") else b"\n"
+            lines[index] = b"data: " + json.dumps(event, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + newline
+        break
+    return b"".join(lines)
+
+
+async def _client_model_stream(raw_stream, client_model: str):
+    buffer = bytearray()
+    async for chunk in raw_stream:
+        if not chunk:
+            continue
+        buffer.extend(chunk.encode("utf-8") if isinstance(chunk, str) else chunk)
+        while True:
+            found = _sse_frame_end(buffer)
+            if found is None:
+                break
+            offset, delimiter_length = found
+            end = offset + delimiter_length
+            frame = bytes(buffer[:end])
+            del buffer[:end]
+            yield _client_model_frame(frame, client_model)
+    if buffer:
+        yield _client_model_frame(bytes(buffer), client_model)
+
+
+def _client_model_response(response: Response, client_model: str, upstream_model: str) -> Response:
+    if not client_model or client_model == upstream_model or not 200 <= response.status_code < 300:
+        return response
+    if isinstance(response, StreamingResponse):
+        response.body_iterator = _client_model_stream(response.body_iterator, client_model)
+        if "content-length" in response.headers:
+            del response.headers["content-length"]
+        return response
+    try:
+        body = json.loads(response.body)
+    except (UnicodeDecodeError, ValueError, TypeError):
+        return response
+    if not isinstance(body, dict) or not isinstance(body.get("model"), str):
+        return response
+    body["model"] = client_model
+    response.body = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    response.headers["content-length"] = str(len(response.body))
+    return response
+
+
+async def maybe_proxy_openai_subscription(request: Request, payload: dict[str, Any], user: dict[str, Any], client_model: str = ""):
     gateway, _ = _beans(request)
     model = str(payload.get("model") or "").strip()
     for provider in RESPONSES_PROVIDERS:
@@ -238,11 +304,11 @@ async def maybe_proxy_openai_subscription(request: Request, payload: dict[str, A
             result = await gateway.proxy_responses(provider, payload, int(user["id"]))
             if provider == "openai" and result.stream is not None:
                 result.stream = _ensure_responses_completion(result.stream, model)
-            return as_response(result)
+            return _client_model_response(as_response(result), client_model, model)
     return None
 
 
-async def maybe_proxy_openai_chat_subscription(request: Request, payload: dict[str, Any], user: dict[str, Any]):
+async def maybe_proxy_openai_chat_subscription(request: Request, payload: dict[str, Any], user: dict[str, Any], client_model: str = ""):
     """Route matching Chat Completions models through the Responses account pool."""
     gateway, _ = _beans(request)
     model = str(payload.get("model") or "").strip()
@@ -267,7 +333,7 @@ async def maybe_proxy_openai_chat_subscription(request: Request, payload: dict[s
             encoded = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
             headers = dict(result.headers)
             headers["content-type"] = "application/json; charset=utf-8"
-            return as_response(SubscriptionGatewayResponse(result.status_code, headers, body=encoded))
+            return _client_model_response(as_response(SubscriptionGatewayResponse(result.status_code, headers, body=encoded)), client_model, model)
         stream_options = payload.get("stream_options")
         include_usage = bool(stream_options.get("include_usage")) if isinstance(stream_options, dict) else False
         headers = dict(result.headers)
@@ -282,7 +348,7 @@ async def maybe_proxy_openai_chat_subscription(request: Request, payload: dict[s
                 include_usage=include_usage,
             ),
         )
-        return as_response(converted)
+        return _client_model_response(as_response(converted), client_model, model)
     try:
         body = compatibility.from_responses_bytes(result.body or b"", model)
     except ValueError as exc:
@@ -290,7 +356,7 @@ async def maybe_proxy_openai_chat_subscription(request: Request, payload: dict[s
     encoded = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     headers = dict(result.headers)
     headers["content-type"] = "application/json; charset=utf-8"
-    return as_response(SubscriptionGatewayResponse(result.status_code, headers, body=encoded))
+    return _client_model_response(as_response(SubscriptionGatewayResponse(result.status_code, headers, body=encoded)), client_model, model)
 
 
 async def maybe_proxy_compatible_chat_subscription(request: Request, payload: dict[str, Any], user: dict[str, Any]):

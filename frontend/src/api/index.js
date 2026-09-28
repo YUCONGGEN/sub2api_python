@@ -38,9 +38,13 @@ client.interceptors.request.use(config => {
   if (token) config.headers.Authorization = `Bearer ${token}`
   return config
 })
+function responseError (message, response) {
+  const requestId = response?.headers?.['x-request-id']
+  return new Error(requestId ? `${message}（错误编号：${requestId}）` : message)
+}
 client.interceptors.response.use(response => {
   const payload = response.data
-  if (payload && payload.code && payload.code >= 400) return Promise.reject(new Error(payload.message || '请求失败'))
+  if (payload && payload.code && payload.code >= 400) return Promise.reject(responseError(payload.message || '请求失败', response))
   if (payload && Object.prototype.hasOwnProperty.call(payload, 'data')) {
     const data = payload.data
     // SpringBootAI keeps the operation message beside the unwrapped data.
@@ -60,10 +64,11 @@ client.interceptors.response.use(response => {
     clearAuthCache()
     if (hadToken && typeof window !== 'undefined') window.dispatchEvent(new Event('rose:auth-expired'))
   }
-  return Promise.reject(new Error(error.response?.data?.message || error.response?.data?.error?.message || error.message))
+  return Promise.reject(responseError(error.response?.data?.message || error.response?.data?.error?.message || error.message, error.response))
 })
 
 export const api = {
+  previewModelMapping: body => client.post('/api/admin/model-mappings/preview', body),
   publicConfig: () => client.get('/api/config/public'),
   login: body => client.post('/api/auth/login', body),
   register: body => client.post('/api/auth/register', body),

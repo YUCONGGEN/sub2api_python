@@ -145,6 +145,18 @@ def test_recovery_checks_respect_backoff_and_cycle_budget():
     assert controller.changes == []
 
 
+def test_unknown_candidate_outside_failover_pool_is_probed():
+    state = {'nodes': {'b': {'status': 'ready', 'last_probe_at': 999}}}
+    controller = FakeController({'a': [100], 'c': [90]})
+    policy = configured(controller, state, standby_pool_size=1,
+                        standby_probes_per_cycle=1)
+
+    assert policy.standbys('a') == ['b']
+    assert [item['node'] for item in policy.step()['standbys']] == ['c']
+    assert state['nodes']['c']['checks'] == 1
+    assert controller.changes == []
+
+
 def test_three_successes_required_for_failed_backup_before_selection():
     controller = FakeController({'a': [None]*3, 'b': [90, 95, 99], 'c': [None]})
     state = {'quarantine_until': {'b': 1500}}

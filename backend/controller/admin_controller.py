@@ -213,6 +213,25 @@ class AdminController:
             return bad("模型映射创建失败", 409)
         return ok({"ok": True, "mapping": mapping}, "模型映射已创建")
 
+    @PostMapping("/model-mappings/preview")
+    def preview_model_mapping(self, body: dict = RequestBody(), authorization: str = RequestHeader(name="Authorization", required=False)):
+        if not self.admin(authorization):
+            return forbidden()
+        from backend.service.user_group_service import UserGroupService
+        try:
+            user_id = int(body.get("user_id") or 0)
+            model = str(body.get("model") or "").strip()
+            effort = str(body.get("effort") or "").strip().lower()
+            if user_id <= 0 or not model or len(model) > 160 or len(effort) > 16 or effort == "*":
+                return bad("请选择用户并填写请求模型；预览强度需填写实际档位或留空")
+        except (TypeError, ValueError):
+            return bad("预览参数不正确")
+        user = self.store.find_user(user_id)
+        if not user:
+            return not_found("用户不存在")
+        preview = UserGroupService.preview_model_mapping(user, {"model": model, "reasoning": {"effort": effort}})
+        return ok({"ok": True, "preview": preview})
+
     @PatchMapping("/model-mappings/{mapping_id}")
     def update_model_mapping(self, mapping_id: int = PathVariable(name="mapping_id"), body: dict = RequestBody(), authorization: str = RequestHeader(name="Authorization", required=False)):
         if not self.admin(authorization):

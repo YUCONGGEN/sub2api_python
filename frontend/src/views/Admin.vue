@@ -241,14 +241,19 @@
       <form class="model-mapping-form" @submit.prevent="saveMapping">
         <div class="mapping-form-title"><span>{{ editingMapping ? '编辑映射' : '新增映射' }}</span><small>计费按实际调用的目标模型计算 · 不同用户组可使用不同目标</small></div>
         <label><span>规则名称</span><input v-model.trim="mappingForm.name" maxlength="120" placeholder="例如：Sol xhigh 降为 high" required /></label>
-        <label><span>请求模型</span><input v-model.trim="mappingForm.source_model" maxlength="160" placeholder="留空表示全部模型" /></label>
-        <label><span>请求强度</span><AppSelect v-model="mappingForm.source_effort" :options="sourceEffortOptions" aria-label="请求推理强度" /></label>
+        <label><span>请求模型</span><input v-model.trim="mappingForm.source_model" list="mapping-model-options" maxlength="160" placeholder="输入或选择；留空为全部" /></label>
+        <label><span>请求强度</span><AppSelect v-model="sourceEffortMode" :options="[{ value: 'any', label: '任意强度' }, { value: 'missing', label: '仅未指定强度' }, { value: 'specific', label: '指定强度' }]" /><input v-if="sourceEffortMode === 'specific'" v-model.trim="mappingForm.source_effort" list="mapping-source-efforts" maxlength="16" placeholder="输入或选择强度" /><small class="mapping-effort-help">{{ sourceEffortHelp }}</small></label>
         <div class="mapping-arrow" aria-hidden="true">→</div>
-        <label><span>目标模型</span><input v-model.trim="mappingForm.target_model" maxlength="160" placeholder="留空表示保持请求模型" /></label>
-        <label><span>目标强度</span><AppSelect v-model="mappingForm.target_effort" :options="targetEffortOptions" aria-label="目标推理强度" /></label>
+        <label><span>目标模型</span><input v-model.trim="mappingForm.target_model" list="mapping-model-options" maxlength="160" placeholder="输入或选择；留空保持原模型" /></label>
+        <label><span>目标强度</span><input v-model.trim="mappingForm.target_effort" list="mapping-target-efforts" maxlength="16" placeholder="输入或选择" required /><small class="mapping-effort-help">{{ targetEffortHelp }}</small></label>
+        <datalist id="mapping-model-options"><option v-for="model in mappingModelOptions" :key="model" :value="model" /></datalist>
+        <datalist id="mapping-source-efforts"><option v-for="option in sourceEffortOptions" :key="option.value" :value="option.value" :label="option.label" /></datalist>
+        <datalist id="mapping-target-efforts"><option v-for="option in targetEffortOptions" :key="option.value" :value="option.value" :label="option.label" /></datalist>
+        <p v-if="mappingValidationError" class="mapping-validation-error">{{ mappingValidationError }}</p>
         <label class="mapping-enabled"><input v-model="mappingForm.enabled" type="checkbox" /><i></i><span>启用规则</span></label>
-        <div class="mapping-form-actions"><button class="primary-btn" :disabled="mappingSaving">{{ mappingSaving ? '保存中…' : editingMapping ? '保存映射' : '新增映射' }}</button><button v-if="editingMapping" type="button" class="secondary-btn" @click="resetMappingForm">取消</button></div>
+        <div class="mapping-form-actions"><button class="primary-btn" :disabled="mappingSaving || !!mappingValidationError">{{ mappingSaving ? '保存中…' : editingMapping ? '保存映射' : '新增映射' }}</button><button v-if="editingMapping" type="button" class="secondary-btn" @click="resetMappingForm">取消</button></div>
       </form>
+      <MappingPreview />
       <div class="mapping-rule-grid">
         <article v-for="item in modelMappings" :key="item.id" :class="['mapping-rule-card', { disabled: !item.enabled }]">
           <div class="mapping-rule-head"><div><span>{{ item.name }}</span><small>RULE {{ String(item.id).padStart(2, '0') }}</small></div><b :class="['status', item.enabled ? 'success' : 'pending']">{{ item.enabled ? '启用' : '停用' }}</b></div>
@@ -317,13 +322,14 @@ import { copyToClipboard, notify, askConfirm, focusDialog, trapDialogFocus } fro
 import AppSelect from '../components/AppSelect.vue'
 import AdminConfigEditor from '../components/AdminConfigEditor.vue'
 import AdminProxyPool from '../components/AdminProxyPool.vue'
+import MappingPreview from '../components/MappingPreview.vue'
 import { buildCodexConfig, downloadTextFile } from '../config/codex'
 
 const emptyGroup = () => ({ name: '', description: '', weight: 10, concurrency_limit: 1, is_default: false, allow_all: true, allowed_models: [], model_mapping_ids: [] })
 const emptyMapping = () => ({ name: '', source_model: '', source_effort: 'xhigh', target_model: '', target_effort: 'high', enabled: true })
 
 export default {
-  components: { AppSelect, AdminConfigEditor, AdminProxyPool },
+  components: { AppSelect, AdminConfigEditor, AdminProxyPool, MappingPreview },
   props: {
     appName: String,
     apiBaseUrl: String,
@@ -352,6 +358,7 @@ export default {
     editingMapping: null,
     mappingSaving: false,
     modelCatalog: [],
+    modelCapabilities: {},
     keyword: '',
     codes: [],
     newCodes: [],
@@ -463,8 +470,24 @@ export default {
     roleSelectOptions () { return [{ value: 'USER', label: '普通用户', description: '使用控制台与 API' }, { value: 'ADMIN', label: '管理员', description: '可进入管理后台' }] },
     groupSelectOptions () { return this.groupOptions.map(group => { const models = group.allowed_models || []; return { value: group.id, label: group.name, description: `并发 ${group.concurrency_limit} · ${models.includes('*') ? '全部模型' : `${models.length} 个模型`}` } }) },
     planGroupSelectOptions () { return [{ value: null, label: '不调整用户分组', description: '保持用户当前基础分组' }, ...this.groupOptions.map(group => ({ value: group.id, label: group.name, description: `权重 ${group.weight} · 并发 ${group.concurrency_limit}` }))] },
-    sourceEffortOptions () { return [{ value: '*', label: '任意强度', description: '该模型的所有推理强度' }, { value: '', label: '未指定', description: '请求中没有传推理强度' }, ...['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map(value => ({ value, label: value, description: `匹配 ${value} 档位` }))] },
-    targetEffortOptions () { return ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map(value => ({ value, label: value, description: `实际调用使用 ${value} 档位` })) }
+    mappingModelOptions () { return [...new Set([...this.modelCatalog, ...Object.keys(this.modelCapabilities), ...this.modelMappings.flatMap(item => [item.source_model, item.target_model])].filter(Boolean))].sort() },
+    sourceEffortMode: {
+      get () { return this.mappingForm.source_effort === '*' ? 'any' : this.mappingForm.source_effort ? 'specific' : 'missing' },
+      set (value) { this.mappingForm.source_effort = value === 'any' ? '*' : value === 'missing' ? '' : 'high' }
+    },
+    sourceSupportedEfforts () { return this.verifiedEfforts(this.mappingForm.source_model) },
+    targetSupportedEfforts () { return this.verifiedEfforts(this.mappingForm.target_model || this.mappingForm.source_model) },
+    sourceEffortOptions () { return [{ value: '*', label: '任意强度' }, ...(this.sourceSupportedEfforts || ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']).map(value => ({ value, label: value }))] },
+    targetEffortOptions () { return (this.targetSupportedEfforts || ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']).map(value => ({ value, label: value })) },
+    sourceEffortHelp () { return this.sourceSupportedEfforts ? `已核验：${this.sourceSupportedEfforts.join('、')}；留空匹配未指定` : '模型未确定或能力未核验；留空匹配未指定' },
+    targetEffortHelp () { return this.targetSupportedEfforts ? `已核验：${this.targetSupportedEfforts.join('、')}` : '模型未确定或能力未核验，请确认上游支持该档位' },
+    mappingValidationError () {
+      const source = String(this.mappingForm.source_effort || '').trim().toLowerCase()
+      const target = String(this.mappingForm.target_effort || '').trim().toLowerCase()
+      if (this.sourceSupportedEfforts && source && source !== '*' && !this.sourceSupportedEfforts.includes(source)) return `请求模型不支持 ${source} 强度`
+      if (this.targetSupportedEfforts && target && !this.targetSupportedEfforts.includes(target)) return `目标模型不支持 ${target} 强度`
+      return ''
+    }
   },
   watch: {
     modelOptions: {
@@ -566,10 +589,11 @@ export default {
     groupExtraModelCount (group) { const models = group.allowed_models || []; return models.includes('*') ? 0 : Math.max(0, models.length - 3) },
     async saveGroup () { this.groupSaving = true; try { const body = { name: this.groupForm.name, description: this.groupForm.description, weight: this.groupForm.weight, concurrency_limit: this.groupForm.concurrency_limit, is_default: this.groupForm.is_default, allowed_models: this.groupForm.allow_all ? ['*'] : this.groupForm.allowed_models, model_mapping_ids: this.groupForm.model_mapping_ids }; const d = this.editingGroup ? await api.updateUserGroup(this.editingGroup.id, body) : await api.createUserGroup(body); if (!d.ok) throw new Error(d.message); notify(this.editingGroup ? '用户组已更新' : '用户组已创建', 'success'); this.resetGroupForm(); await this.load(); await this.loadGroupOptions() } catch (e) { notify(e.message, 'error') } finally { this.groupSaving = false } },
     effortLabel (value) { return value === '*' ? '任意强度' : value === '' || value == null ? '未指定' : String(value) },
+    verifiedEfforts (model) { const id = String(model || '').trim().toLowerCase().replace(/-\d{4}-\d{2}-\d{2}$/, ''); return this.modelCapabilities[id] || null },
     mappingModelLabel (value, target = false) { return String(value || '').trim() || (target ? '保持请求模型' : '全部模型') },
     resetMappingForm () { this.editingMapping = null; this.mappingForm = emptyMapping() },
     editMapping (item) { this.editingMapping = item; this.mappingForm = { name: item.name, source_model: item.source_model, source_effort: item.source_effort || '', target_model: item.target_model, target_effort: item.target_effort, enabled: !!item.enabled }; this.$nextTick(() => document.getElementById('admin-business-mappings')?.scrollIntoView({ behavior: 'smooth', block: 'start' })) },
-    async saveMapping () { this.mappingSaving = true; try { const d = this.editingMapping ? await api.updateModelMapping(this.editingMapping.id, this.mappingForm) : await api.createModelMapping(this.mappingForm); if (!d.ok) throw new Error(d.message); notify(this.editingMapping ? '模型映射已更新' : '模型映射已创建', 'success'); this.resetMappingForm(); await this.load(); await this.loadGroupOptions() } catch (e) { notify(e.message, 'error') } finally { this.mappingSaving = false } },
+    async saveMapping () { if (this.mappingValidationError) { notify(this.mappingValidationError, 'error'); return } this.mappingSaving = true; try { const d = this.editingMapping ? await api.updateModelMapping(this.editingMapping.id, this.mappingForm) : await api.createModelMapping(this.mappingForm); if (!d.ok) throw new Error(d.message); notify(this.editingMapping ? '模型映射已更新' : '模型映射已创建', 'success'); this.resetMappingForm(); await this.load(); await this.loadGroupOptions() } catch (e) { notify(e.message, 'error') } finally { this.mappingSaving = false } },
     async toggleMapping (item) { try { const d = await api.updateModelMapping(item.id, { enabled: !item.enabled }); if (!d.ok) throw new Error(d.message); await this.load(); await this.loadGroupOptions(); notify(item.enabled ? '模型映射已停用' : '模型映射已启用', 'success') } catch (e) { notify(e.message, 'error') } },
     async removeMapping (item) { if (!await askConfirm(`确定删除模型映射「${item.name}」吗？所有用户组会同时解除该规则。`)) return; try { const d = await api.deleteModelMapping(item.id); if (!d.ok) throw new Error(d.message); if (this.editingMapping && this.editingMapping.id === item.id) this.resetMappingForm(); await this.load(); await this.loadGroupOptions(); notify('模型映射已删除', 'success') } catch (e) { notify(e.message, 'error') } },
     async removeGroup (group) { if (!await askConfirm(`删除用户组「${group.name}」后，组内成员会转入默认组，确定继续吗？`)) return; try { const d = await api.deleteUserGroup(group.id); if (!d.ok) throw new Error(d.message); await this.load(); await this.loadGroupOptions(); notify('用户组已删除，成员已转入默认组', 'success') } catch (e) { notify(e.message, 'error') } },
@@ -581,6 +605,10 @@ export default {
       try {
         const data = await api.adminModelCatalog()
         configuredModels = (data.models || []).map(item => item && item.id)
+        this.modelCapabilities = { ...(data.model_capabilities || {}) }
+        for (const item of data.models || []) {
+          if (item && item.id && item.reasoning_efforts?.length && !this.modelCapabilities[item.id]) this.modelCapabilities[item.id] = item.reasoning_efforts
+        }
       } catch (error) {
         if (!publicModels.length && !groupModels.length) notify('模型目录加载失败', 'error')
       }
@@ -703,10 +731,11 @@ export default {
 .admin-create-user label > .app-select,.plan-group-field > .app-select { margin-top: 7px; }
 .announcement-admin-panel{margin-top:18px;background:linear-gradient(145deg,#fbfeff,#f8f6ff)}.announcement-admin-layout{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(280px,.8fr);gap:18px}.announcement-admin-form{display:grid;gap:14px}.announcement-admin-form>label{display:grid;gap:7px;color:#668096;font-size:11px}.announcement-admin-form label>span{display:flex;justify-content:space-between;gap:12px}.announcement-admin-form label em{color:#8a9dab;font:9px var(--mono);font-style:normal}.announcement-admin-form input,.announcement-admin-form textarea{width:100%;padding:11px 12px;border:1px solid #cfdee9;border-radius:10px;background:#fff;color:#29475f;font:11px/1.65 var(--sans);outline:0}.announcement-admin-form input{height:44px}.announcement-admin-form textarea{resize:vertical}.announcement-admin-form label>small{justify-self:end;color:#8ba0af;font:9px var(--mono)}.announcement-admin-actions{display:flex;gap:9px}.announcement-admin-preview{min-width:0;padding:20px;border:1px solid #d8e4ee;border-radius:14px;background:#ffffffc7}.announcement-admin-preview h3{margin:15px 0 10px;color:#294d68;font:600 21px/1.35 'Playfair Display',Georgia,serif}.announcement-admin-preview>p{max-height:310px;margin:0 0 17px;overflow:auto;color:#5f778b;font-size:12px;line-height:1.75;white-space:pre-wrap;overflow-wrap:anywhere}.announcement-admin-preview>small{display:block;padding-top:12px;border-top:1px solid #e2eaf0;color:#8397a6;font:9px/1.6 var(--mono)}:global(html[data-theme="dark"] .announcement-admin-panel){background:linear-gradient(145deg,#111e29,#182133)}:global(html[data-theme="dark"] .announcement-admin-preview),:global(html[data-theme="dark"] .announcement-admin-form input),:global(html[data-theme="dark"] .announcement-admin-form textarea){background:#152633;border-color:#345164;color:#d8e8f2}:global(html[data-theme="dark"] .announcement-admin-preview h3){color:#d6e6ef}:global(html[data-theme="dark"] .announcement-admin-preview>p){color:#a5bac8}:global(html[data-theme="dark"] .announcement-admin-preview>small){border-color:#2d4658;color:#8fa7b6}@media(max-width:760px){.announcement-admin-layout{grid-template-columns:1fr}.announcement-admin-actions{flex-direction:column}.announcement-admin-actions button{width:100%}}
 .model-mapping-panel{background:linear-gradient(145deg,#fbfeff 0%,#f7f9ff 100%)}
-.model-mapping-form{display:grid;grid-template-columns:minmax(160px,1.15fr) minmax(150px,1fr) minmax(145px,.8fr) 36px minmax(150px,1fr) minmax(145px,.8fr);gap:12px;align-items:end;padding:18px;border:1px solid #d7e5ee;border-radius:14px;background:#ffffffc7}
+.model-mapping-form{display:grid;grid-template-columns:minmax(160px,1.15fr) minmax(150px,1fr) minmax(145px,.8fr) 36px minmax(150px,1fr) minmax(145px,.8fr);gap:12px;align-items:start;padding:18px;border:1px solid #d7e5ee;border-radius:14px;background:#ffffffc7}
 .mapping-form-title{grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;padding-bottom:10px;border-bottom:1px solid #e3ebf1}.mapping-form-title span{color:#294e69;font:600 14px var(--mono)}.mapping-form-title small{color:#8093a2;font-size:10px}
-.model-mapping-form>label{display:grid;gap:7px;color:#688197;font-size:11px}.model-mapping-form>label>input{height:44px;padding:0 12px;border:1px solid #cfdee9;border-radius:10px;background:#fff;color:#29475f;font:11px var(--mono)}.model-mapping-form .app-select{min-width:0}
-.mapping-arrow{display:grid;place-items:center;height:44px;color:#57839d;font:20px var(--mono)}
+.model-mapping-form>label{display:grid;gap:7px;color:#688197;font-size:11px}.model-mapping-form>label>input{box-sizing:border-box;width:100%;max-width:380px;height:44px;padding:0 12px;border:1px solid #cfdee9;border-radius:10px;background:#fff;color:#29475f;font:11px var(--mono)}.model-mapping-form>label>input[list="mapping-source-efforts"],.model-mapping-form>label>input[list="mapping-target-efforts"]{max-width:280px}.model-mapping-form .app-select{min-width:0}
+.model-mapping-form .mapping-effort-help{min-height:28px;color:#72899a;font:10px/1.4 var(--sans)}.mapping-validation-error{grid-column:1/-1;margin:0;color:#bd604b;font:11px var(--sans)}
+.mapping-arrow{display:grid;place-items:center;height:44px;margin-top:20px;color:#57839d;font:20px var(--mono)}
 .model-mapping-form .mapping-enabled{display:flex;align-items:center;gap:8px;grid-column:1/3;cursor:pointer}.mapping-enabled input{position:absolute;opacity:0}.mapping-enabled i{width:34px;height:19px;padding:2px;border-radius:99px;background:#cbd8e1;transition:.2s}.mapping-enabled i:after{content:"";display:block;width:15px;height:15px;border-radius:50%;background:#fff;box-shadow:0 2px 5px #38546b33;transition:.2s}.mapping-enabled input:checked+i{background:#4c9b87}.mapping-enabled input:checked+i:after{transform:translateX(15px)}
 .mapping-form-actions{grid-column:3/-1;display:flex;justify-content:flex-end;gap:8px}
 .mapping-rule-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:14px}.mapping-rule-card{min-width:0;padding:16px;border:1px solid #d9e6ee;border-radius:13px;background:#fff;box-shadow:0 8px 20px #4263810b}.mapping-rule-card.disabled{opacity:.68}.mapping-rule-head,.mapping-rule-actions{display:flex;align-items:center;justify-content:space-between;gap:10px}.mapping-rule-head>div{display:grid;min-width:0;gap:3px}.mapping-rule-head span{overflow:hidden;color:#294c67;font-weight:700;text-overflow:ellipsis;white-space:nowrap}.mapping-rule-head small{color:#8ba0af;font:9px var(--mono)}
@@ -809,7 +838,7 @@ export default {
   .conversation-log-row { align-items: flex-start; flex-direction: column; }
   .conversation-log-row > div:last-child { text-align: left; }
   .conversation-log-row span { justify-self: start; }
-  .model-mapping-form{grid-template-columns:1fr}.mapping-form-title,.model-mapping-form>label,.mapping-arrow,.model-mapping-form .mapping-enabled,.mapping-form-actions{grid-column:1}.mapping-arrow{height:20px;transform:rotate(90deg)}.mapping-rule-grid,.group-mapping-options{grid-template-columns:1fr}.mapping-form-actions{justify-content:stretch}.mapping-form-actions button{flex:1}
+  .model-mapping-form{grid-template-columns:1fr}.mapping-form-title,.model-mapping-form>label,.mapping-arrow,.model-mapping-form .mapping-enabled,.mapping-form-actions{grid-column:1}.mapping-arrow{height:20px;margin-top:0;transform:rotate(90deg)}.mapping-rule-grid,.group-mapping-options{grid-template-columns:1fr}.mapping-form-actions{justify-content:stretch}.mapping-form-actions button{flex:1}
 }
 
 /* The visual dashboard follows the compact typography used by the other admin panels. */

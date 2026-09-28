@@ -78,6 +78,42 @@ class UserGroupService:
         return [item for item in catalog if self.model_allowed(user, str(item.get("id") or ""))]
 
     @staticmethod
+    def preview_model_mapping(user: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
+        outgoing, matched = UserGroupService.apply_model_mapping(user, payload)
+        model = str(payload.get("model") or "").strip()
+        effort = str(requested_reasoning_effort(dict(payload)) or "").strip().lower()
+        rules = user.get("group_model_mappings") or []
+        details = []
+        for rule in rules:
+            source = str(rule.get("source_model") or "").strip().lower()
+            expected = str(rule.get("source_effort") or "").strip().lower()
+            if not rule.get("enabled"):
+                reason = "规则已停用"
+            elif source and source != model.lower():
+                reason = "请求模型不匹配"
+            elif expected not in ("*", effort):
+                reason = "只匹配未指定强度的请求" if not expected else f"只匹配 {expected} 强度"
+            elif matched and rule.get("id") == matched.get("id"):
+                reason = "已命中"
+            else:
+                reason = "匹配，但更具体的规则优先"
+            details.append({"id": rule.get("id"), "name": rule.get("name"), "reason": reason})
+        allowed_models = UserGroupService.allowed_models(user)
+        allowed = "*" in allowed_models or model in allowed_models
+        return {
+            "group_id": user.get("effective_group_id"), "group_name": user.get("group_name"),
+            "group_source": user.get("group_source"), "allowed": allowed,
+            "requested_model": model, "requested_effort": effort,
+            "mapped_model": outgoing.get("model"),
+            "mapped_effort": requested_reasoning_effort(outgoing),
+            "mapping_id": matched.get("id") if matched else None,
+            "mapping_name": matched.get("name") if matched else None,
+            "reason": "用户组不允许请求此模型" if not allowed else (
+                "已命中映射" if matched else "没有命中的规则，将保留请求模型与强度"),
+            "rules": details,
+        }
+
+    @staticmethod
     def apply_model_mapping(user: Mapping[str, Any], payload: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
         """Apply the effective group's most specific model/effort mapping.
 

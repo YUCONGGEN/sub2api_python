@@ -5,17 +5,17 @@
       <button class="secondary-btn" :disabled="loading" @click="load">{{ loading ? '刷新中…' : '刷新状态' }}</button>
     </div>
 
-    <div v-if="loadError" class="proxy-error"><strong>代理管理暂不可用</strong><span>{{ loadError }}</span><small>请在 application.yml 中启用并配置 rose.proxy-pool-admin。</small></div>
+    <div v-if="loadError" class="proxy-error"><strong>代理管理暂不可用</strong><span>{{ loadError }}</span><small v-if="loadError.includes('未在 YAML 中启用')">请在 application.yml 中启用并配置 rose.proxy-pool-admin。</small></div>
     <template v-else>
       <div class="proxy-status-grid">
         <article><span>代理核心</span><strong :class="snapshot.core && snapshot.core.online ? 'ok' : 'bad'">{{ snapshot.core && snapshot.core.online ? '运行中' : '离线' }}</strong><small>版本 {{ snapshot.core && snapshot.core.version || '未知' }}</small><button class="version-btn" :disabled="versionChecking" @click="checkVersion">{{ versionChecking ? '检测中…' : '检测更新' }}</button><small v-if="versionInfo">{{ versionInfo.update_available ? `发现新版本 ${versionInfo.latest}` : `已是最新版本 ${versionInfo.latest}` }}<a v-if="versionInfo.release_url" :href="versionInfo.release_url" target="_blank" rel="noopener">查看版本</a></small></article>
         <article><span>健康守护</span><strong :class="snapshot.monitor && snapshot.monitor.online ? 'ok' : 'bad'">{{ snapshot.monitor && snapshot.monitor.online ? '运行中' : '未更新' }}</strong><small>{{ snapshot.monitor && snapshot.monitor.group || '未配置代理组' }}</small></article>
-        <article><span>当前节点</span><strong>{{ activeNode || '未知' }}</strong><small>{{ readyCount }} 个备用可用</small></article>
+        <article><span>当前节点</span><strong>{{ activeNode || '未知' }}</strong><small>{{ readyCount }} 个候选已验证 · 备用池上限 {{ policy.standby_pool_size || '—' }}</small></article>
         <article><span>订阅来源</span><strong>{{ subscriptions.length }}</strong><small>URL 只加密保存在服务器</small></article>
       </div>
 
       <section class="proxy-card node-card">
-        <div class="card-head"><div><span class="eyebrow">POOL STATUS</span><h3>节点状态</h3><small v-if="snapshot.monitor && snapshot.monitor.sync && snapshot.monitor.sync.synced_at">最近同步 {{ formatTime(snapshot.monitor.sync.synced_at) }} · {{ snapshot.monitor.sync.candidate_count || 0 }} 个候选节点</small></div><div class="node-head-actions"><span>{{ nodes.length }} 个健康池节点</span><button class="secondary-btn" :disabled="poolSyncing" @click="syncPool">{{ poolSyncing ? '同步中…' : '同步订阅节点' }}</button></div></div>
+        <div class="card-head"><div><span class="eyebrow">POOL STATUS</span><h3>节点状态</h3><small v-if="snapshot.monitor && snapshot.monitor.sync && snapshot.monitor.sync.synced_at">最近同步 {{ formatTime(snapshot.monitor.sync.synced_at) }} · {{ snapshot.monitor.sync.candidate_count || 0 }} 个候选节点</small></div><div class="node-head-actions"><span>{{ nodes.length }} 个入选候选节点</span><button class="secondary-btn" :disabled="poolSyncing" @click="syncPool">{{ poolSyncing ? '同步中…' : '同步订阅节点' }}</button></div></div>
         <div class="node-grid"><article v-for="node in nodes" :key="node.name" :class="{ excluded: !node.eligible }"><i :class="node.status"></i><div><strong :title="nodeDisplayName(node)">{{ nodeDisplayName(node) }}</strong><span>{{ node.subscription_name || node.source || '未知来源' }} · {{ node.country || 'OTHER' }} · {{ node.eligible ? statusLabel(node.status) : '未参与当前策略' }}</span><small>当前连接 {{ node.active_connections || 0 }} 个 · 流量 {{ bytes(node.active_traffic_bytes || 0) }}</small><small>所属订阅共享：已用 {{ bytes(node.subscription_used_bytes) }} · 剩余 {{ bytes(node.subscription_remaining_bytes) }}</small></div><b>{{ node.delay_ms ? `${node.delay_ms} ms` : '—' }}</b></article></div>
       </section>
 
@@ -75,7 +75,7 @@ export default {
       { key: 'replacement_interval_seconds', label: '备用复测间隔（秒）', help: '备用节点连续验证之间的等待时间' },
       { key: 'quarantine_seconds', label: '故障隔离时间（秒）', help: '失败节点暂时隔离时长' },
       { key: 'quarantine_recheck_seconds', label: '隔离重试间隔（秒）', help: '所有备用不可用时再次检查隔离节点' },
-      { key: 'standby_probes_per_cycle', label: '每轮备用检查数', help: '0 表示健康时不检查备用节点' },
+      { key: 'standby_probes_per_cycle', label: '每轮候选检查数', help: '0 表示健康时不检查候选节点' },
       { key: 'standby_interval_seconds', label: '备用复查间隔（秒）', help: '可用备用节点的再次检查间隔' },
       { key: 'recovery_successes', label: '恢复确认次数', help: '隔离节点连续成功多少次后恢复' },
       { key: 'recovery_interval_seconds', label: '恢复检查间隔（秒）', help: '故障节点首次恢复检查间隔' },
@@ -174,7 +174,7 @@ export default {
       if (!await askConfirm(`确定删除代理订阅「${item.name}」吗？已有连接不会被强制中断。`)) return
       try { await api.deleteProxySubscription(item.id); await this.load(); notify('代理订阅已删除', 'success') } catch (error) { notify(error.message, 'error') }
     },
-    statusLabel (value) { return ({ active: '当前使用', ready: '备用可用', probation: '恢复确认中', quarantined: '已隔离', unknown: '待检查' })[value] || value },
+    statusLabel (value) { return ({ active: '当前使用', ready: '已验证可用', probation: '恢复确认中', quarantined: '已隔离', unknown: '待检查' })[value] || value },
     sourceStateLabel (item) { return !item.enabled ? '已停用' : item.status === 'validated' ? '可访问' : item.status === 'imported' ? '历史导入' : '异常' },
     sourceStateClass (item) { return !item.enabled ? 'disabled' : item.status === 'validated' ? 'ok' : item.status === 'imported' ? 'imported' : 'bad' },
     nodeDisplayName (node) { const raw = String(node?.name || '').trim(); const marker = raw.indexOf('｜'); const nodeName = marker >= 0 ? raw.slice(marker + 1).trim() : raw; const subscriptionName = String(node?.subscription_name || '').trim(); return subscriptionName ? (nodeName ? `${subscriptionName}｜${nodeName}` : subscriptionName) : (nodeName || '未知节点') },

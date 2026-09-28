@@ -18,6 +18,7 @@ from springbootai import Autowired, PostConstruct, PreDestroy, Scheduled, Servic
 
 from backend.common.codex_client import (
     DEFAULT_CODEX_CLIENT_VERSION,
+    DEFAULT_CODEX_RELEASE_PAGE_URL,
     DEFAULT_CODEX_RELEASE_URL,
     codex_client_version,
     codex_client_version_is_pinned,
@@ -216,17 +217,36 @@ class SubscriptionGatewayService:
             targets.append(("Claude Code", "claude_client_version", self.claude_release_url))
         for label, attribute, url in targets:
             try:
-                response = httpx.get(
-                    url,
-                    headers={"Accept": "application/vnd.github+json", "User-Agent": "rose-ai-proxy"},
-                    timeout=min(10.0, max(2.0, float(getattr(self, "connect_timeout", 5.0)))),
-                    follow_redirects=True,
-                )
-                response.raise_for_status()
-                release = response.json()
-                version = normalize_codex_client_version(
-                    release.get("tag_name") if isinstance(release, dict) else ""
-                )
+                timeout = min(10.0, max(2.0, float(getattr(self, "connect_timeout", 5.0))))
+                try:
+                    response = httpx.get(
+                        url,
+                        headers={"Accept": "application/vnd.github+json", "User-Agent": "rose-ai-proxy"},
+                        timeout=timeout,
+                        follow_redirects=True,
+                    )
+                    response.raise_for_status()
+                    release = response.json()
+                    version = normalize_codex_client_version(
+                        release.get("tag_name") if isinstance(release, dict) else ""
+                    )
+                except (httpx.HTTPError, ValueError):
+                    if attribute != "codex_client_version" or url != DEFAULT_CODEX_RELEASE_URL:
+                        raise
+                    # The unauthenticated GitHub API can hit an IP-wide 403
+                    # rate limit. The public release page redirects to the
+                    # same validated tag without consuming that API quota.
+                    response = httpx.get(
+                        DEFAULT_CODEX_RELEASE_PAGE_URL,
+                        headers={"User-Agent": "rose-ai-proxy"},
+                        timeout=timeout,
+                        follow_redirects=True,
+                    )
+                    response.raise_for_status()
+                    path = str(response.url.path)
+                    version = normalize_codex_client_version(
+                        path.rsplit("/tag/", 1)[-1] if "/tag/" in path else ""
+                    )
                 if not version:
                     raise ValueError("最新版发布标签不包含有效版本")
                 previous = str(getattr(self, attribute))
@@ -445,7 +465,9 @@ class SubscriptionGatewayService:
         with self._safety_lock:
             self._activity_sequence += 1
             activity_id = self._activity_sequence
+        from backend.common.routing_trace import current_routing_trace
         return {
+            **current_routing_trace(),
             "request_id": activity_id,
             "user_id": int(user_id),
             "provider": str(provider),
@@ -484,6 +506,7 @@ class SubscriptionGatewayService:
         request_id: str = "",
     ) -> str:
         """Register a direct configured-API request for live admin metrics."""
+        from backend.common.routing_trace import current_routing_trace
         with self._safety_lock:
             self._api_activity_sequence += 1
             activity_id = str(request_id or f"api-{self._api_activity_sequence}")
@@ -492,6 +515,7 @@ class SubscriptionGatewayService:
             if activity_id in self._api_active_activities:
                 activity_id = f"{activity_id}-{self._api_activity_sequence}"
             self._api_active_activities[activity_id] = {
+                **current_routing_trace(),
                 "request_id": activity_id,
                 "user_id": int(user_id),
                 "provider": "api",

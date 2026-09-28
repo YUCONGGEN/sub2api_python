@@ -216,7 +216,10 @@ class Monitor:
             return []
         now = self.clock()
         records = self.state.setdefault('nodes', {})
-        alternatives = [n for n in self.standbys(current)
+        # Probe every eligible candidate, including nodes beyond the failover
+        # pool size. Otherwise those candidates can remain "unknown" forever.
+        # standbys() still limits which nodes may be selected on failover.
+        alternatives = [n for n in self.eligible_nodes() if n != current
                         if records.get(n, {}).get('next_probe_at', 0) <= now]
         alternatives.sort(key=lambda n: records.get(n, {}).get('last_probe_at', 0))
         results = []

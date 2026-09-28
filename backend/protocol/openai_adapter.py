@@ -5,6 +5,7 @@ import json
 import logging
 import time
 import uuid
+from backend.common.routing_trace import routing_scope, record_mapping
 
 from fastapi import Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -20,6 +21,7 @@ from backend.common.multimodal import (
     parse_dsml_tool_calls,
 )
 from backend.protocol.subscription_adapter import (
+    _client_model_response,
     maybe_proxy_claude_chat_subscription,
     maybe_proxy_compatible_chat_subscription,
     maybe_proxy_openai_chat_subscription,
@@ -143,6 +145,7 @@ def _local_error(status: int, message: str, error_type: str, source: str) -> JSO
     )
 
 
+@routing_scope
 async def openai_chat(request: Request):
     service, auth, conversations = _beans(request)
     user = await _authenticated_user(request, auth)
@@ -161,8 +164,11 @@ async def openai_chat(request: Request):
     model_error = _model_permission_error(request, user, str(payload.get("model") or service.model_name))
     if model_error is not None:
         return model_error
-    payload, _ = _group_service(request).apply_model_mapping(user, payload)
-    subscription_response = await maybe_proxy_openai_chat_subscription(request, payload, user)
+    client_model = str(payload.get("model") or service.model_name)
+    original_payload = payload
+    payload, mapping = _group_service(request).apply_model_mapping(user, payload)
+    record_mapping(user, original_payload, mapping)
+    subscription_response = await maybe_proxy_openai_chat_subscription(request, payload, user, client_model)
     if subscription_response is not None:
         return subscription_response
     subscription_response = await maybe_proxy_claude_chat_subscription(request, payload, user)
@@ -368,7 +374,8 @@ async def openai_chat(request: Request):
                     error_body = {"error": {"message": str(exc), "type": "upstream_error"}}
                     yield f"data: {json.dumps(error_body, ensure_ascii=False)}\n\n"
                     yield "data: [DONE]\n\n"
-            return StreamingResponse(_tracked_stream(events(), request, direct_activity_id), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+            response = StreamingResponse(_tracked_stream(events(), request, direct_activity_id), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+            return _client_model_response(response, client_model if mapping else "", "")
         answer, usage, model, upstream_trace = await service.ainvoke_with_trace(payload)
         conversation = await resolve_conversation()
         ok, cost, record = await asyncio.to_thread(service.charge_and_record, user["id"], model, usage)
@@ -389,7 +396,7 @@ async def openai_chat(request: Request):
             "rose": {"cost_cny": cost},
         }
         await complete_conversation(await resolve_conversation(), {"proxy_response": response_body, "upstream": upstream_trace}, answer, usage, cost)
-        return JSONResponse(response_body)
+        return _client_model_response(JSONResponse(response_body), client_model if mapping else "", "")
     except UpstreamRequestError as exc:
         await fail_conversation(exc)
         status = exc.status_code if 400 <= exc.status_code < 500 else 502
@@ -512,6 +519,7 @@ def _responses_tool_output(call: dict, namespaces: dict[str, tuple[str, str]]) -
     return item
 
 
+@routing_scope
 async def openai_responses(request: Request):
     """OpenAI Responses-compatible facade for Codex CLI/App/IDE clients."""
     service, auth, conversations = _beans(request)
@@ -531,8 +539,11 @@ async def openai_responses(request: Request):
     model_error = _model_permission_error(request, user, str(payload.get("model") or service.model_name))
     if model_error is not None:
         return model_error
-    payload, _ = _group_service(request).apply_model_mapping(user, payload)
-    subscription_response = await maybe_proxy_openai_subscription(request, payload, user)
+    client_model = str(payload.get("model") or service.model_name)
+    original_payload = payload
+    payload, mapping = _group_service(request).apply_model_mapping(user, payload)
+    record_mapping(user, original_payload, mapping)
+    subscription_response = await maybe_proxy_openai_subscription(request, payload, user, client_model)
     if subscription_response is not None:
         return subscription_response
     payload = service.apply_openai_subscription_fallback(payload)
@@ -787,7 +798,8 @@ async def openai_responses(request: Request):
                     await fail_conversation(exc)
                     yield _responses_event("error", {"type": "error", "error": {"message": str(exc), "type": "upstream_error"}})
                     yield "data: [DONE]\n\n"
-            return StreamingResponse(_tracked_stream(events(), request, direct_activity_id), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+            response = StreamingResponse(_tracked_stream(events(), request, direct_activity_id), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+            return _client_model_response(response, client_model if mapping else "", "")
         answer, usage, model, upstream_trace = await service.ainvoke_with_trace({**payload, "messages": messages})
         conversation = await resolve_conversation()
         ok, cost, record = await asyncio.to_thread(service.charge_and_record, user["id"], model, usage)
@@ -813,7 +825,7 @@ async def openai_responses(request: Request):
             "rose": {"cost_cny": cost, "usage_id": record.get("id") if record else None},
         }
         await complete_conversation(await resolve_conversation(), {"proxy_response": response_body, "upstream": upstream_trace}, answer, usage, cost)
-        return JSONResponse(response_body)
+        return _client_model_response(JSONResponse(response_body), client_model if mapping else "", "")
     except UpstreamRequestError as exc:
         resolver = locals().get("resolve_conversation")
         row = await resolver() if callable(resolver) else locals().get("conversation")

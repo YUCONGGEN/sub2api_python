@@ -45,7 +45,7 @@ def test_both_services_load_same_yaml_default_at_startup(monkeypatch):
     "gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-5-pro", "gpt-5.1",
     "gpt-5.1-codex-mini", "gpt-5.1-codex-max", "gpt-5.3-codex-spark",
     "gpt-5.4", "gpt-5.5", "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra",
-    "gpt-5.6-luna", "gpt-6-astra", "gpt-5-2025-08-07",
+    "gpt-5.6-luna", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5-2025-08-07",
 ])
 def test_supported_gpt_defaults_to_high(model):
     assert default_gpt_reasoning_effort(model) == "high"
@@ -81,7 +81,7 @@ def test_missing_effort_normalizes_without_mutating_input(fields):
     assert with_responses_reasoning(outgoing) == outgoing
 
 
-@pytest.mark.parametrize("effort", ["minimal", "low", "medium", "high", "xhigh", "max"])
+@pytest.mark.parametrize("effort", ["none", "low", "medium", "high", "xhigh", "max"])
 def test_explicit_effort_is_not_replaced(effort):
     for fields in (
         {"reasoning_effort": effort},
@@ -117,6 +117,15 @@ def test_missing_none_and_invalid_efforts_fall_back_to_high(fields):
         assert outgoing["reasoning"]["summary"] == "auto"
 
 
+def test_verified_model_efforts_preserve_none_and_reject_unsupported_tiers():
+    for model in ("gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"):
+        payload = {"model": model, "reasoning": {"effort": "none"}}
+        assert with_responses_reasoning(payload)["reasoning"]["effort"] == "none"
+        assert AiGatewayService._request_options(payload)["reasoning_effort"] == "none"
+        assert with_responses_reasoning({"model": model, "reasoning": {"effort": "minimal"}})["reasoning"]["effort"] == "high"
+    assert with_responses_reasoning({"model": "gpt-6-astra", "reasoning": {"effort": "none"}})["reasoning"]["effort"] == "high"
+
+
 @pytest.mark.parametrize("reasoning", ["invalid", [], False])
 def test_malformed_reasoning_container_remains_for_boundary_validation(reasoning):
     payload = {"model": "gpt-6-astra", "reasoning": reasoning}
@@ -125,7 +134,7 @@ def test_malformed_reasoning_container_remains_for_boundary_validation(reasoning
 
 def test_api_options_preserve_explicit_effort_and_use_resolved_upstream_name():
     assert AiGatewayService._request_options({"model": "gpt-5.6-sol"}) == {"reasoning_effort": "high"}
-    assert AiGatewayService._request_options({"model": "gpt-5.6-sol", "reasoning_effort": "none"}) == {"reasoning_effort": "high"}
+    assert AiGatewayService._request_options({"model": "gpt-5.6-sol", "reasoning_effort": "none"}) == {"reasoning_effort": "none"}
     assert AiGatewayService._request_options({"model": "gpt-5.6-sol", "reasoning_effort": "turbo"}) == {"reasoning_effort": "high"}
     assert AiGatewayService._request_options({"model": "gpt-5.6-sol", "reasoning_effort": " XHIGH "}) == {"reasoning_effort": "xhigh"}
     assert AiGatewayService._request_options({"model": "gpt-6-astra", "reasoning": {"effort": "low"}}) == {"reasoning_effort": "low"}

@@ -9,8 +9,9 @@ import re
 from typing import Any
 
 
-DEFAULT_CODEX_CLIENT_VERSION = "0.153.2"
+DEFAULT_CODEX_CLIENT_VERSION = "0.156.1"
 DEFAULT_CODEX_RELEASE_URL = "https://api.github.com/repos/openai/codex/releases/latest"
+DEFAULT_CODEX_RELEASE_PAGE_URL = "https://github.com/openai/codex/releases/latest"
 
 
 def normalize_codex_client_version(value: Any) -> str:

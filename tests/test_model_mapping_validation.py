@@ -4,6 +4,7 @@ import pytest
 
 from backend.repository.store import StoreRepository
 from backend.service.store_service import StoreService
+from backend.common.model_capabilities import known_reasoning_efforts
 
 
 def test_model_mapping_validation_allows_empty_source_and_target_models():
@@ -18,6 +19,27 @@ def test_model_mapping_validation_allows_empty_source_and_target_models():
 
     assert values["source_model"] == ""
     assert values["target_model"] == ""
+
+
+def test_known_model_efforts_match_verified_api_capabilities():
+    assert known_reasoning_efforts("gpt-6-astra") == ("low", "medium", "high", "xhigh", "max")
+    assert known_reasoning_efforts("gpt-6-sol-2026-09-01") == ("none", "low", "medium", "high", "xhigh", "max")
+    assert known_reasoning_efforts("gpt-5.6-terra") == known_reasoning_efforts("gpt-5.6-sol")
+    assert known_reasoning_efforts("custom-model") is None
+
+
+def test_mapping_rejects_unsupported_effort_for_known_models():
+    base = {"source_model": "gpt-5.6-sol", "source_effort": "*", "target_model": "gpt-6-astra", "target_effort": "high"}
+    StoreService._validate_model_mapping_efforts(base)
+    with pytest.raises(ValueError, match="请求模型.*minimal"):
+        StoreService._validate_model_mapping_efforts({**base, "source_effort": "minimal"})
+    with pytest.raises(ValueError, match="目标模型.*none"):
+        StoreService._validate_model_mapping_efforts({**base, "target_effort": "none"})
+    with pytest.raises(ValueError, match="目标模型.*ultra"):
+        StoreService._validate_model_mapping_efforts({**base, "target_effort": "ultra"})
+    # Empty target keeps the source model, so the source model constrains the target effort.
+    with pytest.raises(ValueError, match="目标模型.*minimal"):
+        StoreService._validate_model_mapping_efforts({**base, "target_model": "", "target_effort": "minimal"})
 
 
 @pytest.mark.parametrize("field", ["source_model", "target_model"])

@@ -3,6 +3,7 @@
 from springbootai.annotations import Autowired, GetMapping, RequestHeader, RequestMapping, RestController
 
 from backend.common.response import forbidden, ok
+from backend.common.model_capabilities import known_reasoning_efforts, model_reasoning_capabilities
 from backend.service.ai_service import AiGatewayService
 from backend.service.auth_service import AuthService
 from backend.service.subscription_gateway_service import SubscriptionGatewayService
@@ -30,8 +31,9 @@ class AdminModelCatalogController:
                     "id": model_id,
                     "provider": str(item.get("provider") or ""),
                     "group": str(item.get("group") or ""),
+                    "reasoning_efforts": list(known_reasoning_efforts(model_id) or item.get("reasoning_levels") or []),
                 })
-        return ok({"ok": True, "models": list(by_id.values())})
+        return ok({"ok": True, "models": list(by_id.values()), "model_capabilities": model_reasoning_capabilities()})
 
 
 __all__ = ["AdminModelCatalogController"]

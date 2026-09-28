@@ -7,6 +7,7 @@
           <div class="activity-user"><router-link :to="`/admin/users/${item.user_id}`">@{{ item.username }}</router-link><span>请求 #{{ item.request_id }}</span></div>
           <div class="activity-tags"><span>模型 {{ item.model || '未知' }}</span><span>推理强度 {{ reasoningLabel(item.reasoning_effort) }}</span><span>该用户并发 {{ item.user_concurrent_tasks || 1 }}</span></div>
           <small>{{ providerLabel(item.provider) }} · 上游账号 #{{ item.account_id }} · 已执行 {{ elapsed(item.started_at) }}</small>
+          <small v-if="item.requested_model">请求 {{ item.requested_model }} / {{ reasoningLabel(item.requested_effort) }} → 实际 {{ item.model }} / {{ reasoningLabel(item.reasoning_effort) }} · {{ item.mapping_id ? `规则 #${item.mapping_id} ${item.mapping_name || ''}` : '未命中映射' }} · {{ item.group_name || '未分组' }}</small>
         </div>
       </div>
       <div v-else class="activity-empty">当前没有用户正在执行</div>
@@ -29,6 +30,7 @@
           <div class="activity-user"><router-link :to="`/admin/users/${item.user_id}`">@{{ item.username }}</router-link><span>请求 #{{ item.request_id }}</span></div>
           <div class="activity-tags"><span>模型 {{ item.model || '未知' }}</span><span>推理强度 {{ reasoningLabel(item.reasoning_effort) }}</span><span>{{ item.endpoint || 'API' }}</span></div>
           <small>{{ item.api_provider || 'API 上游' }} · 非共享池 · 已执行 {{ elapsed(item.started_at) }}</small>
+          <small v-if="item.requested_model">请求 {{ item.requested_model }} / {{ reasoningLabel(item.requested_effort) }} → 实际 {{ item.model }} / {{ reasoningLabel(item.reasoning_effort) }} · {{ item.mapping_id ? `规则 #${item.mapping_id} ${item.mapping_name || ''}` : '未命中映射' }}</small>
         </div>
       </div>
       <div v-else class="activity-empty">当前没有用户通过 API 直连调用</div>

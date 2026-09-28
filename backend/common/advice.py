@@ -24,16 +24,16 @@ class GlobalExceptionHandler:
         return Result.error(code=400, message=str(exc) or "请求参数不正确")
 
     @ExceptionHandler(TypeError)
-    @ResponseStatus(400)
+    @ResponseStatus(500)
     def handle_type_error(self, exc: TypeError):
-        self.logger.warning("请求类型错误: %s", exc)
-        return Result.error(code=400, message="请求参数类型不正确")
+        self.logger.exception("内部类型错误: %s", exc)
+        return Result.error(code=500, message="服务器处理失败，请联系管理员")
 
     @ExceptionHandler(KeyError)
-    @ResponseStatus(400)
+    @ResponseStatus(500)
     def handle_key_error(self, exc: KeyError):
-        self.logger.warning("请求缺少字段: %s", exc)
-        return Result.error(code=400, message=f"缺少必要字段: {exc.args[0] if exc.args else 'unknown'}")
+        self.logger.exception("内部字段错误: %s", exc)
+        return Result.error(code=500, message="服务器处理失败，请联系管理员")
 
     @ExceptionHandler(PermissionError)
     @ResponseStatus(403)

@@ -473,6 +473,21 @@ class StoreService:
 
     # ---------------------------------------------------------- model mappings
     @staticmethod
+    def _validate_model_mapping_efforts(values: Mapping[str, Any]) -> None:
+        from backend.common.model_capabilities import known_reasoning_efforts
+
+        source_model = str(values.get("source_model") or "").strip()
+        target_model = str(values.get("target_model") or "").strip() or source_model
+        source_effort = str(values.get("source_effort") or "").strip().lower()
+        target_effort = str(values.get("target_effort") or "").strip().lower()
+        source_supported = known_reasoning_efforts(source_model)
+        target_supported = known_reasoning_efforts(target_model)
+        if source_supported is not None and source_effort not in {"", "*"} and source_effort not in source_supported:
+            raise ValueError(f"请求模型 {source_model} 不支持 {source_effort} 推理强度")
+        if target_supported is not None and target_effort not in target_supported:
+            raise ValueError(f"目标模型 {target_model} 不支持 {target_effort} 推理强度")
+
+    @staticmethod
     def _model_mapping_values(values: Mapping[str, Any], *, partial: bool = False) -> dict[str, Any]:
         efforts = {"", "*", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
         changes: dict[str, Any] = {}
@@ -511,6 +526,7 @@ class StoreService:
     @Transactional()
     def create_model_mapping(self, values: Mapping[str, Any]) -> dict[str, Any]:
         mapping = self._model_mapping_values(values)
+        self._validate_model_mapping_efforts(mapping)
         now = utc_now()
         mapping.update({"created_at": now, "updated_at": now})
         self.mapper.insert_model_mapping(mapping)
@@ -523,6 +539,7 @@ class StoreService:
         if not existing:
             return None
         changes = self._model_mapping_values(values, partial=True)
+        self._validate_model_mapping_efforts({**existing, **changes})
         source_model = changes.get("source_model", existing.get("source_model"))
         source_effort = changes.get("source_effort", existing.get("source_effort"))
         if (source_model, source_effort) != (existing.get("source_model"), existing.get("source_effort")):

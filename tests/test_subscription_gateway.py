@@ -12,9 +12,12 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 import pytest
 from cryptography.fernet import Fernet
+from fastapi.responses import Response, StreamingResponse
 
 from backend.common.codex_client import (
     DEFAULT_CODEX_CLIENT_VERSION,
+    DEFAULT_CODEX_RELEASE_PAGE_URL,
+    DEFAULT_CODEX_RELEASE_URL,
     codex_client_version,
     normalize_codex_client_version,
 )
@@ -1122,7 +1125,8 @@ def test_trae_chat_bridge_sanitizes_actual_upstream_request(monkeypatch, limit_f
 @pytest.mark.parametrize("explicit_effort", [None, "low", "none", "turbo"])
 @pytest.mark.parametrize("configured_effort", ["high", "medium"])
 def test_gpt_effective_effort_is_sent_upstream_and_displayed_in_activity(monkeypatch, model, chat, stream, explicit_effort, configured_effort):
-    expected_effort = explicit_effort if explicit_effort in {"minimal", "low", "medium", "high", "xhigh", "max"} else configured_effort
+    valid_explicit = {"none", "low", "medium", "high", "xhigh", "max"} if model == "gpt-5.6-sol" else {"low", "medium", "high", "xhigh", "max"}
+    expected_effort = explicit_effort if explicit_effort in valid_explicit else configured_effort
     completed = {
         "id": "resp_high", "model": model, "status": "completed",
         "output": [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "hello"}]}],
@@ -1304,6 +1308,61 @@ def test_native_responses_stream_recovers_missing_completion_event(monkeypatch):
     assert store.charges[0][0:2] == (9, "gpt-6-astra")
     assert store.charges[0][2] > 0
     assert store.charges[0][3] > 0
+
+
+def test_mapped_model_alias_keeps_old_client_name_without_changing_upstream_or_billing(monkeypatch):
+    source = b"".join([
+        b'event: response.created\ndata: {"type":"response.created","response":{"id":"resp_alias","model":"gpt-6-astra"}}\n\n',
+        b'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"gpt-6-astra"}\n\n',
+        b'event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp_alias","model":"gpt-6-astra","status":"completed","usage":{"input_tokens":4,"output_tokens":2},"output":[]}}\n\n',
+        b"data: [DONE]\n\n",
+    ])
+    client = SequenceClient([streaming_response(source[:83], source[83:146], source[146:])])
+    _, accounts, store = configured_chat_bridge(monkeypatch, client)
+
+    async def scenario():
+        response = await subscription_adapter.maybe_proxy_openai_subscription(
+            None, {"model": "gpt-6-astra", "stream": True, "input": "hello"},
+            {"id": 9}, "gpt-5.6-sol",
+        )
+        return b"".join([chunk async for chunk in response.body_iterator])
+
+    raw = asyncio.run(scenario())
+    frames = [subscription_adapter._sse_payload(frame + b"\n\n") for frame in raw.split(b"\n\n") if frame]
+    assert frames[0]["response"]["model"] == "gpt-5.6-sol"
+    assert frames[1]["delta"] == "gpt-6-astra"
+    assert frames[2]["response"]["model"] == "gpt-5.6-sol"
+    assert json.loads(client.requests[0].content)["model"] == "gpt-6-astra"
+    assert store.charges[0][0:2] == (9, "gpt-6-astra")
+    assert accounts.successes == [3]
+
+
+def test_model_alias_updates_nonstream_json_and_chat_sse_only_on_success():
+    body = b'{"id":"resp_1","model":"gpt-6-sol","output":[{"text":"gpt-6-sol"}]}'
+    response = Response(body, media_type="application/json")
+    aliased = subscription_adapter._client_model_response(response, "gpt-5.6-sol", "gpt-6-sol")
+    assert json.loads(aliased.body) == {
+        "id": "resp_1", "model": "gpt-5.6-sol", "output": [{"text": "gpt-6-sol"}],
+    }
+    assert int(aliased.headers["content-length"]) == len(aliased.body)
+
+    async def source():
+        yield b'data: {"model":"gpt-6-sol","choices":[{"delta":{"content":"gpt-6-sol"}}]}\n'
+        yield b"\n"
+        yield b"data: [DONE]\n\n"
+
+    stream = StreamingResponse(source(), media_type="text/event-stream")
+    aliased = subscription_adapter._client_model_response(stream, "gpt-5.6-sol", "gpt-6-sol")
+
+    async def read():
+        return b"".join([chunk async for chunk in aliased.body_iterator])
+
+    raw = asyncio.run(read())
+    assert b'"model":"gpt-5.6-sol"' in raw
+    assert b'"content":"gpt-6-sol"' in raw
+    assert raw.endswith(b"data: [DONE]\n\n")
+    failed = Response(body, status_code=400)
+    assert subscription_adapter._client_model_response(failed, "gpt-5.6-sol", "gpt-6-sol").body == body
 
 
 def test_native_responses_stream_recovers_transport_disconnect_after_output(monkeypatch):
@@ -1556,6 +1615,41 @@ def test_codex_version_sync_updates_valid_release_and_keeps_fallback_on_error(mo
     monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: (_ for _ in ()).throw(httpx.ConnectError("offline")))
     gateway.sync_subscription_client_versions()
     assert gateway.codex_client_version == "0.200.1"
+
+
+def test_codex_version_sync_uses_release_page_when_api_is_rate_limited(monkeypatch):
+    gateway = SubscriptionGatewayService(None, None)
+    gateway.enabled = True
+    gateway.codex_version_sync_enabled = True
+    gateway.codex_release_url = DEFAULT_CODEX_RELEASE_URL
+    gateway.connect_timeout = 5
+    gateway.logger = logging.getLogger("test.codex.version.page.fallback")
+
+    class ReleasePageResponse:
+        url = httpx.URL("https://github.com/openai/codex/releases/tag/rust-v0.156.1")
+
+        def raise_for_status(self):
+            return None
+
+    requested_urls = []
+
+    def get_release(url, **kwargs):
+        requested_urls.append(url)
+        if url == DEFAULT_CODEX_RELEASE_URL:
+            raise httpx.HTTPStatusError(
+                "rate limit exceeded",
+                request=httpx.Request("GET", url),
+                response=httpx.Response(403),
+            )
+        assert url == DEFAULT_CODEX_RELEASE_PAGE_URL
+        assert kwargs["follow_redirects"] is True
+        return ReleasePageResponse()
+
+    monkeypatch.setattr(httpx, "get", get_release)
+    gateway.sync_subscription_client_versions()
+
+    assert gateway.codex_client_version == "0.156.1"
+    assert requested_urls == [DEFAULT_CODEX_RELEASE_URL, DEFAULT_CODEX_RELEASE_PAGE_URL]
 
 
 def test_claude_version_sync_uses_the_same_validated_release_path(monkeypatch):

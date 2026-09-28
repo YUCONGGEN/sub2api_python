@@ -3,13 +3,14 @@
 import re
 from typing import Any
 
+from backend.common.model_capabilities import known_reasoning_efforts
+
 
 DEFAULT_GPT_REASONING_EFFORT = "high"
 # Values that represent an actual reasoning tier in the OpenAI-compatible
-# request path.  ``none`` is deliberately excluded by this gateway's policy:
-# callers that use it (or an unknown/vendor-only spelling such as ``ultra``)
-# receive the configured default instead of disabling reasoning or provoking
-# an upstream validation error.
+# request path. For model IDs with verified capabilities, use their actual
+# supported set instead (which may include ``none``). Unknown aliases keep the
+# conservative fallback so vendor-only spellings never reach upstream.
 SUPPORTED_GPT_REASONING_EFFORTS = frozenset({"minimal", "low", "medium", "high", "xhigh", "max"})
 
 
@@ -26,7 +27,7 @@ def configured_gpt_reasoning_effort(config: dict[str, Any]) -> str:
 # GPT-4/4o, chat-latest, image/audio models, or arbitrary third-party aliases.
 _GPT_REASONING_MODEL = re.compile(
     r"gpt-(?:5(?:\.\d+)?(?:-(?:sol|terra|luna|mini|nano|pro|codex(?:-(?:mini|max|spark))?))?"
-    r"|6-astra)(?:-\d{4}-\d{2}-\d{2})?"
+    r"|6-(?:astra|sol|luna))(?:-\d{4}-\d{2}-\d{2})?"
 )
 
 
@@ -72,7 +73,8 @@ def effective_gpt_reasoning_effort(
     requested = requested_reasoning_effort(payload)
     if isinstance(requested, str):
         normalized = requested.strip().lower()
-        if normalized in SUPPORTED_GPT_REASONING_EFFORTS:
+        verified = known_reasoning_efforts(model if model is not None else payload.get("model"))
+        if normalized in (verified if verified is not None else SUPPORTED_GPT_REASONING_EFFORTS):
             return normalized
     return fallback
 

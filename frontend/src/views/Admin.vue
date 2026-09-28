@@ -242,7 +242,7 @@
         <div class="mapping-form-title"><span>{{ editingMapping ? '编辑映射' : '新增映射' }}</span><small>计费按实际调用的目标模型计算 · 不同用户组可使用不同目标</small></div>
         <label><span>规则名称</span><input v-model.trim="mappingForm.name" maxlength="120" placeholder="例如：Sol xhigh 降为 high" required /></label>
         <label><span>请求模型</span><input v-model.trim="mappingForm.source_model" list="mapping-model-options" maxlength="160" placeholder="输入或选择；留空为全部" /></label>
-        <label><span>请求强度</span><AppSelect v-model="sourceEffortMode" :options="[{ value: 'any', label: '任意强度' }, { value: 'missing', label: '仅未指定强度' }, { value: 'specific', label: '指定强度' }]" /><input v-if="sourceEffortMode === 'specific'" v-model.trim="mappingForm.source_effort" list="mapping-source-efforts" maxlength="16" placeholder="输入或选择强度" /><small class="mapping-effort-help">{{ sourceEffortHelp }}</small></label>
+        <label><span>请求强度</span><input v-model.trim="mappingForm.source_effort" list="mapping-source-efforts" maxlength="16" placeholder="输入或选择；* 为任意" /><small class="mapping-effort-help">{{ sourceEffortHelp }}</small></label>
         <div class="mapping-arrow" aria-hidden="true">→</div>
         <label><span>目标模型</span><input v-model.trim="mappingForm.target_model" list="mapping-model-options" maxlength="160" placeholder="输入或选择；留空保持原模型" /></label>
         <label><span>目标强度</span><input v-model.trim="mappingForm.target_effort" list="mapping-target-efforts" maxlength="16" placeholder="输入或选择" required /><small class="mapping-effort-help">{{ targetEffortHelp }}</small></label>
@@ -471,10 +471,6 @@ export default {
     groupSelectOptions () { return this.groupOptions.map(group => { const models = group.allowed_models || []; return { value: group.id, label: group.name, description: `并发 ${group.concurrency_limit} · ${models.includes('*') ? '全部模型' : `${models.length} 个模型`}` } }) },
     planGroupSelectOptions () { return [{ value: null, label: '不调整用户分组', description: '保持用户当前基础分组' }, ...this.groupOptions.map(group => ({ value: group.id, label: group.name, description: `权重 ${group.weight} · 并发 ${group.concurrency_limit}` }))] },
     mappingModelOptions () { return [...new Set([...this.modelCatalog, ...Object.keys(this.modelCapabilities), ...this.modelMappings.flatMap(item => [item.source_model, item.target_model])].filter(Boolean))].sort() },
-    sourceEffortMode: {
-      get () { return this.mappingForm.source_effort === '*' ? 'any' : this.mappingForm.source_effort ? 'specific' : 'missing' },
-      set (value) { this.mappingForm.source_effort = value === 'any' ? '*' : value === 'missing' ? '' : 'high' }
-    },
     sourceSupportedEfforts () { return this.verifiedEfforts(this.mappingForm.source_model) },
     targetSupportedEfforts () { return this.verifiedEfforts(this.mappingForm.target_model || this.mappingForm.source_model) },
     sourceEffortOptions () { return [{ value: '*', label: '任意强度' }, ...(this.sourceSupportedEfforts || ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']).map(value => ({ value, label: value }))] },

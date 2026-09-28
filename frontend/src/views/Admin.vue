@@ -254,13 +254,15 @@
         <div class="mapping-form-actions"><button class="primary-btn" :disabled="mappingSaving || !!mappingValidationError">{{ mappingSaving ? '保存中…' : editingMapping ? '保存映射' : '新增映射' }}</button><button v-if="editingMapping" type="button" class="secondary-btn" @click="resetMappingForm">取消</button></div>
       </form>
       <MappingPreview />
+      <MappingFilter :items="modelMappings" v-slot="{ items }">
       <div class="mapping-rule-grid">
-        <article v-for="item in modelMappings" :key="item.id" :class="['mapping-rule-card', { disabled: !item.enabled }]">
+        <article v-for="item in items" :key="item.id" :class="['mapping-rule-card', { disabled: !item.enabled }]">
           <div class="mapping-rule-head"><div><span>{{ mappingTitle(item) }}</span><small>规则 #{{ item.id }} · 备注：{{ item.name }}</small></div><b :class="['status', item.enabled ? 'success' : 'pending']">{{ item.enabled ? '启用' : '停用' }}</b></div>
           <div class="mapping-route"><div><small>请求</small><strong>{{ mappingModelLabel(item.source_model) }}</strong><em>{{ effortLabel(item.source_effort) }}</em></div><i>→</i><div><small>实际调用</small><strong>{{ mappingModelLabel(item.target_model, true) }}</strong><em>{{ effortLabel(item.target_effort) }}</em></div></div>
           <div class="mapping-rule-actions"><button class="secondary-btn" @click="editMapping(item)">编辑</button><button class="secondary-btn" @click="toggleMapping(item)">{{ item.enabled ? '停用' : '启用' }}</button><button class="text-btn danger" @click="removeMapping(item)">删除</button></div>
         </article>
       </div>
+      </MappingFilter>
       <div v-if="!modelMappings.length" class="empty compact-empty">暂无模型映射，未配置时所有请求保持原模型和原强度。</div>
     </div>
 
@@ -286,7 +288,9 @@
           </div>
           <div class="group-mapping-picker">
             <div class="group-model-head"><div><span class="eyebrow">MODEL MAPPING</span><strong>该组启用的映射</strong></div><small>未勾选的规则不会影响该组</small></div>
-            <div class="group-mapping-options"><label v-for="item in modelMappings" :key="item.id" :class="{ selected: groupForm.model_mapping_ids.includes(item.id), disabled: !item.enabled }"><input v-model="groupForm.model_mapping_ids" type="checkbox" :value="item.id" /><span><b>{{ mappingTitle(item) }}</b><small>规则 #{{ item.id }} · 备注：{{ item.name }}{{ item.enabled ? '' : ' · 已停用' }}</small></span></label><span v-if="!modelMappings.length" class="muted">尚未创建模型映射</span></div>
+            <MappingFilter :items="modelMappings" :selected-ids="groupForm.model_mapping_ids" v-slot="{ items }">
+            <div class="group-mapping-options"><label v-for="item in items" :key="item.id" :class="{ selected: groupForm.model_mapping_ids.includes(item.id), disabled: !item.enabled }"><input v-model="groupForm.model_mapping_ids" type="checkbox" :value="item.id" /><span><b>{{ mappingTitle(item) }}</b><small>规则 #{{ item.id }} · 备注：{{ item.name }}{{ item.enabled ? '' : ' · 已停用' }}</small></span></label><span v-if="!modelMappings.length" class="muted">尚未创建模型映射</span></div>
+            </MappingFilter>
           </div>
         </div>
         <div class="group-form-actions"><button class="primary-btn" :disabled="groupSaving"><span>{{ groupSaving ? '保存中…' : editingGroup ? '保存修改' : '创建分组' }}</span><b aria-hidden="true">→</b></button><button v-if="editingGroup" type="button" class="secondary-btn" @click="resetGroupForm">取消编辑</button></div>
@@ -323,13 +327,14 @@ import AppSelect from '../components/AppSelect.vue'
 import AdminConfigEditor from '../components/AdminConfigEditor.vue'
 import AdminProxyPool from '../components/AdminProxyPool.vue'
 import MappingPreview from '../components/MappingPreview.vue'
+import MappingFilter from '../components/MappingFilter.vue'
 import { buildCodexConfig, downloadTextFile } from '../config/codex'
 
 const emptyGroup = () => ({ name: '', description: '', weight: 10, concurrency_limit: 1, is_default: false, allow_all: true, allowed_models: [], model_mapping_ids: [] })
 const emptyMapping = () => ({ name: '', source_model: '', source_effort: 'xhigh', target_model: '', target_effort: 'high', enabled: true })
 
 export default {
-  components: { AppSelect, AdminConfigEditor, AdminProxyPool, MappingPreview },
+  components: { AppSelect, AdminConfigEditor, AdminProxyPool, MappingPreview, MappingFilter },
   props: {
     appName: String,
     apiBaseUrl: String,

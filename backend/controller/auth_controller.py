@@ -214,7 +214,7 @@ class AuthController:
                 username,
                 password,
                 email,
-                balance=self._billing_amount("registration-initial-balance", 50.0),
+                balance=self._billing_amount("registration-initial-balance", 0.0),
             )
         except Exception:
             return bad("注册失败，请更换账户名", 409)

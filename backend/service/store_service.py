@@ -270,9 +270,9 @@ class StoreService:
     def update_login(self, user_id: int) -> None:
         billing = get_config().get("rose", {}).get("billing", {})
         try:
-            daily_bonus = float(billing.get("daily-login-bonus", 10)) if isinstance(billing, dict) else 10.0
+            daily_bonus = float(billing.get("daily-login-bonus", 0)) if isinstance(billing, dict) else 0.0
         except (TypeError, ValueError):
-            daily_bonus = 10.0
+            daily_bonus = 0.0
         if not math.isfinite(daily_bonus) or daily_bonus < 0:
             daily_bonus = 0.0
         self.mapper.update_login(

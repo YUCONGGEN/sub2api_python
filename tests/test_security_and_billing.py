@@ -349,7 +349,7 @@ def test_registration_returns_the_first_api_key_once():
     assert response.data["api_key_id"] == 9
     assert response.data["token"] == "signed-token"
     assert auth.store.created is not None
-    assert auth.store.created[1]["balance"] == 50.0
+    assert auth.store.created[1]["balance"] == 0.0
 
 
 def test_default_group_returns_routing_notice_on_every_login():

@@ -364,11 +364,10 @@ rose:
     #     multiplier: 1.0
     #   description: DeepSeek V4 Flash Vision Experimental，支持图像理解与高吞吐对话。
   billing:
+    # 关闭注册和每日登录赠送；不影响已有余额。
+    registration-initial-balance: 0
+    daily-login-bonus: 0
     currency: CNY
-    # 新注册用户首次登录即获得的初始钱包余额；设为 0 可关闭注册赠送。
-    registration-initial-balance: ${ROSE_REGISTRATION_INITIAL_BALANCE:50}
-    # 每个自然日首次登录赠送的钱包余额；设为 0 可关闭每日登录赠送。
-    daily-login-bonus: ${ROSE_DAILY_LOGIN_BONUS:10}
     # 兑换码前缀由配置统一控制，修改后新生成的兑换码和前端占位提示会同步更新。
     recharge-code-prefix: ${ROSE_RECHARGE_CODE_PREFIX:CODE}
     # 按上游原始 token 数计费，倍率为 1.0，可按环境覆盖

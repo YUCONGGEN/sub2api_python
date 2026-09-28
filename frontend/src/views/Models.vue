@@ -4,7 +4,7 @@
       <div>
         <div class="eyebrow">CATALOG / OPENAI COMPATIBLE</div>
         <h1>模型广场</h1>
-        <p>已启用 {{ pagination.total || 0 }} 个模型，按供应商、分组和价格快速筛选。</p>
+        <p>可查看 {{ pagination.total || 0 }} 个模型及定价；价格已计入倍率，映射请求按实际调用的目标模型计费。</p>
       </div>
       <router-link class="secondary-btn" to="/monitoring">模型监控 ↗</router-link>
     </div>
@@ -34,7 +34,7 @@
             <div class="model-top"><span class="model-letter">{{ (model.provider || model.id).slice(0, 1).toUpperCase() }}</span><span :class="['availability', model.status === '正常' ? '' : 'offline']"><i></i>{{ model.status || (model.enabled ? '待检查' : '停用') }}</span></div>
             <h2>{{ model.id }}</h2><p>{{ model.description }}</p>
             <div class="model-tags"><span>{{ model.provider }}</span><span>{{ model.endpoint }}</span><span>{{ model.group }}</span><span v-if="model.reasoning_effort">默认推理 {{ model.reasoning_effort }}</span></div>
-            <div class="price-row"><div><small>输入 / 1M</small><strong>{{ currencySymbol(model) }}{{ displayPrice(model, 'input') }}</strong></div><div><small>输出 / 1M</small><strong>{{ currencySymbol(model) }}{{ displayPrice(model, 'output') }}</strong></div></div>
+            <div class="price-row"><div><small>输入 / {{ priceMode === 'token' ? '1K' : '1M' }} tokens</small><strong>{{ currencySymbol(model) }}{{ displayPrice(model, 'input') }}</strong></div><div><small>输出 / {{ priceMode === 'token' ? '1K' : '1M' }} tokens</small><strong>{{ currencySymbol(model) }}{{ displayPrice(model, 'output') }}</strong></div></div>
             <div v-if="model.health && model.status !== '正常'" class="muted">{{ model.health.detail }}</div>
             <div class="model-actions"><router-link to="/docs" class="model-link">查看接入方式 <span>↗</span></router-link><button class="icon-btn" title="复制模型 ID" @click="copy(model.id)">⧉</button></div>
           </article>
@@ -69,8 +69,8 @@ export default {
     },
     changePage (page) { this.pagination.page = page; this.load() },
     reset () { this.query = ''; this.group = ''; this.provider = ''; this.availability = '' },
-    currencySymbol () { return '¥' },
-    displayPrice (model, side) { const value = Number(model[side] ?? 0); return this.priceMode === 'token' ? (value / 1000).toFixed(5) : value.toFixed(2) },
+    currencySymbol (model) { return String(model.currency || 'CNY').toUpperCase() === 'USD' ? '$' : '¥' },
+    displayPrice (model, side) { if (model[side] == null) return '未配置'; const value = Number(model[side]) * Number(model.pricing?.multiplier ?? 1); if (!Number.isFinite(value)) return '未配置'; return this.priceMode === 'token' ? (value / 1000).toFixed(5) : value.toFixed(4).replace(/\.?0+$/, '') || '0' },
     async copy (value) {
       const text = String(value || '')
       if (!text) return notify('暂无可复制内容', 'error')

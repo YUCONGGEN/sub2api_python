@@ -946,7 +946,7 @@ class AiGatewayService:
                     "provider": spec.get("provider", "OpenAI Compatible"),
                     "endpoint": spec.get("endpoint", "Chat"),
                     "group": spec.get("group", "Default"),
-                    "pricing": public_pricing,
+                    "pricing": {**public_pricing, "multiplier": spec["pricing"].get("multiplier", 1.0)},
                     "currency": currency,
                     # Keep both YAML-style names and concise display fields so a
                     # client can render prices without knowing internal config keys.

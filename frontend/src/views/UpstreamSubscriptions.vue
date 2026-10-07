@@ -526,7 +526,6 @@ export default {
 .quota-window u {
   display:block;
   height:100%;
-  margin-left:auto;
   border-radius:inherit;
   background:linear-gradient(90deg,#4c9eb0,#6478bd);
   text-decoration:none;

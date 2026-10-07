@@ -119,7 +119,7 @@
               <div class="quota-window-list">
                 <div v-for="item in quotaWindows(quotaState(account).quota)" :key="item.label + item.limit_window_seconds" class="quota-window">
                   <div><span>{{ item.label }}</span><b>剩余 {{ quotaPercent(item.remaining_percent) }}%</b></div>
-                  <i><u :style="{ width: quotaPercent(item.used_percent) + '%' }"></u></i>
+                  <i><u :style="{ width: quotaPercent(item.remaining_percent) + '%' }"></u></i>
                   <small>已用 {{ quotaPercent(item.used_percent) }}% · {{ item.reset_at ? displayTime(item.reset_at) + ' 重置' : '重置时间未知' }}</small>
                 </div>
                 <div v-if="!quotaWindows(quotaState(account).quota).length" class="quota-empty">上游暂未返回用量窗口</div>
@@ -526,6 +526,7 @@ export default {
 .quota-window u {
   display:block;
   height:100%;
+  margin-left:auto;
   border-radius:inherit;
   background:linear-gradient(90deg,#4c9eb0,#6478bd);
   text-decoration:none;

@@ -95,8 +95,15 @@
       <div v-if="error" class="data-error" role="alert"><strong>订阅账号加载失败</strong><span>{{ error }}</span><button class="secondary-btn" @click="load">重试</button></div>
       <div v-if="loading" class="empty">正在加载订阅账号…</div>
       <div v-else-if="!accounts.length" class="empty">暂无订阅账号。添加后，对应模型会自动进入 `/v1/models`。</div>
-      <div v-else class="account-list">
-        <article v-for="account in accounts" :key="account.id" :class="['account-card', account.provider]">
+      <div v-else class="account-groups">
+        <section v-for="group in accountGroups" :key="group.id" :class="['account-group', group.id]">
+          <div class="account-group-head">
+            <h3><i aria-hidden="true"></i>{{ group.title }}<span>{{ group.accounts.length }} 个</span></h3>
+            <button v-if="group.accounts.length > 3" type="button" class="secondary-btn group-toggle" :aria-expanded="String(group.expanded)" :aria-controls="'subscription-group-' + group.id" @click="toggleGroup(group.id)">{{ group.expanded ? '收起' : '展开全部（' + group.accounts.length + '）' }}</button>
+          </div>
+          <div v-if="!group.accounts.length" class="group-empty">暂无{{ group.title }}</div>
+          <div v-else :id="'subscription-group-' + group.id" class="account-list">
+        <article v-for="account in group.visibleAccounts" :key="account.id" :class="['account-card', account.provider]">
           <div class="account-card-top">
             <div class="account-main">
               <div class="provider-mark" :class="account.provider">{{ providerMark(account.provider) }}</div>
@@ -138,8 +145,9 @@
             <button class="text-btn danger" @click="removeAccount(account)">删除账号</button>
           </div>
         </article>
+          </div>
+        </section>
       </div>
-      <div class="pagination" v-if="pagination.pages > 1"><button class="secondary-btn" :disabled="loading || pagination.page <= 1" @click="changePage(pagination.page - 1)">上一页</button><span>第 {{ pagination.page }} / {{ pagination.pages }} 页，共 {{ pagination.total }} 个账号</span><button class="secondary-btn" :disabled="loading || pagination.page >= pagination.pages" @click="changePage(pagination.page + 1)">下一页</button></div>
     </section>
 
     <div v-if="pricingAccount" class="pricing-backdrop" @click.self="closePricing">
@@ -200,6 +208,7 @@
 import { api } from '../api'
 import { askConfirm, notify } from '../ui'
 import GatewayActivity from '../components/GatewayActivity.vue'
+import { subscriptionGroups, loadSubscriptionAccounts } from '../subscriptionGroups.mjs'
 
 const PROVIDERS = [
   { id: 'openai', label: 'OpenAI / Codex', short: 'OpenAI', mark: 'O', oauth: true, models: 'gpt-5.4, gpt-5.4-mini' },
@@ -216,9 +225,17 @@ export default {
   name: 'UpstreamSubscriptions',
   components: { GatewayActivity },
   props: { user: { type: Object, default: null }, subscriptionContributionsEnabled: { type: Boolean, default: false } },
-  data: () => ({ providers: PROVIDERS, accounts: [], summary: {}, gatewayMetrics: {}, quotaByAccount: {}, quotaResetId: null, pagination: { page: 1, pages: 1, total: 0 }, error: '', loading: false, busy: false, actionId: null, filter: '', showForm: false, editingId: null, oauthSession: null, gatewayEnabled: false, quotaVisible: true, metricsTimer: null, configRequests: [], requestPagination: { page: 1, page_size: 5, pages: 1, total: 0 }, requestLoading: false, requestBusy: false, requestForm: { url: '', api_key: '', model_id: '', use_proxy: false }, form: defaults('openai'), pricingAccount: null, pricingRows: [], pricingBusy: false }),
-  computed: { isAdmin () { return String(this.user?.role || '').toUpperCase() === 'ADMIN' }, otherProviderCount () { return PROVIDERS.filter(item => item.id !== 'openai').reduce((sum, item) => sum + this.providerCount(item.id), 0) } },
-  watch: { 'form.provider' (next, previous) { if (!this.editingId && !this.oauthSession && next !== previous) { const fresh = defaults(next); this.form.models = fresh.models; this.form.mode = fresh.mode } } },
+  data: () => ({ providers: PROVIDERS, accounts: [], expandedGroups: { available: false, disabled: false }, loadSequence: 0, summary: {}, gatewayMetrics: {}, quotaByAccount: {}, quotaResetId: null, error: '', loading: false, busy: false, actionId: null, filter: '', showForm: false, editingId: null, oauthSession: null, gatewayEnabled: false, quotaVisible: true, metricsTimer: null, configRequests: [], requestPagination: { page: 1, page_size: 5, pages: 1, total: 0 }, requestLoading: false, requestBusy: false, requestForm: { url: '', api_key: '', model_id: '', use_proxy: false }, form: defaults('openai'), pricingAccount: null, pricingRows: [], pricingBusy: false }),
+  computed: {
+    isAdmin () { return String(this.user?.role || '').toUpperCase() === 'ADMIN' },
+    otherProviderCount () { return PROVIDERS.filter(item => item.id !== 'openai').reduce((sum, item) => sum + this.providerCount(item.id), 0) },
+    accountGroups () { return subscriptionGroups(this.accounts, this.expandedGroups) },
+    visibleAccounts () { return this.accountGroups.flatMap(group => group.visibleAccounts) }
+  },
+  watch: {
+    'form.provider' (next, previous) { if (!this.editingId && !this.oauthSession && next !== previous) { const fresh = defaults(next); this.form.models = fresh.models; this.form.mode = fresh.mode } },
+    visibleAccounts () { this.loadAccountQuotas() }
+  },
   created () { this.load(); this.loadConfigRequests(); if (this.isAdmin) this.metricsTimer = window.setInterval(this.refreshGatewayMetrics, 5000) },
   beforeUnmount () { window.clearInterval(this.metricsTimer) },
   beforeDestroy () { window.clearInterval(this.metricsTimer) },
@@ -283,7 +300,13 @@ export default {
         if (refresh && !quiet) notify(message, 'error')
       }
     },
-    loadAccountQuotas () { if (!this.quotaVisible) return; this.accounts.filter(account => account.provider === 'openai').forEach(account => this.loadAccountQuota(account, this.isAdmin && !!account.can_manage, true)) },
+    loadAccountQuotas (refresh = false) {
+      if (!this.quotaVisible) return
+      this.visibleAccounts.filter(account => account.provider === 'openai').forEach(account => {
+        const state = this.quotaState(account)
+        if (!state.loading && (refresh || !state.quota)) this.loadAccountQuota(account, refresh && this.isAdmin && !!account.can_manage, true)
+      })
+    },
     async resetAccountQuota (account) {
       if (!account?.can_manage || !this.hasResetCredit(this.quotaState(account).quota) || this.quotaResetId !== null) return
       const count = this.resetCreditCount(this.quotaState(account).quota)
@@ -307,7 +330,26 @@ export default {
     statusText (account) { if (!account.enabled) return '已停用'; return ({ READY: '可用', INVALID: '凭据失效', COOLDOWN: '冷却中', DISABLED: '已停用' })[account.status] || account.status },
     displayTime (value) { if (!value) return '—'; const date = new Date(value); return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN') },
     payload () { return { provider: this.form.provider, name: this.form.name, models: this.form.models, priority: this.form.priority, weight: this.form.weight, input_price_cny: this.form.input_price_cny, output_price_cny: this.form.output_price_cny, price_multiplier: this.form.price_multiplier, enabled: this.form.enabled, compliance_confirmed: this.form.compliance_confirmed } },
-    async load () { this.loading = true; this.error = ''; try { const data = await api.upstreamSubscriptions({ provider: this.filter, page: this.pagination.page, page_size: 12 }); this.accounts = data.accounts || []; this.summary = data.summary || {}; this.gatewayMetrics = data.gateway_metrics || {}; this.pagination = data.pagination || this.pagination; this.gatewayEnabled = !!data.gateway_enabled; this.quotaVisible = data.quota_visible !== false; if (!this.quotaVisible) this.quotaByAccount = {}; this.loadAccountQuotas() } catch (error) { this.error = error.message || '请检查后端服务后重试'; notify(this.error, 'error') } finally { this.loading = false } },
+    async load () {
+      const sequence = ++this.loadSequence
+      this.loading = true
+      this.error = ''
+      try {
+        const data = await loadSubscriptionAccounts(params => api.upstreamSubscriptions(params), this.filter)
+        if (sequence !== this.loadSequence) return
+        this.accounts = data.accounts
+        this.summary = data.summary || {}
+        this.gatewayMetrics = data.gateway_metrics || {}
+        this.gatewayEnabled = !!data.gateway_enabled
+        this.quotaVisible = data.quota_visible !== false
+        if (!this.quotaVisible) this.quotaByAccount = {}
+        this.loadAccountQuotas(true)
+      } catch (error) {
+        if (sequence !== this.loadSequence) return
+        this.error = error.message || '请检查后端服务后重试'
+        notify(this.error, 'error')
+      } finally { if (sequence === this.loadSequence) this.loading = false }
+    },
     async refreshGatewayMetrics () { if (!this.isAdmin) return; try { const data = await api.upstreamGatewayMetrics(); this.gatewayMetrics = data.gateway_metrics || this.gatewayMetrics } catch (error) {} },
     requestStatus (status) { return ({ PENDING: '待处理', ACCEPTED: '已处理', REJECTED: '已拒绝' })[status] || status },
     async loadConfigRequests (page = this.requestPagination.page) { this.requestLoading = true; try { const requestedPage = Math.max(1, Number(page || 1)); const data = await api.upstreamConfigRequests({ page: requestedPage, page_size: this.requestPagination.page_size }); const rows = data.requests || []; this.requestPagination = data.pagination || { ...this.requestPagination, page: requestedPage }; this.configRequests = this.isAdmin ? await Promise.all(rows.map(async item => { try { const secret = await api.revealUpstreamConfigRequest(item.id); return { ...item, api_key: secret.request.api_key } } catch (error) { return item } })) : rows } catch (error) { notify(error.message || 'Token 分享记录加载失败', 'error') } finally { this.requestLoading = false } },
@@ -316,8 +358,8 @@ export default {
     async copyConfigRequest (item) { try { const request = item.api_key ? { url: item.base_url, api_key: item.api_key, model_id: item.model_id, use_proxy: !!item.use_proxy } : (await api.revealUpstreamConfigRequest(item.id)).request; const value = `- id: ${request.model_id}\n  enabled: true\n  provider: OpenAI\n  endpoint: Chat\n  upstream-model: ${request.model_id}\n  base-url: ${request.url}\n  api-key: ${request.api_key}\n  use-proxy: ${request.use_proxy ? 'true' : 'false'}`; await this.copyText(value); notify('可粘贴到 rose.models 的 YAML 配置已复制', 'success') } catch (error) { notify(error.message || '复制失败', 'error') } },
     async setRequestStatus (item, status) { try { await api.updateUpstreamConfigRequest(item.id, { status }); await this.loadConfigRequests(); notify('Token 分享状态已更新', 'success') } catch (error) { notify(error.message, 'error') } },
     changeRequestPage (page) { this.loadConfigRequests(page) },
-    setFilter (provider) { this.filter = provider; this.pagination.page = 1; this.load() },
-    changePage (page) { this.pagination.page = page; this.load() },
+    setFilter (provider) { this.filter = provider; this.expandedGroups = { available: false, disabled: false }; this.load() },
+    toggleGroup (groupId) { this.expandedGroups = { ...this.expandedGroups, [groupId]: !this.expandedGroups[groupId] } },
     openCreate () { this.editingId = null; this.oauthSession = null; this.form = defaults('openai'); this.showForm = true; this.$nextTick(() => document.querySelector('.account-editor')?.scrollIntoView({ behavior: 'smooth' })) },
     openEdit (account) { this.editingId = account.id; this.oauthSession = null; this.form = { ...defaults(account.provider), provider: account.provider, name: account.name, models: (account.models || []).join(', '), priority: account.priority, weight: account.weight, input_price_cny: account.input_price_cny, output_price_cny: account.output_price_cny, price_multiplier: account.price_multiplier, enabled: account.enabled, mode: 'manual' }; this.showForm = true; this.$nextTick(() => document.querySelector('.account-editor')?.scrollIntoView({ behavior: 'smooth' })) },
     closeForm () { this.showForm = false; this.editingId = null; this.oauthSession = null },
@@ -334,6 +376,7 @@ export default {
 </script>
 
 <style scoped>
+.account-groups{display:grid;gap:26px}.account-group{min-width:0}.account-group-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}.account-group-head h3{display:flex;align-items:center;gap:9px;margin:0;font-size:16px}.account-group-head h3 i{width:8px;height:8px;border-radius:50%;background:#519e83}.account-group.disabled .account-group-head h3 i{background:#86909c}.account-group-head h3 span{font-size:12px;font-weight:400;color:var(--muted,#6c7280)}.account-group.disabled{padding-top:22px;border-top:1px solid var(--line,#d9dde5)}.group-toggle{font-size:12px;white-space:nowrap}.group-empty{padding:18px 0;color:var(--muted,#6c7280);font-size:13px}
 .subscription-page{display:grid;gap:22px}.primary-action,.secondary-action,.text-action,.mode-tabs button,.provider-filter button,.account-actions button{border:1px solid var(--line,#d9dde5);background:var(--panel,#fff);color:inherit;border-radius:10px;padding:10px 15px;cursor:pointer}.primary-action{background:#17191d;color:#fff;border-color:#17191d;font-weight:700}.secondary-action{background:transparent}.text-action{padding:7px 11px}.primary-action:disabled,.account-actions button:disabled{opacity:.55;cursor:wait}.gateway-metrics{margin:0}.account-editor{display:grid;gap:18px}.mode-tabs,.provider-filter{display:flex;gap:8px;flex-wrap:wrap}.mode-tabs button.active,.provider-filter button.active{background:#17191d;color:#fff}.form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px}.form-grid label{display:grid;gap:7px}.form-grid label>span{font-size:13px;color:var(--muted,#6c7280);font-weight:600}.form-grid label>small{color:var(--muted,#6c7280);font-size:12px;line-height:1.5}.form-grid input,.form-grid select,.form-grid textarea,.oauth-step textarea{width:100%;box-sizing:border-box;border:1px solid var(--line,#d9dde5);border-radius:10px;background:var(--panel,#fff);color:inherit;padding:11px 12px;font:inherit}.span-2{grid-column:1/-1}.check-line{display:flex!important;align-items:center;grid-template-columns:auto 1fr!important}.check-line input,.compliance-check input{width:16px}.token-grid{padding-top:5px}.credential-update{border:1px solid var(--line,#d9dde5);border-radius:12px;padding:12px 14px}.credential-update summary{cursor:pointer;font-weight:700;margin-bottom:12px}.compliance-check{display:flex;gap:10px;align-items:flex-start;padding:14px;border:1px solid #e5c772;background:#fff9e7;color:#5b4810;border-radius:10px}.oauth-step{display:grid;gap:10px;padding:16px;border-radius:12px;background:#f1f5ff;border:1px solid #cbd8ff}.oauth-step p{margin:0;color:#566078}.oauth-step a{font-weight:700;color:#315cc8}.editor-actions{display:flex;gap:10px;flex-wrap:wrap}.account-list{display:grid;gap:14px}.account-card{display:grid;gap:14px;border:1px solid var(--line,#d9dde5);border-radius:14px;padding:17px}.account-main{display:flex;align-items:center;gap:12px}.provider-mark{display:grid;place-items:center;width:42px;height:42px;border-radius:12px;font-weight:900;background:#e7f1ff;color:#1856a7}.provider-mark.claude{background:#fff0e7;color:#9b4f1f}.account-title{display:flex;align-items:center;gap:9px;flex-wrap:wrap}.account-main p{margin:4px 0 0;color:var(--muted,#6c7280);font-size:13px}.status-chip{font-size:11px;border-radius:99px;padding:4px 8px;background:#e9f7ee;color:#247143}.status-chip.invalid{background:#ffe7e7;color:#a12626}.status-chip.cooldown{background:#fff3d4;color:#876211}.status-chip.disabled{background:#eceef2;color:#666}.account-models{display:flex;gap:7px;flex-wrap:wrap}.account-models span{font-size:12px;background:var(--soft,#f4f5f7);border-radius:7px;padding:5px 8px}.account-facts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:0}.account-facts div{display:grid;gap:3px}.account-facts dt{font-size:11px;color:var(--muted,#6c7280)}.account-facts dd{margin:0;font-size:13px;font-weight:650}.account-error{margin:0;padding:9px 11px;background:#fff1f1;color:#8d2929;border-radius:8px;font-size:12px;word-break:break-word}.account-actions{display:flex;gap:8px;flex-wrap:wrap}.account-actions button{padding:7px 10px;font-size:12px}.account-actions .danger{color:#b32828;border-color:#e9b8b8}.endpoint-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px}.endpoint-grid>div{display:grid;gap:8px;padding:16px;border:1px solid var(--line,#d9dde5);border-radius:12px}.endpoint-grid code{display:block;word-break:break-all;background:#17191d;color:#eaf0ff;border-radius:7px;padding:8px 10px}.endpoint-grid p{margin:0;color:var(--muted,#6c7280);line-height:1.55}.safety-note{margin:14px 0 0;padding:11px 13px;border-radius:9px;background:#fff9e7;border:1px solid #e5c772;color:#5b4810;font-size:13px;line-height:1.55}@media(max-width:850px){.form-grid,.endpoint-grid{grid-template-columns:1fr}.span-2{grid-column:auto}.account-facts{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:560px){.account-facts{grid-template-columns:1fr}.page-head{align-items:flex-start}.page-head>.primary-action{width:100%}}
 .config-requests{display:grid;gap:18px}.config-requests .panel-head p{margin:6px 0 0;color:var(--muted,#6c7280)}.share-provider-tags{display:flex;gap:7px;flex-wrap:wrap;margin-top:11px}.share-provider-tags span{padding:5px 9px;border:1px solid var(--line,#d9dde5);border-radius:99px;background:var(--soft,#f4f5f7);color:var(--muted,#6c7280);font-size:11px}.request-compose{display:grid;grid-template-columns:1.4fr 1fr .8fr auto auto;gap:10px}.request-compose input{min-width:0;border:1px solid var(--line,#d9dde5);border-radius:10px;background:var(--panel,#fff);color:inherit;padding:11px 12px;font:inherit}.proxy-choice{display:flex;align-items:center;gap:7px;padding:0 5px;white-space:nowrap}.proxy-choice input{width:16px}.share-safety-note{margin:-5px 0 0;padding:10px 12px;border:1px solid #e5c772;border-radius:9px;background:#fff9e7;color:#5b4810;font-size:12px;line-height:1.55}.request-list{display:grid;gap:9px}.request-list article{display:grid;grid-template-columns:minmax(220px,1fr) minmax(120px,.45fr) auto auto auto;align-items:center;gap:12px;padding:13px;border:1px solid var(--line,#d9dde5);border-radius:11px}.request-list article>div:first-child{display:grid;gap:3px}.request-list small{color:var(--muted,#6c7280);word-break:break-all}.request-list code{word-break:break-all}.proxy-badge{font-size:12px;color:var(--muted,#6c7280);white-space:nowrap}.request-status{padding:5px 8px;border-radius:99px;background:#fff3d4;color:#876211;font-size:12px}.request-status.accepted{background:#e9f7ee;color:#247143}.request-status.rejected{background:#ffe7e7;color:#a12626}.request-actions{display:flex;gap:6px;flex-wrap:wrap}.request-actions button{border:1px solid var(--line,#d9dde5);border-radius:8px;background:transparent;color:inherit;padding:6px 9px;cursor:pointer}.request-pagination{margin-top:0;padding-top:2px}:global(html[data-theme="dark"] .share-safety-note){border-color:#6a5928;background:#2a2413;color:#d8c783}@media(max-width:1100px){.request-compose,.request-list article{grid-template-columns:1fr 1fr}}@media(max-width:620px){.request-compose,.request-list article{grid-template-columns:1fr}}
 .account-actions .pricing-action{border-color:#8eb7c8;background:#edf8fa;color:#32677c;font-weight:700}

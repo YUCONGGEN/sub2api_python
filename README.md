@@ -2,16 +2,16 @@
 
 基于 `springbootAI` Python 框架和 Vue 2 的 OpenAI 兼容代理控制台。页面参考 Rose API 的信息架构，提供登录、模型广场、控制台、API Key、用量、充值订单和管理员用户管理。
 
-## 界面预览
+## 部署截图
 
-以下截图覆盖公开入口、普通用户控制台和管理员页面。点击图片可以查看原图。
+以下截图覆盖公开入口、普通用户控制台和管理员页面。登录与注册截图于 2026-10-09 从当前部署服务器截取，其余为此前部署版本的功能预览。点击图片可以查看原图。
 
 ### 登录与注册
 
 <table>
   <tr>
-    <td width="50%"><b>登录</b><br><a href="./docs/screenshots/login.png"><img src="./docs/screenshots/login.png" alt="登录页面"></a></td>
-    <td width="50%"><b>注册</b><br><a href="./docs/screenshots/register.png"><img src="./docs/screenshots/register.png" alt="注册页面"></a></td>
+    <td width="50%"><b>登录</b><br><a href="./docs/screenshots/deployment-login.jpg"><img src="./docs/screenshots/deployment-login.jpg" alt="服务器部署后的登录页面"></a></td>
+    <td width="50%"><b>注册</b><br><a href="./docs/screenshots/deployment-register.jpg"><img src="./docs/screenshots/deployment-register.jpg" alt="服务器部署后的注册页面"></a></td>
   </tr>
 </table>
 

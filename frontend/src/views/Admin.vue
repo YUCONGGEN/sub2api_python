@@ -660,10 +660,14 @@ export default {
     linePoints (series) { return this.dailyLinePoints.map(point => `${point.x},${series === 'cost' ? point.costY : point.tokensY}`).join(' ') },
     valueWidth (value, max) { return Math.max(2, Math.min(100, Number(value || 0) / Math.max(1, Number(max || 1)) * 100)) },
     chartHeight (value, max) { return `${Math.max(4, this.valueWidth(value, max))}%` },
-    tokens (value) { return Number(value || 0).toLocaleString('zh-CN') },
+    tokens (value) {
+      const amount = Number(value ?? 0)
+      return Number.isFinite(amount) ? amount.toLocaleString('zh-CN') : '—'
+    },
     money (value) { return Number(value || 0).toFixed(4) },
     compactValue (value) {
       const amount = Number(value || 0)
+      if (!Number.isFinite(amount)) return '—'
       const absolute = Math.abs(amount)
       if (absolute >= 1000000000) return `${(amount / 1000000000).toFixed(1).replace(/\.0$/, '')}B`
       if (absolute >= 1000000) return `${(amount / 1000000).toFixed(1).replace(/\.0$/, '')}M`

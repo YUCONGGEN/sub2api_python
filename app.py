@@ -6,6 +6,7 @@ import logging
 from springbootai import SpringBootApplication, create_app, get_config
 from springbootai.orm import MapperScan
 
+from backend.common.numeric_masking import install_numeric_masking_guard
 from backend.controller import register_payment_routes, register_proxy_route
 from backend.middleware import UserGroupConcurrencyMiddleware
 
@@ -16,6 +17,7 @@ class RoseApplication:
     pass
 
 
+install_numeric_masking_guard()
 app = create_app(RoseApplication)
 app.add_middleware(UserGroupConcurrencyMiddleware)
 

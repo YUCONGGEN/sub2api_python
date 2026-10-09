@@ -111,13 +111,13 @@ class SubscriptionAccountService:
 
     @Scheduled(fixed_rate=3600000, initial_delay=60000)
     async def refresh_expiring_tokens(self) -> None:
-        """Refresh active OAuth tokens before their final 24-hour window."""
+        """Refresh OAuth tokens before expiry, including disabled accounts."""
         if not getattr(self, "auto_token_refresh_enabled", True):
             return
         now = datetime.now(timezone.utc)
         refreshed = 0
         for provider in OAUTH_PROVIDERS:
-            for row in self.repository.list_provider(provider):
+            for row in self.repository.list_provider_token_refresh(provider):
                 try:
                     credentials = self._credentials(row)
                     if (

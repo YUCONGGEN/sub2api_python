@@ -22,6 +22,9 @@ class SubscriptionMapper:
     def list_provider_accounts(self, provider: str) -> list[dict]:
         pass
 
+    def list_provider_token_refresh_accounts(self, provider: str) -> list[dict]:
+        pass
+
     def list_system_disabled_accounts(self) -> list[dict]:
         pass
 

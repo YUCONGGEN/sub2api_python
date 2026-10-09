@@ -47,6 +47,9 @@ class SubscriptionRepository:
     def list_provider(self, provider: str) -> list[dict[str, Any]]:
         return [dict(row) for row in self.mapper.list_provider_accounts(str(provider))]
 
+    def list_provider_token_refresh(self, provider: str) -> list[dict[str, Any]]:
+        return [dict(row) for row in self.mapper.list_provider_token_refresh_accounts(str(provider))]
+
     def list_system_disabled_accounts(self) -> list[dict[str, Any]]:
         return [dict(row) for row in self.mapper.list_system_disabled_accounts()]
 

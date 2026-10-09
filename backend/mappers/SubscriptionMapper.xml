@@ -20,6 +20,11 @@
         WHERE provider = #{provider} AND enabled = 1 AND status != 'INVALID'
         ORDER BY priority DESC, last_used_at ASC, id ASC
     </select>
+    <select id="list_provider_token_refresh_accounts">
+        SELECT <include refid="AccountColumns"/> FROM upstream_subscription_accounts
+        WHERE provider = #{provider}
+        ORDER BY id ASC
+    </select>
     <insert id="insert_account" useGeneratedKeys="true" keyProperty="account.id">
         INSERT INTO upstream_subscription_accounts(
           owner_user_id,provider,name,auth_type,email,account_ref,credentials_encrypted,models_json,model_pricing_json,

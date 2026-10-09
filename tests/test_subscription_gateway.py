@@ -43,6 +43,9 @@ class MemoryRepository:
     def list_provider(self, provider):
         return [dict(row) for row in self.rows.values() if row["provider"] == provider and row["enabled"]]
 
+    def list_provider_token_refresh(self, provider):
+        return [dict(row) for row in self.rows.values() if row["provider"] == provider]
+
     def update_credentials(self, account_id, **changes):
         self.rows[int(account_id)].update(changes)
         return self.find(account_id)
@@ -339,6 +342,7 @@ def test_scheduled_token_refresh_only_refreshes_accounts_expiring_within_one_day
         "refresh_token": "refresh-due",
         "expires_at": due["expires_at"],
     })
+    due["enabled"] = 0
     later = account(2)
     later["expires_at"] = (now + timedelta(hours=25)).isoformat()
     later["credentials_encrypted"] = json.dumps({
@@ -370,6 +374,7 @@ def test_scheduled_token_refresh_only_refreshes_accounts_expiring_within_one_day
 
     assert oauth.calls == [("openai", "refresh-due")]
     assert json.loads(repository.find(1)["credentials_encrypted"])["access_token"] == "fresh-token"
+    assert repository.find(1)["enabled"] == 0
     assert json.loads(repository.find(2)["credentials_encrypted"])["access_token"] == "old-later-token"
 
 

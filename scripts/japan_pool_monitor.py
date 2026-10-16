@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import http.client
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -43,6 +44,67 @@ def country_for_node(name: str) -> str:
             elif candidate in lowered:
                 return code
     return 'OTHER'
+
+
+def known_remaining(value):
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        remaining = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return remaining if math.isfinite(remaining) and remaining >= 0 else None
+
+
+def exhausted_sources(config):
+    """Unknown/unlimited quota is not zero. A confirmed zero excludes a source."""
+    exhausted = {str(source) for source in config.get('exhausted_sources', [])}
+    for source, value in config.get('source_remaining_bytes', {}).items():
+        if known_remaining(value) == 0:
+            exhausted.add(str(source))
+    return exhausted
+
+
+def load_policy(config_path):
+    """Read fresh, credential-free quota metadata without downloading subscriptions.
+
+    The registry may be updated without changing the monitor configuration.
+    Read it every cycle so a confirmed zero (or replenishment) takes effect even
+    when the proxy profile itself has not changed.
+    """
+    config_path = Path(config_path).resolve()
+    config = json.loads(config_path.read_text(encoding='utf-8'))
+    configured = config.get('subscription_registry_path')
+    paths = [Path(configured)] if configured else [
+        config_path.with_name('subscriptions.json'), config_path.with_name('proxy-subscriptions.json')]
+    remaining = dict(config.get('source_remaining_bytes', {}))
+    exhausted = exhausted_sources(config)
+    disabled = set(config.get('disabled_sources', []))
+    for path in paths:
+        if not path.is_absolute():
+            path = config_path.parent / path
+        try:
+            registry = json.loads(path.read_text(encoding='utf-8'))
+        except FileNotFoundError:
+            continue
+        if not isinstance(registry, dict) or not isinstance(registry.get('subscriptions'), list):
+            raise ValueError('Invalid subscription registry')
+        for item in registry['subscriptions']:
+            source = str(item.get('pool_source') or '')
+            if not source:
+                continue
+            if item.get('enabled') is False:
+                disabled.add(source)
+            if known_remaining(item.get('traffic_remaining_bytes')) is not None:
+                remaining[source] = item['traffic_remaining_bytes']
+                exhausted.discard(source)
+        break
+    config['source_remaining_bytes'] = remaining
+    config['exhausted_sources'] = sorted(exhausted)
+    config['disabled_sources'] = sorted(disabled)
+    # Legacy deployments explicitly used zero, leaving backups untested forever.
+    config['standby_probes_per_cycle'] = max(1, min(20, int(config.get('standby_probes_per_cycle') or 2)))
+    return config
 
 
 class UnixConnection(http.client.HTTPConnection):
@@ -124,13 +186,20 @@ class Monitor:
         self.clock, self.sleep = clock, sleep
         self.persist = persist or (lambda state: None)
 
-    def eligible_nodes(self):
-        """Apply global country, subscription enablement and per-source caps."""
+    def candidate_nodes(self):
+        """Keep failed nodes testable, but never use a disabled/exhausted source."""
         allowed = {str(value).upper() for value in self.config.get(
             'allowed_countries', [*COUNTRY_ALIASES.keys(), 'OTHER'])}
-        disabled = {str(value) for value in self.config.get('disabled_sources', [])}
+        disabled = {str(value) for value in self.config.get('disabled_sources', [])} | exhausted_sources(self.config)
         sources = self.config.get('sources', {})
         countries = self.config.get('node_countries', {})
+        return [node for node in self.config['nodes']
+                if str(sources.get(node, '')) not in disabled
+                and str(countries.get(node) or country_for_node(node)).upper() in allowed]
+
+    def eligible_nodes(self):
+        """Apply per-source caps after quota, country and enablement filters."""
+        sources = self.config.get('sources', {})
         limits = self.config.get('source_node_limits', {})
         grouped = {}
         ranks = {'active': 0, 'ready': 1, 'probation': 2, 'unknown': 3, 'quarantined': 4}
@@ -139,11 +208,8 @@ class Monitor:
         except Exception:
             current = ''
         records = self.state.get('nodes', {})
-        for index, node in enumerate(self.config['nodes']):
+        for index, node in enumerate(self.candidate_nodes()):
             source = str(sources.get(node, ''))
-            country = str(countries.get(node) or country_for_node(node)).upper()
-            if source in disabled or country not in allowed:
-                continue
             recorded = str(records.get(node, {}).get('status') or 'unknown')
             status = 'active' if node == current and recorded != 'quarantined' else recorded
             grouped.setdefault(source, []).append((ranks.get(status, 3), index, node))
@@ -156,7 +222,10 @@ class Monitor:
     def standbys(self, current):
         """Return the configured number of ordered failover candidates."""
         alternatives = [node for node in self.eligible_nodes() if node != current]
-        requested = int(self.config.get('standby_pool_size', len(alternatives)))
+        records = self.state.get('nodes', {})
+        alternatives.sort(key=lambda node: {'ready': 0, 'probation': 1, 'unknown': 2,
+                                           'quarantined': 3}.get(records.get(node, {}).get('status'), 2))
+        requested = int(self.config.get('standby_pool_size', max(1, len(alternatives))))
         if requested < 1:
             raise ValueError('standby_pool_size must be at least 1')
         return alternatives[:requested]
@@ -178,15 +247,17 @@ class Monitor:
                 continue
             if self.controller.current().get('now') != current:
                 return {'status': 'selection_changed_externally'}
+            self.state['nodes'][candidate].update(status='ready', failure_episodes=0)
+            self.state.setdefault('quarantine_until', {}).pop(candidate, None)
             self.state['last_switch_at'] = self.clock()
             self.state.setdefault('switch_history', []).append(
                 {'time': self.clock(), 'from': current, 'to': candidate, 'reason': 'policy'})
             self.persist(self.state)
             self.controller.select(candidate)
             self.state['nodes'][candidate]['status'] = 'active'
-            return {'status': 'policy_switched_new_connections_only', 'from': current,
-                    'to': candidate, 'delay_ms': round(sum(samples) / len(samples), 1)}
-        return {'status': 'policy_no_healthy_candidate', 'node': current, 'changed': False}
+            return self.with_standbys({'status': 'policy_switched_new_connections_only', 'from': current,
+                                      'to': candidate, 'delay_ms': round(sum(samples) / len(samples), 1)}, candidate)
+        return self.with_standbys({'status': 'policy_no_healthy_candidate', 'node': current, 'changed': False}, current)
 
     def probe(self, node):
         delay = self.controller.probe(node)
@@ -219,9 +290,12 @@ class Monitor:
         # Probe every eligible candidate, including nodes beyond the failover
         # pool size. Otherwise those candidates can remain "unknown" forever.
         # standbys() still limits which nodes may be selected on failover.
-        alternatives = [n for n in self.eligible_nodes() if n != current
+        alternatives = [n for n in self.candidate_nodes() if n != current
                         if records.get(n, {}).get('next_probe_at', 0) <= now]
-        alternatives.sort(key=lambda n: records.get(n, {}).get('last_probe_at', 0))
+        # Finish a successful recovery promptly instead of leaving every node
+        # with one sample while scanning a large subscription catalogue.
+        alternatives.sort(key=lambda n: (records.get(n, {}).get('status') != 'probation',
+                                         records.get(n, {}).get('last_probe_at', 0)))
         results = []
         for node in alternatives[:budget]:
             delay = self.probe(node)
@@ -232,15 +306,29 @@ class Monitor:
                                float(self.config.get('recovery_interval_seconds', 60))
                                * 2 ** min(record['failure_episodes'] - 1, 4))
             else:
-                interval = float(self.config.get('standby_interval_seconds', 180))
-                if record['consecutive_successes'] >= int(self.config.get('recovery_successes', 3)):
+                if record['consecutive_successes'] >= int(self.config.get('recovery_successes', 2)):
                     record.update(status='ready', failure_episodes=0)
                     self.state.setdefault('quarantine_until', {}).pop(node, None)
+                    interval = float(self.config.get('standby_interval_seconds', 180))
                 else:
                     record['status'] = 'probation'
+                    interval = float(self.config.get('recovery_interval_seconds', 60))
             record['next_probe_at'] = self.clock() + interval
             results.append({'node': node, 'status': record['status'], 'delay_ms': delay})
         return results
+
+    def with_standbys(self, result, current):
+        result['standbys'] = self.recover_standbys(current)
+        now = self.clock()
+        max_age = float(self.config.get('standby_interval_seconds', 180)) + float(self.config.get('interval_seconds', 60))
+        records = self.state.get('nodes', {})
+        ready = [node for node in self.standbys(current)
+                 if records.get(node, {}).get('status') == 'ready'
+                 and records[node].get('consecutive_successes', 0) >= int(self.config.get('recovery_successes', 2))
+                 and now - records[node].get('last_success_at', 0) <= max_age]
+        result['standby_health'] = {'ready': ready, 'ready_count': len(ready),
+                                    'required': 1, 'degraded': not bool(ready)}
+        return result
 
     def activity(self, node):
         if not self.config.get('protect_active_traffic', False):
@@ -273,9 +361,16 @@ class Monitor:
         available = set(info.get('all', []))
         if current not in self.config['nodes'] or not set(self.config['nodes']).issubset(available):
             raise RuntimeError('Active pool differs from approved configuration; refusing to switch')
+        exhausted = exhausted_sources(self.config)
+        for node in self.config['nodes']:
+            if str(self.config.get('sources', {}).get(node, '')) in exhausted:
+                self.state.setdefault('nodes', {}).setdefault(node, {}).update(
+                    status='exhausted', consecutive_successes=0)
         eligible = self.eligible_nodes()
         if not eligible:
-            raise RuntimeError('No eligible nodes remain after country and subscription filters')
+            return self.with_standbys({'status': 'no_eligible_nodes', 'node': current,
+                                      'exhausted_sources': sorted(exhausted_sources(self.config)),
+                                      'changed': False}, current)
         if current not in eligible:
             return self.select_policy_replacement(current)
         activity_before = self.activity(current)
@@ -286,13 +381,12 @@ class Monitor:
             if delay is not None:
                 self.state['nodes'][current].update(status='active', failure_episodes=0)
                 self.state.setdefault('quarantine_until', {}).pop(current, None)
-                return {'status': 'healthy', 'node': current, 'delay_ms': delay,
-                        'recovered_after_failures': attempt,
-                        'standbys': self.recover_standbys(current)}
+                return self.with_standbys({'status': 'healthy', 'node': current, 'delay_ms': delay,
+                                          'recovered_after_failures': attempt}, current)
         activity_after = self.activity(current)
         if any(activity_after.get(key, value) > value for key, value in activity_before.items()):
-            return {'status': 'probe_failed_but_stream_active', 'node': current,
-                    'changed': False, 'standbys': self.recover_standbys(current)}
+            return self.with_standbys({'status': 'probe_failed_but_stream_active', 'node': current,
+                                      'changed': False}, current)
         now = self.clock()
         quarantine = self.state.setdefault('quarantine_until', {})
         quarantine_seconds = float(self.config.get('quarantine_seconds', 600))
@@ -336,9 +430,9 @@ class Monitor:
             self.persist(self.state)
             self.controller.select(candidate)
             self.state['nodes'][candidate]['status'] = 'active'
-            return {'status': 'switched_new_connections_only', 'from': current, 'to': candidate,
-                    'delay_ms': round(sum(samples) / len(samples), 1)}
-        return {'status': 'all_unavailable', 'node': current, 'changed': False}
+            return self.with_standbys({'status': 'switched_new_connections_only', 'from': current, 'to': candidate,
+                                      'delay_ms': round(sum(samples) / len(samples), 1)}, candidate)
+        return self.with_standbys({'status': 'all_unavailable', 'node': current, 'changed': False}, current)
 
 
 def atomic_json(path: Path, value):
@@ -365,7 +459,7 @@ def main():
     parser.add_argument('--status', action='store_true', help='Read status without probing or switching')
     args = parser.parse_args()
     config_path = Path(args.config).resolve()
-    config = json.loads(config_path.read_text(encoding='utf-8'))
+    config = load_policy(config_path)
     state_path = config_path.with_name('state.json')
     if args.status:
         state = load_state(state_path)
@@ -376,6 +470,7 @@ def main():
                               'replacement_confirmations', 'quarantine_seconds',
                               'standby_probes_per_cycle', 'recovery_successes')},
                           'last_check': state.get('last_check'),
+                          'exhausted_sources': sorted(exhausted_sources(config)),
                           'nodes': state.get('nodes', {}),
                           'switch_history': state.get('switch_history', [])}, ensure_ascii=False, indent=2))
         return
@@ -392,7 +487,7 @@ def main():
             try:
                 # Policy edits made by the administrator take effect on the next
                 # cycle without restarting the proxy core or interrupting streams.
-                fresh = json.loads(config_path.read_text(encoding='utf-8'))
+                fresh = load_policy(config_path)
                 monitor.config = fresh
                 monitor.controller.config = fresh
                 result = monitor.step()

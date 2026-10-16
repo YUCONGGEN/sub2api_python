@@ -13,6 +13,7 @@ import http.client
 import ipaddress
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import re
@@ -118,7 +119,7 @@ class ProxyPoolAdminService:
         "replacement_interval_seconds": (1, 60),
         "quarantine_seconds": (30, 86400),
         "quarantine_recheck_seconds": (10, 3600),
-        "standby_probes_per_cycle": (0, 20),
+        "standby_probes_per_cycle": (1, 20),
         "standby_interval_seconds": (30, 86400),
         "recovery_successes": (2, 10),
         "recovery_interval_seconds": (10, 3600),
@@ -142,6 +143,8 @@ class ProxyPoolAdminService:
         self.mihomo_home: Path | None = None
         self.mihomo_binary = "mihomo"
         self.sync_interval_seconds = 300
+        self.usage_check_interval_seconds = 300
+        self._last_usage_attempt = 0.0
         self.daily_sync_time = "06:00"
         self.daily_sync_hour = 6
         self.daily_sync_minute = 0
@@ -178,6 +181,7 @@ class ProxyPoolAdminService:
             self.mihomo_home = self.profile_path.parent.parent if self.profile_path.parent.name == "profiles" else self.profile_path.parent
         self.mihomo_binary = str(options.get("mihomo-binary") or "mihomo").strip()
         self.sync_interval_seconds = max(60, min(int(options.get("sync-interval-seconds", 300) or 300), 86400))
+        self.usage_check_interval_seconds = max(60, min(int(options.get("usage-check-interval-seconds", 300) or 300), 3600))
         configured_time = str(options.get("daily-sync-time") or "06:00").strip()
         try:
             hour_text, minute_text = configured_time.split(":", 1)
@@ -336,6 +340,16 @@ class ProxyPoolAdminService:
             source: max(1, min(int(item.get("max_healthy_nodes") or 2), 20))
             for source, item in subscriptions.items()
         }
+        monitor["subscription_registry_path"] = str(self.registry_path.resolve())
+        monitor["source_remaining_bytes"] = {
+            source: value for source, item in subscriptions.items()
+            if isinstance(value := item.get("traffic_remaining_bytes"), (int, float))
+            and not isinstance(value, bool) and math.isfinite(value) and value >= 0
+        }
+        monitor["exhausted_sources"] = sorted(
+            source for source, remaining in monitor["source_remaining_bytes"].items() if remaining == 0
+        )
+        monitor["standby_probes_per_cycle"] = max(1, min(20, int(monitor.get("standby_probes_per_cycle") or 2)))
         countries = monitor.setdefault("node_countries", {})
         for node in monitor.get("nodes", []):
             countries.setdefault(node, self._country_for_node(node))
@@ -343,7 +357,7 @@ class ProxyPoolAdminService:
     def _eligible_nodes(self, monitor: dict[str, Any], state: dict[str, Any] | None = None, current: str = "") -> list[str]:
         default_countries = [item["code"] for item in self.COUNTRY_OPTIONS]
         allowed = {str(code).upper() for code in monitor.get("allowed_countries", default_countries)}
-        disabled = {str(source) for source in monitor.get("disabled_sources", [])}
+        disabled = {str(source) for source in monitor.get("disabled_sources", [])} | set(monitor.get("exhausted_sources", []))
         limits = monitor.get("source_node_limits", {}) if isinstance(monitor.get("source_node_limits"), dict) else {}
         countries = monitor.get("node_countries", {}) if isinstance(monitor.get("node_countries"), dict) else {}
         sources = monitor.get("sources", {}) if isinstance(monitor.get("sources"), dict) else {}
@@ -635,6 +649,9 @@ class ProxyPoolAdminService:
     def _refresh_subscription_usage(cls, item: dict[str, Any], raw: bytes, headers: dict[str, str]) -> None:
         usage = cls._subscription_content_usage(raw)
         usage.update(cls._subscription_usage(headers))
+        # A missing quota header is not proof that an exhausted plan recovered.
+        if item.get("traffic_remaining_bytes") == 0 and "traffic_remaining_bytes" not in usage:
+            return
         for key in cls.SUBSCRIPTION_USAGE_FIELDS:
             item.pop(key, None)
         item.update(usage)
@@ -774,7 +791,7 @@ class ProxyPoolAdminService:
     def _seed_candidate_health(self, monitor: dict[str, Any], state: dict[str, Any]) -> int:
         """Probe enough candidates to fill each source's configured healthy slots."""
         allowed = {str(value).upper() for value in monitor.get("allowed_countries", [])}
-        disabled = {str(value) for value in monitor.get("disabled_sources", [])}
+        disabled = {str(value) for value in monitor.get("disabled_sources", [])} | set(monitor.get("exhausted_sources", []))
         sources = monitor.get("sources", {}) or {}
         countries = monitor.get("node_countries", {}) or {}
         limits = monitor.get("source_node_limits", {}) or {}
@@ -972,6 +989,41 @@ class ProxyPoolAdminService:
             return dict(monitor["pool_sync"])
         finally:
             self._sync_lock.release()
+
+    async def refresh_subscription_usage(self) -> dict[str, Any]:
+        """Refresh quota metadata only; never reload the proxy core or its nodes."""
+        self._ensure_enabled()
+        if not self._sync_lock.acquire(blocking=False):
+            return {"busy": True, "checked": 0}
+        try:
+            self._last_usage_attempt = time.monotonic()
+            registry = self._registry()
+            checked = 0
+            for item in registry["subscriptions"]:
+                if not _as_bool(item.get("enabled"), True) or not item.get("url_encrypted"):
+                    continue
+                try:
+                    url = str(self.cipher.decrypt(item["url_encrypted"]).get("url") or "")
+                    raw, headers = await self._download_details(url)
+                    self._refresh_subscription_usage(item, raw, headers)
+                    checked += 1
+                except Exception:
+                    # Keep the last confirmed quota. Never print subscription
+                    # URLs or credentials, or treat a timeout as zero remaining.
+                    continue
+            self._atomic_json(self.registry_path, registry)
+            return {"checked": checked}
+        finally:
+            self._sync_lock.release()
+
+    @Scheduled(fixed_rate=60000, initial_delay=45000)
+    async def scheduled_subscription_usage(self) -> None:
+        if not self.enabled or time.monotonic() - self._last_usage_attempt < self.usage_check_interval_seconds:
+            return
+        try:
+            await self.refresh_subscription_usage()
+        except Exception:
+            self.logger.warning("代理订阅流量检查失败，保留上次已知额度")
 
     @Scheduled(fixed_rate=60000, initial_delay=30000)
     async def scheduled_pool_sync(self) -> None:

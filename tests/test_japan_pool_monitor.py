@@ -319,3 +319,120 @@ def test_failed_node_rotates_out_of_per_subscription_healthy_limit():
     )
     policy.state.setdefault('nodes', {})['a'] = {'status': 'quarantined'}
     assert policy.eligible_nodes() == ['b', 'c']
+
+
+def test_zero_quota_skips_entire_source_even_if_nodes_still_connect():
+    controller = FakeController({'c': [120, 130]})
+    policy = configured(controller, sources={'a': 'one', 'b': 'one', 'c': 'two'},
+                        source_remaining_bytes={'one': 0, 'two': 100})
+    result = policy.step()
+    assert result['to'] == 'c'
+    assert controller.changes == ['c']
+    assert policy.state['nodes']['a']['status'] == 'exhausted'
+    assert policy.state['nodes']['b']['status'] == 'exhausted'
+    assert result['standby_health']['degraded'] is True
+
+
+@pytest.mark.parametrize('value', [None, False, '', 'unknown', float('nan'), float('inf'), -1])
+def test_unknown_or_invalid_quota_is_not_treated_as_zero(value):
+    controller = FakeController({'a': [100]})
+    policy = configured(controller, sources={'a': 'one'}, source_remaining_bytes={'one': value})
+    assert policy.step()['status'] == 'healthy'
+    assert controller.changes == []
+
+
+def test_all_sources_exhausted_reports_degraded_without_direct_or_random_switch():
+    controller = FakeController({})
+    policy = configured(controller, sources={node: 'one' for node in 'abc'},
+                        source_remaining_bytes={'one': 0})
+    result = policy.step()
+    assert result['status'] == 'no_eligible_nodes'
+    assert result['changed'] is False
+    assert result['standby_health']['degraded'] is True
+    assert controller.changes == []
+
+
+def test_quarantined_nodes_outside_source_cap_are_still_retested():
+    state = {'nodes': {'b': {'status': 'ready', 'last_probe_at': 999},
+                       'c': {'status': 'quarantined', 'consecutive_successes': 1}},
+             'quarantine_until': {'c': 1500}}
+    controller = FakeController({'a': [100], 'c': [110]})
+    policy = configured(controller, state, sources={node: 'one' for node in 'abc'},
+                        source_node_limits={'one': 2}, standby_probes_per_cycle=1)
+    assert policy.eligible_nodes() == ['a', 'b']
+    result = policy.step()
+    assert result['standbys'][0]['node'] == 'c'
+    assert state['nodes']['c']['status'] == 'ready'
+    assert 'c' not in state['quarantine_until']
+    assert controller.changes == []
+
+
+def test_background_checks_never_probe_zero_quota_source():
+    controller = FakeController({'a': [100], 'c': [90]})
+    policy = configured(controller, sources={'a': 'one', 'b': 'two', 'c': 'three'},
+                        source_remaining_bytes={'two': 0}, standby_probes_per_cycle=2)
+    assert [item['node'] for item in policy.step()['standbys']] == ['c']
+
+
+def test_ready_backup_is_reported_only_after_confirmations_and_fresh_success():
+    state = {'nodes': {'b': {'status': 'quarantined', 'last_probe_at': 0}}}
+    controller = FakeController({'a': [100, 100], 'b': [90, 95]})
+    policy = configured(controller, state, standby_probes_per_cycle=1,
+                        disabled_sources=['unused'], sources={'c': 'unused'})
+    assert policy.step()['standby_health']['degraded'] is True
+    policy.clock = lambda: 1060
+    result = policy.step()
+    assert result['standby_health']['ready'] == ['b']
+    assert result['standby_health']['degraded'] is False
+    assert controller.changes == []
+
+
+def test_stale_or_single_probe_backup_is_not_reported_ready():
+    state = {'nodes': {'b': {'status': 'ready', 'last_success_at': 100, 'consecutive_successes': 3},
+                       'c': {'status': 'ready', 'last_success_at': 999, 'consecutive_successes': 1}}}
+    controller = FakeController({'a': [100]})
+    assert configured(controller, state).step()['standby_health']['ready_count'] == 0
+
+
+def test_ready_node_is_not_hidden_behind_quarantined_failover_slot():
+    controller = FakeController({'a': [None] * 3, 'c': [100, 110]})
+    policy = configured(controller, {'nodes': {'b': {'status': 'quarantined'}, 'c': {'status': 'ready'}}},
+                        standby_pool_size=1)
+    assert policy.step()['to'] == 'c'
+
+
+def test_runtime_policy_reads_latest_quota_and_enables_legacy_disabled_checks(tmp_path):
+    import json
+    from scripts.japan_pool_monitor import load_policy, exhausted_sources
+    config = tmp_path / 'monitor.json'
+    registry = tmp_path / 'subscriptions.json'
+    config.write_text(json.dumps({'source_remaining_bytes': {'one': 100}, 'standby_probes_per_cycle': 0}))
+    registry.write_text(json.dumps({'subscriptions': [{'pool_source': 'one', 'traffic_remaining_bytes': 0}]}))
+    result = load_policy(config)
+    assert exhausted_sources(result) == {'one'}
+    assert result['standby_probes_per_cycle'] == 2
+    registry.write_text(json.dumps({'subscriptions': [{'pool_source': 'one', 'traffic_remaining_bytes': 50}]}))
+    assert exhausted_sources(load_policy(config)) == set()
+
+
+def test_custom_registry_can_restore_quota_but_not_manual_enablement(tmp_path):
+    import json
+    from scripts.japan_pool_monitor import load_policy, exhausted_sources
+    config = tmp_path / 'monitor.json'
+    registry = tmp_path / 'custom.json'
+    config.write_text(json.dumps({'subscription_registry_path': 'custom.json', 'exhausted_sources': ['one'],
+                                  'source_remaining_bytes': {'one': 0}, 'disabled_sources': ['one']}))
+    registry.write_text(json.dumps({'subscriptions': [{'pool_source': 'one', 'traffic_remaining_bytes': 100}]}))
+    result = load_policy(config)
+    assert exhausted_sources(result) == set()
+    assert result['disabled_sources'] == ['one']
+
+
+def test_invalid_quota_refresh_does_not_unblock_confirmed_exhausted_source(tmp_path):
+    import json
+    from scripts.japan_pool_monitor import load_policy, exhausted_sources
+    config = tmp_path / 'monitor.json'
+    config.write_text(json.dumps({'source_remaining_bytes': {'one': 0}}))
+    (tmp_path / 'subscriptions.json').write_text(json.dumps({
+        'subscriptions': [{'pool_source': 'one', 'traffic_remaining_bytes': 'unknown'}]}))
+    assert exhausted_sources(load_policy(config)) == {'one'}

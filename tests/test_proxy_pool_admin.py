@@ -332,3 +332,89 @@ def test_incompatible_proxy_is_bisected_without_dropping_provider(tmp_path):
     proxies = [{"name": name, "type": "ss", "server": "example.com", "port": 443}
                for name in ("good-one", "bad-node", "good-two")]
     assert [item["name"] for item in service._filter_compatible_proxies(proxies)] == ["good-one", "good-two"]
+
+
+def test_exhausted_source_is_excluded_without_manually_disabling_subscription(tmp_path):
+    service = configured_service(tmp_path)
+    registry = {'subscriptions': [{'id': 'one', 'pool_source': 'a', 'enabled': True,
+                                    'traffic_remaining_bytes': 0}]}
+    monitor = json.loads(service.monitor_config_path.read_text(encoding='utf-8'))
+    service._sync_subscription_policy(monitor, registry)
+    assert monitor['exhausted_sources'] == ['a']
+    assert monitor['disabled_sources'] == []
+    assert monitor['subscription_registry_path'] == str(service.registry_path.resolve())
+    assert service._eligible_nodes(monitor) == ['备用一', '备用二']
+    assert monitor['standby_probes_per_cycle'] == 2
+    registry['subscriptions'][0]['traffic_remaining_bytes'] = 100
+    service._sync_subscription_policy(monitor, registry)
+    assert monitor['exhausted_sources'] == []
+    assert service._eligible_nodes(monitor) == ['主节点', '备用一', '备用二']
+
+
+def test_missing_usage_does_not_implicitly_restore_exhausted_quota():
+    item = {'traffic_remaining_bytes': 0, 'traffic_total_bytes': 100}
+    ProxyPoolAdminService._refresh_subscription_usage(item, b'proxies: []', {})
+    assert item['traffic_remaining_bytes'] == 0
+    ProxyPoolAdminService._refresh_subscription_usage(item, b'proxies: []', {
+        'subscription-userinfo': 'upload=0; download=10; total=100'})
+    assert item['traffic_remaining_bytes'] == 90
+
+
+def test_periodic_usage_refresh_does_not_reload_core_or_change_nodes(tmp_path):
+    service = configured_service(tmp_path)
+    service.registry_path.write_text(json.dumps({'subscriptions': [
+        {'id': 'one', 'pool_source': 'a', 'enabled': True,
+         'url_encrypted': service.cipher.encrypt({'url': 'https://example.com/sub'}),
+         'traffic_remaining_bytes': 10},
+        {'id': 'two', 'enabled': False,
+         'url_encrypted': service.cipher.encrypt({'url': 'https://disabled.example/sub'})}
+    ]}))
+    original_monitor = service.monitor_config_path.read_bytes()
+    calls = []
+    async def download(url):
+        calls.append(url)
+        return b'proxies: []', {'subscription-userinfo': 'upload=20; download=80; total=100'}
+    service._download_details = download
+    def forbid(*args, **kwargs):
+        pytest.fail('Quota-only checks must not touch the core or rebuild the pool')
+    service._controller_request = forbid
+    service.synchronize_pool = forbid
+    assert asyncio.run(service.refresh_subscription_usage()) == {'checked': 1}
+    assert calls == ['https://example.com/sub']
+    item = json.loads(service.registry_path.read_text())['subscriptions'][0]
+    assert item['enabled'] is True
+    assert item['traffic_remaining_bytes'] == 0
+    assert service.monitor_config_path.read_bytes() == original_monitor
+
+
+def test_usage_poll_failure_preserves_quota_and_releases_lock(tmp_path):
+    service = configured_service(tmp_path)
+    service.registry_path.write_text(json.dumps({'subscriptions': [{
+        'id': 'one', 'enabled': True, 'traffic_remaining_bytes': 0,
+        'url_encrypted': service.cipher.encrypt({'url': 'https://example.com/sub'})}]}))
+    async def download(url):
+        raise OSError('timed out')
+    service._download_details = download
+    assert asyncio.run(service.refresh_subscription_usage()) == {'checked': 0}
+    assert json.loads(service.registry_path.read_text())['subscriptions'][0]['traffic_remaining_bytes'] == 0
+    assert not service._sync_lock.locked()
+
+
+def test_usage_poller_respects_interval_and_pool_sync_lock(tmp_path):
+    service = configured_service(tmp_path)
+    service._sync_lock.acquire()
+    try:
+        assert asyncio.run(service.refresh_subscription_usage()) == {'busy': True, 'checked': 0}
+    finally:
+        service._sync_lock.release()
+    calls = []
+    async def refresh():
+        calls.append(True)
+    service.refresh_subscription_usage = refresh
+    import time
+    service._last_usage_attempt = time.monotonic()
+    asyncio.run(service.scheduled_subscription_usage())
+    assert calls == []
+    service._last_usage_attempt = 0
+    asyncio.run(service.scheduled_subscription_usage())
+    assert calls == [True]

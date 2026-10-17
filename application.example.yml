@@ -110,7 +110,7 @@ rose:
     # 旧配置保留兼容，不再决定每日同步频率。
     sync-interval-seconds: ${ROSE_PROXY_POOL_SYNC_INTERVAL_SECONDS:300}
     # 仅更新流量元数据，不重载核心；确认剩余为 0 后整份订阅退出候选。
-    usage-check-interval-seconds: ${ROSE_PROXY_POOL_USAGE_CHECK_INTERVAL_SECONDS:300}
+    usage-check-interval-seconds: ${ROSE_PROXY_POOL_USAGE_CHECK_INTERVAL_SECONDS:240}
     max-subscription-bytes: ${ROSE_PROXY_POOL_MAX_SUBSCRIPTION_BYTES:2097152}
     request-timeout-seconds: ${ROSE_PROXY_POOL_REQUEST_TIMEOUT_SECONDS:15}
     # 仅检测 Mihomo/Clash Meta 最新版本，不会自动下载、替换或重启代理核心。

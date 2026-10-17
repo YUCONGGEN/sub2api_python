@@ -123,7 +123,7 @@ class Controller:
         self.config = config
 
     def request(self, path: str, method='GET', payload=None):
-        connection = UnixConnection(self.config['controller_socket'], 10)
+        connection = UnixConnection(self.config['controller_socket'], float(self.config.get('controller_timeout_seconds', 10)))
         try:
             body = json.dumps(payload).encode() if payload is not None else None
             connection.request(method, path, body=body, headers={'Content-Type': 'application/json'})
@@ -212,6 +212,8 @@ class Monitor:
             source = str(sources.get(node, ''))
             recorded = str(records.get(node, {}).get('status') or 'unknown')
             status = 'active' if node == current and recorded != 'quarantined' else recorded
+            if self.config.get('verified_standbys_only') and status == 'ready' and not self.verified_backup(node):
+                status = 'unknown'
             grouped.setdefault(source, []).append((ranks.get(status, 3), index, node))
         result = []
         for source, candidates in grouped.items():
@@ -223,6 +225,8 @@ class Monitor:
         """Return the configured number of ordered failover candidates."""
         alternatives = [node for node in self.eligible_nodes() if node != current]
         records = self.state.get('nodes', {})
+        if self.config.get('verified_standbys_only', False):
+            alternatives = [node for node in alternatives if self.verified_backup(node)]
         alternatives.sort(key=lambda node: {'ready': 0, 'probation': 1, 'unknown': 2,
                                            'quarantined': 3}.get(records.get(node, {}).get('status'), 2))
         requested = int(self.config.get('standby_pool_size', max(1, len(alternatives))))
@@ -230,18 +234,49 @@ class Monitor:
             raise ValueError('standby_pool_size must be at least 1')
         return alternatives[:requested]
 
+    def verified_backup(self, node):
+        record = self.state.get('nodes', {}).get(node, {})
+        if node in self.state.get('quarantine_until', {}) or record.get('status') != 'ready':
+            return False
+        return (record.get('consecutive_successes', 0) >= max(
+                    int(self.config.get('replacement_confirmations', 2)), int(self.config.get('recovery_successes', 2)))
+                and record.get('last_success_at') is not None
+                and self.clock() - record['last_success_at'] <= float(self.config.get('standby_max_age_seconds', 120)))
+
+    def replacement_samples(self, candidate, required, deadline):
+        samples = []
+        for attempt in range(required):
+            if deadline is not None and self.clock() >= deadline:
+                return None
+            if attempt:
+                interval = float(self.config.get('replacement_interval_seconds', 2))
+                if deadline is not None and self.clock() + interval >= deadline:
+                    return None
+                self.sleep(interval)
+            delay = self.probe(candidate)
+            if deadline is not None and self.clock() >= deadline:
+                return None
+            if delay is None:
+                break
+            samples.append(delay)
+        return samples
+
+    def failover_deadline(self):
+        budget = float(self.config.get('failover_budget_seconds', 0))
+        return self.clock() + budget if budget > 0 else None
+
+    def switch_confirmations(self):
+        return max(1, int(self.config.get('switch_probe_confirmations',
+                           1 if self.config.get('verified_standbys_only') else self.config.get('replacement_confirmations', 2))))
+
     def select_policy_replacement(self, current):
         """Move new connections away from a disabled/excluded source safely."""
+        deadline = self.failover_deadline()
         for candidate in self.standbys(current):
-            samples = []
-            required = int(self.config.get('replacement_confirmations', 2))
-            for attempt in range(required):
-                if attempt:
-                    self.sleep(float(self.config.get('replacement_interval_seconds', 2)))
-                delay = self.probe(candidate)
-                if delay is None:
-                    break
-                samples.append(delay)
+            required = self.switch_confirmations()
+            samples = self.replacement_samples(candidate, required, deadline)
+            if samples is None:
+                return self.with_standbys({'status': 'failover_budget_exhausted', 'node': current, 'changed': False}, current)
             if len(samples) != required:
                 self.quarantine(candidate)
                 continue
@@ -292,10 +327,28 @@ class Monitor:
         # standbys() still limits which nodes may be selected on failover.
         alternatives = [n for n in self.candidate_nodes() if n != current
                         if records.get(n, {}).get('next_probe_at', 0) <= now]
+        if self.config.get('quarantine_requires_manual_release', False):
+            alternatives = [n for n in alternatives if records.get(n, {}).get('status') != 'quarantined'
+                            and n not in self.state.get('quarantine_until', {})]
         # Finish a successful recovery promptly instead of leaving every node
         # with one sample while scanning a large subscription catalogue.
         alternatives.sort(key=lambda n: (records.get(n, {}).get('status') != 'probation',
                                          records.get(n, {}).get('last_probe_at', 0)))
+        # Reserve one slot for a verified backup (prefer a different subscription).
+        # Otherwise a large catalogue can keep every backup stale while the
+        # round-robin scanner spends its entire budget on failed candidates.
+        required = int(self.config.get('recovery_successes', 2))
+        protected = [node for node in self.standbys(current) if node in alternatives
+                     and records.get(node, {}).get('status') == 'ready'
+                     and records[node].get('consecutive_successes', 0) >= required]
+        if protected and (budget > 1 or not self.state.get('last_standby_protected', False)):
+            sources = self.config.get('sources', {})
+            protected.sort(key=lambda node: sources.get(node, '') == sources.get(current, ''))
+            keeper = protected[0]
+            alternatives = [keeper, *[node for node in alternatives if node != keeper]]
+            self.state['last_standby_protected'] = True
+        else:
+            self.state['last_standby_protected'] = False
         results = []
         for node in alternatives[:budget]:
             delay = self.probe(node)
@@ -320,14 +373,18 @@ class Monitor:
     def with_standbys(self, result, current):
         result['standbys'] = self.recover_standbys(current)
         now = self.clock()
-        max_age = float(self.config.get('standby_interval_seconds', 180)) + float(self.config.get('interval_seconds', 60))
+        max_age = float(self.config.get('standby_max_age_seconds',
+                        float(self.config.get('standby_interval_seconds', 180)) + float(self.config.get('interval_seconds', 60))))
         records = self.state.get('nodes', {})
         ready = [node for node in self.standbys(current)
                  if records.get(node, {}).get('status') == 'ready'
                  and records[node].get('consecutive_successes', 0) >= int(self.config.get('recovery_successes', 2))
                  and now - records[node].get('last_success_at', 0) <= max_age]
         result['standby_health'] = {'ready': ready, 'ready_count': len(ready),
-                                    'required': 1, 'degraded': not bool(ready)}
+                                    'required': 1, 'degraded': not bool(ready),
+                                    'other_source_ready_count': sum(
+                                        self.config.get('sources', {}).get(node, '') !=
+                                        self.config.get('sources', {}).get(current, '') for node in ready)}
         return result
 
     def activity(self, node):
@@ -398,18 +455,16 @@ class Monitor:
         recheck_after = float(self.config.get('quarantine_recheck_seconds', 60))
         recovery = [node for node in alternatives if node not in eligible
                     and now - (float(quarantine[node]) - quarantine_seconds) >= recheck_after]
+        if self.config.get('verified_standbys_only', False):
+            recovery = []
+        deadline = self.failover_deadline()
         for candidate in eligible + recovery:
-            samples = []
-            required = int(self.config.get('replacement_confirmations', 2))
+            required = self.switch_confirmations()
             if candidate in quarantine:
                 required = max(required, int(self.config.get('recovery_successes', 2)))
-            for attempt in range(required):
-                if attempt:
-                    self.sleep(float(self.config.get('replacement_interval_seconds', 2)))
-                delay = self.probe(candidate)
-                if delay is None:
-                    break
-                samples.append(delay)
+            samples = self.replacement_samples(candidate, required, deadline)
+            if samples is None:
+                return self.with_standbys({'status': 'failover_budget_exhausted', 'node': current, 'changed': False}, current)
             if len(samples) != required:
                 self.quarantine(candidate)
                 continue

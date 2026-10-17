@@ -436,3 +436,94 @@ def test_invalid_quota_refresh_does_not_unblock_confirmed_exhausted_source(tmp_p
     (tmp_path / 'subscriptions.json').write_text(json.dumps({
         'subscriptions': [{'pool_source': 'one', 'traffic_remaining_bytes': 'unknown'}]}))
     assert exhausted_sources(load_policy(config)) == {'one'}
+
+
+def test_background_keeps_cross_source_backup_fresh_while_retesting_quarantine():
+    state = {'nodes': {'b': {'status': 'quarantined', 'last_probe_at': 1},
+                       'c': {'status': 'ready', 'last_probe_at': 900,
+                             'last_success_at': 900, 'consecutive_successes': 2}}}
+    controller = FakeController({'a': [100], 'b': [None], 'c': [110]})
+    policy = configured(controller, state, standby_probes_per_cycle=2,
+                        sources={'a': 'one', 'b': 'one', 'c': 'two'})
+    result = policy.step()
+    assert [item['node'] for item in result['standbys']] == ['c', 'b']
+    assert result['standby_health']['other_source_ready_count'] == 1
+    assert state['nodes']['b']['status'] == 'quarantined'
+    assert controller.changes == []
+
+
+def test_single_probe_budget_does_not_starve_isolated_node():
+    state = {'nodes': {'b': {'status': 'quarantined', 'last_probe_at': 1},
+                       'c': {'status': 'ready', 'last_probe_at': 900,
+                             'last_success_at': 900, 'consecutive_successes': 2}}}
+    controller = FakeController({'a': [100, 100], 'b': [None], 'c': [110]})
+    policy = configured(controller, state, standby_probes_per_cycle=1,
+                        sources={'a': 'one', 'b': 'one', 'c': 'two'})
+    assert [item['node'] for item in policy.step()['standbys']] == ['c']
+    assert [item['node'] for item in policy.step()['standbys']] == ['b']
+
+
+def test_strict_failover_never_reselects_expired_quarantine_or_unknown_node():
+    state = {'nodes': {'b': {'status': 'quarantined', 'consecutive_successes': 20, 'last_success_at': 999}},
+             'quarantine_until': {'b': 10}}
+    controller = FakeController({'a': [None] * 3})
+    result = configured(controller, state, verified_standbys_only=True).step()
+    assert result['status'] == 'all_unavailable'
+    assert controller.changes == []
+
+
+def test_strict_failover_uses_only_recent_twice_verified_backup():
+    state = {'nodes': {'b': {'status': 'ready', 'consecutive_successes': 2, 'last_success_at': 999},
+                       'c': {'status': 'ready', 'consecutive_successes': 2, 'last_success_at': 100}}}
+    controller = FakeController({'a': [None] * 3, 'b': [100, 110]})
+    policy = configured(controller, state, verified_standbys_only=True, standby_max_age_seconds=120)
+    assert policy.standbys('a') == ['b']
+    assert policy.step()['to'] == 'b'
+
+
+def test_strict_fresh_backup_is_not_hidden_by_stale_source_cap():
+    state = {'nodes': {'b': {'status': 'ready', 'consecutive_successes': 2, 'last_success_at': 100},
+                       'c': {'status': 'ready', 'consecutive_successes': 2, 'last_success_at': 999}}}
+    policy = configured(FakeController({}), state, verified_standbys_only=True,
+                        sources={n: 'one' for n in 'abc'}, source_node_limits={'one': 2})
+    assert policy.standbys('a') == ['c']
+
+
+def test_manual_release_policy_never_auto_recovers_quarantine():
+    state = {'nodes': {'b': {'status': 'quarantined', 'consecutive_successes': 1},
+                       'c': {'status': 'ready', 'consecutive_successes': 2, 'last_success_at': 999}},
+             'quarantine_until': {'b': 10}}
+    controller = FakeController({'a': [100], 'c': [110]})
+    policy = configured(controller, state, verified_standbys_only=True,
+                        quarantine_requires_manual_release=True, standby_probes_per_cycle=2)
+    assert [row['node'] for row in policy.step()['standbys']] == ['c']
+    assert state['nodes']['b']['status'] == 'quarantined'
+
+
+def test_failover_budget_expiry_does_not_quarantine_a_healthy_candidate():
+    clock = [1000]
+    controller = FakeController({'a': [None] * 3, 'b': [100]})
+    original = controller.probe
+    def probe(node):
+        result = original(node)
+        if node == 'b': clock[0] += 2
+        return result
+    controller.probe = probe
+    policy = configured(controller, failover_budget_seconds=1)
+    policy.clock = lambda: clock[0]
+    assert policy.step()['status'] == 'failover_budget_exhausted'
+    assert 'b' not in policy.state['quarantine_until']
+    assert controller.changes == []
+
+
+def test_strict_switch_checks_each_verified_candidate_once_immediately():
+    state = {'nodes': {node: {'status': 'ready', 'consecutive_successes': 2, 'last_success_at': 999}
+                       for node in ['b', 'c']}}
+    controller = FakeController({'a': [None] * 3, 'b': [None], 'c': [110]})
+    policy = configured(controller, state, verified_standbys_only=True, switch_probe_confirmations=1)
+    waits = []
+    policy.sleep = waits.append
+    assert policy.step()['to'] == 'c'
+    assert controller.samples['c'] == []
+    assert state['nodes']['b']['status'] == 'quarantined'
+    assert waits == [10.0, 10.0]  # Only primary confirmation; no replacement sleep.

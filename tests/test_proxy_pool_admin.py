@@ -418,3 +418,17 @@ def test_usage_poller_respects_interval_and_pool_sync_lock(tmp_path):
     service._last_usage_attempt = 0
     asyncio.run(service.scheduled_subscription_usage())
     assert calls == [True]
+
+
+def test_strict_admin_candidates_exclude_quarantine_and_stale_backups(tmp_path):
+    import time
+    service = configured_service(tmp_path)
+    monitor = json.loads(service.monitor_config_path.read_text(encoding='utf-8'))
+    monitor.update(verified_standbys_only=True, standby_max_age_seconds=120)
+    state = {'nodes': {'备用一': {'status': 'ready', 'consecutive_successes': 2, 'last_success_at': time.time()},
+                       '备用二': {'status': 'ready', 'consecutive_successes': 2, 'last_success_at': time.time()}}}
+    assert service._eligible_nodes(monitor, state, '主节点') == ['主节点', '备用一', '备用二']
+    state['quarantine_until'] = {'备用二': 1}
+    assert service._eligible_nodes(monitor, state, '主节点') == ['主节点', '备用一']
+    state['nodes']['备用一']['last_success_at'] = 1
+    assert service._eligible_nodes(monitor, state, '主节点') == ['主节点']

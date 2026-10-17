@@ -143,7 +143,7 @@ class ProxyPoolAdminService:
         self.mihomo_home: Path | None = None
         self.mihomo_binary = "mihomo"
         self.sync_interval_seconds = 300
-        self.usage_check_interval_seconds = 300
+        self.usage_check_interval_seconds = 240
         self._last_usage_attempt = 0.0
         self.daily_sync_time = "06:00"
         self.daily_sync_hour = 6
@@ -181,7 +181,7 @@ class ProxyPoolAdminService:
             self.mihomo_home = self.profile_path.parent.parent if self.profile_path.parent.name == "profiles" else self.profile_path.parent
         self.mihomo_binary = str(options.get("mihomo-binary") or "mihomo").strip()
         self.sync_interval_seconds = max(60, min(int(options.get("sync-interval-seconds", 300) or 300), 86400))
-        self.usage_check_interval_seconds = max(60, min(int(options.get("usage-check-interval-seconds", 300) or 300), 3600))
+        self.usage_check_interval_seconds = max(60, min(int(options.get("usage-check-interval-seconds", 240) or 240), 3600))
         configured_time = str(options.get("daily-sync-time") or "06:00").strip()
         try:
             hour_text, minute_text = configured_time.split(":", 1)
@@ -370,6 +370,13 @@ class ProxyPoolAdminService:
             if source in disabled or country not in allowed:
                 continue
             recorded = str((records.get(node) or {}).get("status") or "unknown")
+            if monitor.get("verified_standbys_only") and node != current:
+                record = records.get(node) or {}
+                if (recorded != "ready" or node in (state or {}).get("quarantine_until", {})
+                    or int(record.get("consecutive_successes") or 0) < max(int(monitor.get("replacement_confirmations", 2)), int(monitor.get("recovery_successes", 2)))
+                    or not record.get("last_success_at")
+                    or time.time() - float(record["last_success_at"]) > float(monitor.get("standby_max_age_seconds", 120))):
+                    continue
             status = "active" if node == current and recorded != "quarantined" else recorded
             grouped.setdefault(source, []).append((rank.get(status, 3), index, node))
         result: list[str] = []
@@ -379,7 +386,10 @@ class ProxyPoolAdminService:
         return result
 
     def _validate_pool_capacity(self, monitor: dict[str, Any], state: dict[str, Any] | None = None) -> int:
-        eligible_count = len(self._eligible_nodes(monitor, state or {}))
+        # Policy capacity is a configured upper bound, not a claim that stale
+        # nodes are ready. Strict runtime health is reported separately.
+        capacity_policy = {**monitor, "verified_standbys_only": False}
+        eligible_count = len(self._eligible_nodes(capacity_policy, state or {}))
         if eligible_count < 2:
             raise ValueError("至少需要保留 2 个可用节点，才能维持主节点和备用节点")
         standby_size = int(monitor.get("standby_pool_size", eligible_count - 1))
@@ -815,6 +825,10 @@ class ProxyPoolAdminService:
             healthy = 0
             for candidate in candidates:
                 record = records.setdefault(candidate, {})
+                if monitor.get("quarantine_requires_manual_release") and (
+                    record.get("status") == "quarantined" or candidate in state.get("quarantine_until", {})
+                ):
+                    continue
                 if record.get("status") in {"active", "ready"} and record.get("last_success_at"):
                     healthy += 1
                 else:

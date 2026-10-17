@@ -1707,6 +1707,7 @@ def test_cancel_before_first_semantic_stream_event_closes_response_and_account_s
 
 
 def test_codex_version_defaults_and_overrides(monkeypatch):
+    assert DEFAULT_CODEX_CLIENT_VERSION == "0.163.0"
     monkeypatch.delenv("ROSE_CODEX_CLIENT_VERSION", raising=False)
     assert codex_client_version({}) == DEFAULT_CODEX_CLIENT_VERSION
     monkeypatch.setenv("ROSE_CODEX_CLIENT_VERSION", "0.153.3")

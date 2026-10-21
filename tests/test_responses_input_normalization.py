@@ -90,6 +90,16 @@ def test_legacy_function_call_item_ids_are_repaired_without_changing_call_ids():
     assert payload["input"][0]["id"] == "call_00_old"
 
 
+def test_custom_tool_call_ids_keep_the_ctc_prefix():
+    payload = {
+        "input": [{"type": "custom_tool_call", "id": "ctc_00_custom", "call_id": "call_00_custom"}],
+    }
+
+    normalized = _normalize_responses_function_call_ids(payload)
+
+    assert normalized["input"][0]["id"] == "ctc_00_custom"
+
+
 def test_fallback_responses_tool_output_separates_item_and_call_ids():
     item = _responses_tool_output({
         "id": "call_00_tool",

@@ -504,19 +504,24 @@ def _responses_namespace_map(payload: dict) -> dict[str, tuple[str, str]]:
     return result
 
 
-def _responses_function_call_item_id(value: Any = None) -> str:
-    """Return a valid Responses function-call item id.
+def _responses_function_call_item_id(value: Any = None, item_type: str = "function_call") -> str:
+    """Return a valid Responses tool-call item id.
 
-    Responses separates the item id (``fc_...``) from the tool call id
-    (``call_...``). Older compatibility responses used the latter for both,
+    Responses uses ``fc_...`` for function calls and ``ctc_...`` for custom
+    tool calls. Older compatibility responses used ``call_...`` for both,
     which makes the next request fail validation after a tool call.
     """
+    prefix = "ctc_" if str(item_type or "") == "custom_tool_call" else "fc_"
     raw = str(value or "").strip()
-    if raw.startswith("fc_"):
+    if raw.startswith(prefix):
         return raw
+    if raw.startswith("fc_ctc_") and prefix == "ctc_":
+        return raw[3:]
     if raw.startswith("call_"):
         raw = raw[5:]
-    return "fc_" + (raw or uuid.uuid4().hex)
+    if raw.startswith(("fc_", "ctc_")):
+        raw = raw[3:]
+    return prefix + (raw or uuid.uuid4().hex)
 
 
 def _normalize_responses_function_call_ids(payload: dict[str, Any]) -> dict[str, Any]:
@@ -529,7 +534,10 @@ def _normalize_responses_function_call_ids(payload: dict[str, Any]) -> dict[str,
                 continue
             if str(item.get("type") or "") not in {"function_call", "custom_tool_call"}:
                 continue
-            item["id"] = _responses_function_call_item_id(item.get("id") or item.get("call_id"))
+            item["id"] = _responses_function_call_item_id(
+                item.get("id") or item.get("call_id"),
+                str(item.get("type") or "function_call"),
+            )
     return normalized
 
 

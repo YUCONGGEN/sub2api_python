@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import time
 import uuid
+from typing import Any
 from backend.common.routing_trace import routing_scope, record_mapping
 
 from fastapi import Request
@@ -502,16 +504,46 @@ def _responses_namespace_map(payload: dict) -> dict[str, tuple[str, str]]:
     return result
 
 
+def _responses_function_call_item_id(value: Any = None) -> str:
+    """Return a valid Responses function-call item id.
+
+    Responses separates the item id (``fc_...``) from the tool call id
+    (``call_...``). Older compatibility responses used the latter for both,
+    which makes the next request fail validation after a tool call.
+    """
+    raw = str(value or "").strip()
+    if raw.startswith("fc_"):
+        return raw
+    if raw.startswith("call_"):
+        raw = raw[5:]
+    return "fc_" + (raw or uuid.uuid4().hex)
+
+
+def _normalize_responses_function_call_ids(payload: dict[str, Any]) -> dict[str, Any]:
+    """Repair legacy function-call item ids without touching opaque items."""
+    normalized = copy.deepcopy(payload)
+    items = normalized.get("input")
+    if isinstance(items, list):
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("type") or "") not in {"function_call", "custom_tool_call"}:
+                continue
+            item["id"] = _responses_function_call_item_id(item.get("id") or item.get("call_id"))
+    return normalized
+
+
 def _responses_tool_output(call: dict, namespaces: dict[str, tuple[str, str]]) -> dict:
     function = call.get("function") or {}
     raw_name = str(function.get("name") or "")
     namespace, name = namespaces.get(raw_name, ("", raw_name))
-    call_id = str(call.get("id") or ("call_" + uuid.uuid4().hex))
+    call_id = str(call.get("call_id") or call.get("id") or ("call_" + uuid.uuid4().hex))
+    item_id = _responses_function_call_item_id(call.get("item_id") or call.get("id"))
     arguments = function.get("arguments") or "{}"
     if not isinstance(arguments, str):
         arguments = json.dumps(arguments, ensure_ascii=False)
     item = {
-        "id": call_id, "type": "function_call", "status": "completed",
+        "id": item_id, "type": "function_call", "status": "completed",
         "call_id": call_id, "name": name, "arguments": arguments,
     }
     if namespace:
@@ -548,6 +580,7 @@ async def openai_responses(request: Request, *, compact: bool = False):
     else:
         payload, mapping = _group_service(request).apply_model_mapping(user, payload)
         record_mapping(user, original_payload, mapping)
+    payload = _normalize_responses_function_call_ids(payload)
     subscription_response = await maybe_proxy_openai_subscription(request, payload, user, client_model, compact=compact)
     if subscription_response is not None:
         return subscription_response
@@ -713,6 +746,7 @@ async def openai_responses(request: Request, *, compact: bool = False):
                         for index, call in enumerate(tool_calls):
                             function_item = _responses_tool_output(call, namespace_tools)
                             call_id = function_item["call_id"]
+                            item_id = function_item["id"]
                             arguments = function_item["arguments"]
                             output_items.append(function_item)
                             yield _responses_event("response.output_item.added", {
@@ -721,11 +755,11 @@ async def openai_responses(request: Request, *, compact: bool = False):
                             })
                             yield _responses_event("response.function_call_arguments.delta", {
                                 "type": "response.function_call_arguments.delta", "sequence_number": next_sequence(),
-                                "item_id": call_id, "output_index": index, "delta": arguments,
+                                "item_id": item_id, "output_index": index, "delta": arguments,
                             })
                             yield _responses_event("response.function_call_arguments.done", {
                                 "type": "response.function_call_arguments.done", "sequence_number": next_sequence(),
-                                "item_id": call_id, "output_index": index, "arguments": arguments,
+                                "item_id": item_id, "output_index": index, "arguments": arguments,
                             })
                             yield _responses_event("response.output_item.done", {
                                 "type": "response.output_item.done", "sequence_number": next_sequence(),

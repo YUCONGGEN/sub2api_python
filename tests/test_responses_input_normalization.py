@@ -1,5 +1,9 @@
 from backend.common.multimodal import normalize_chat_messages, normalize_content
-from backend.protocol.openai_adapter import _responses_input_to_messages
+from backend.protocol.openai_adapter import (
+    _normalize_responses_function_call_ids,
+    _responses_input_to_messages,
+    _responses_tool_output,
+)
 
 
 def test_responses_only_parts_are_safe_for_chat_upstreams():
@@ -65,3 +69,32 @@ def test_compaction_only_input_does_not_create_empty_user_message():
         {"type": "compaction", "id": "ctx_1"},
         {"type": "reasoning", "summary": []},
     ]) == []
+
+
+def test_legacy_function_call_item_ids_are_repaired_without_changing_call_ids():
+    payload = {
+        "model": "gpt-6-sol",
+        "input": [
+            {"type": "function_call", "id": "call_00_old", "call_id": "call_00_old", "name": "lookup", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_00_old", "output": "ok"},
+            {"type": "compaction", "encrypted_content": "opaque"},
+        ],
+    }
+
+    normalized = _normalize_responses_function_call_ids(payload)
+
+    assert normalized["input"][0]["id"] == "fc_00_old"
+    assert normalized["input"][0]["call_id"] == "call_00_old"
+    assert normalized["input"][1] == payload["input"][1]
+    assert normalized["input"][2] == payload["input"][2]
+    assert payload["input"][0]["id"] == "call_00_old"
+
+
+def test_fallback_responses_tool_output_separates_item_and_call_ids():
+    item = _responses_tool_output({
+        "id": "call_00_tool",
+        "function": {"name": "lookup", "arguments": "{}"},
+    }, {})
+
+    assert item["id"] == "fc_00_tool"
+    assert item["call_id"] == "call_00_tool"

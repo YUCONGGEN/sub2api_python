@@ -43,6 +43,7 @@ from backend.service.user_group_service import user_group_runtime
 
 
 OPENAI_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses"
+OPENAI_COMPACT_URL = "https://chatgpt.com/backend-api/codex/responses/compact"
 OPENAI_MODELS_URL = "https://chatgpt.com/backend-api/codex/models"
 OPENAI_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 OPENAI_RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
@@ -845,9 +846,9 @@ class SubscriptionGatewayService:
             "User-Agent": "Rose-Subscription-Gateway/1.0",
         }
 
-    def _provider_request(self, provider: str, credentials: dict[str, Any], account: dict[str, Any], incoming: dict[str, str], stream: bool, *, count_tokens: bool = False) -> tuple[str, dict[str, str]]:
+    def _provider_request(self, provider: str, credentials: dict[str, Any], account: dict[str, Any], incoming: dict[str, str], stream: bool, *, count_tokens: bool = False, compact: bool = False) -> tuple[str, dict[str, str]]:
         if provider == "openai":
-            return OPENAI_RESPONSES_URL, self._openai_headers(credentials, account, stream)
+            return (OPENAI_COMPACT_URL if compact else OPENAI_RESPONSES_URL), self._openai_headers(credentials, account, stream)
         if provider == "claude":
             url = CLAUDE_COUNT_TOKENS_URL if count_tokens else CLAUDE_MESSAGES_URL
             return url, self._claude_headers(credentials, incoming, stream)
@@ -1153,22 +1154,26 @@ class SubscriptionGatewayService:
             outgoing["instructions"] = "You are a helpful coding assistant. Follow the user's instructions carefully."
         return outgoing
 
-    async def proxy_openai(self, payload: dict[str, Any], user_id: int) -> SubscriptionGatewayResponse:
+    async def proxy_openai(self, payload: dict[str, Any], user_id: int, *, compact: bool = False) -> SubscriptionGatewayResponse:
         model = str(payload.get("model") or "").strip()
         if not model:
             return self._json_error(400, "model is required", "invalid_request_error")
         try:
-            outgoing = self._prepare_openai_subscription_payload(payload)
+            # Compaction has a canonical schema. Preserve opaque compaction
+            # items and do not inject normal Responses defaults.
+            outgoing = copy.deepcopy(payload) if compact else self._prepare_openai_subscription_payload(payload)
+            if compact:
+                outgoing.pop("stream", None)
         except ValueError as exc:
             return self._json_error(400, str(exc), "invalid_request_error")
-        return await self._proxy("openai", model, outgoing, user_id, {})
+        return await self._proxy("openai", model, outgoing, user_id, {}, compact=compact)
 
-    async def proxy_responses(self, provider: str, payload: dict[str, Any], user_id: int) -> SubscriptionGatewayResponse:
+    async def proxy_responses(self, provider: str, payload: dict[str, Any], user_id: int, *, compact: bool = False) -> SubscriptionGatewayResponse:
         provider = str(provider or "").strip().lower()
         if provider not in SUBSCRIPTION_PROVIDERS:
             return self._json_error(400, "provider 不受支持", "invalid_request_error")
         if provider == "openai":
-            return await self.proxy_openai(payload, user_id)
+            return await self.proxy_openai(payload, user_id, compact=compact)
         if provider not in RESPONSES_PROVIDERS:
             return self._json_error(400, f"{provider} 不支持 Responses 协议", "invalid_request_error")
         model = str(payload.get("model") or "").strip()
@@ -1199,8 +1204,8 @@ class SubscriptionGatewayService:
             return self._json_error(400, "model is required", "invalid_request_error")
         return await self._proxy("claude", model, dict(payload), user_id, incoming_headers, count_tokens=count_tokens)
 
-    async def _proxy(self, provider: str, model: str, payload: dict[str, Any], user_id: int, incoming_headers: dict[str, str], *, count_tokens: bool = False) -> SubscriptionGatewayResponse:
-        stream_requested = bool(payload.get("stream")) and not count_tokens
+    async def _proxy(self, provider: str, model: str, payload: dict[str, Any], user_id: int, incoming_headers: dict[str, str], *, count_tokens: bool = False, compact: bool = False) -> SubscriptionGatewayResponse:
+        stream_requested = bool(payload.get("stream")) and not count_tokens and not compact
         reasoning_effort = self._reasoning_effort(payload)
         session_key = self._session_key(provider, user_id, payload)
         preferred_account_id = self._preferred_account(session_key)
@@ -1296,7 +1301,7 @@ class SubscriptionGatewayService:
                 last_headers = {}
                 url, headers = self._provider_request(
                     provider, credentials, account, incoming_headers, stream_requested,
-                    count_tokens=count_tokens,
+                    count_tokens=count_tokens, compact=compact,
                 )
                 request = self._client().build_request("POST", url, headers=headers, json=payload)
                 try:
@@ -1329,6 +1334,11 @@ class SubscriptionGatewayService:
                             "订阅网关收到上游429，不改变账号状态 provider=%s model=%s account_id=%s",
                             provider, model, account_id,
                         )
+                        # Compact requests are control-plane retries. A short
+                        # bounded pause prevents immediately hammering every
+                        # subscription after an upstream Retry-After response.
+                        if compact:
+                            await asyncio.sleep(min(max(retry_after if retry_after is not None else 1.0, 0.0), 10.0))
                         continue
                     if self._is_capacity_error(last_detail):
                         with self._safety_lock:

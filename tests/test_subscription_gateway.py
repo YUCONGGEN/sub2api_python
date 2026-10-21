@@ -243,6 +243,26 @@ def test_extended_provider_request_targets_and_headers(provider, expected_url):
         assert headers["x-grok-client-version"] == "0.2.120"
 
 
+def test_openai_compaction_uses_native_endpoint_and_preserves_payload():
+    response = httpx.Response(200, json={"id": "cmp_1", "output": [{"type": "compaction", "encrypted_content": "opaque"}]})
+    client = SequenceClient([response])
+    gateway = configured_gateway(RecordingAccounts(), RecordingStore(), client)
+    payload = {
+        "model": "gpt-6-astra",
+        "input": [{"type": "compaction", "encrypted_content": "opaque"}],
+        "stream": True,
+    }
+
+    result = asyncio.run(gateway.proxy_openai(payload, 9, compact=True))
+
+    assert result.status_code == 200
+    request = client.requests[0]
+    assert request.url.path.endswith("/responses/compact")
+    forwarded = json.loads(request.content)
+    assert forwarded["input"] == payload["input"]
+    assert "stream" not in forwarded
+
+
 def test_compatible_chat_route_is_direct_and_enables_stream_usage(monkeypatch):
     gateway = SubscriptionGatewayService(None, None)
     captured = {}

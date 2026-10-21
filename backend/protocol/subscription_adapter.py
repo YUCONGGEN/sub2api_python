@@ -296,13 +296,13 @@ def _client_model_response(response: Response, client_model: str, upstream_model
     return response
 
 
-async def maybe_proxy_openai_subscription(request: Request, payload: dict[str, Any], user: dict[str, Any], client_model: str = ""):
+async def maybe_proxy_openai_subscription(request: Request, payload: dict[str, Any], user: dict[str, Any], client_model: str = "", *, compact: bool = False):
     gateway, _ = _beans(request)
     model = str(payload.get("model") or "").strip()
     for provider in RESPONSES_PROVIDERS:
         if gateway.should_route(provider, model):
-            result = await gateway.proxy_responses(provider, payload, int(user["id"]))
-            if provider == "openai" and result.stream is not None:
+            result = await gateway.proxy_responses(provider, payload, int(user["id"]), compact=compact)
+            if not compact and provider == "openai" and result.stream is not None:
                 result.stream = _ensure_responses_completion(result.stream, model)
             return _client_model_response(as_response(result), client_model, model)
     return None

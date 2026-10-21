@@ -520,7 +520,7 @@ def _responses_tool_output(call: dict, namespaces: dict[str, tuple[str, str]]) -
 
 
 @routing_scope
-async def openai_responses(request: Request):
+async def openai_responses(request: Request, *, compact: bool = False):
     """OpenAI Responses-compatible facade for Codex CLI/App/IDE clients."""
     service, auth, conversations = _beans(request)
     user = await _authenticated_user(request, auth)
@@ -541,11 +541,18 @@ async def openai_responses(request: Request):
         return model_error
     client_model = str(payload.get("model") or service.model_name)
     original_payload = payload
-    payload, mapping = _group_service(request).apply_model_mapping(user, payload)
-    record_mapping(user, original_payload, mapping)
-    subscription_response = await maybe_proxy_openai_subscription(request, payload, user, client_model)
+    # Compaction is a Responses control-plane operation. Keep its encrypted
+    # compaction item intact and never route it through Chat compatibility.
+    if compact:
+        mapping = None
+    else:
+        payload, mapping = _group_service(request).apply_model_mapping(user, payload)
+        record_mapping(user, original_payload, mapping)
+    subscription_response = await maybe_proxy_openai_subscription(request, payload, user, client_model, compact=compact)
     if subscription_response is not None:
         return subscription_response
+    if compact:
+        return JSONResponse({"error": {"message": "Responses compaction requires a native OpenAI subscription route", "type": "unsupported_operation"}}, status_code=501)
     payload = service.apply_openai_subscription_fallback(payload)
     try:
         namespace_tools = _responses_namespace_map(payload)
@@ -845,6 +852,11 @@ async def openai_responses(request: Request):
     finally:
         if not locals().get("is_stream", False):
             _finish_direct_api_activity(request, locals().get("direct_activity_id", ""))
+
+
+async def openai_responses_compact(request: Request):
+    """Native Responses compaction endpoint; never use Chat compatibility."""
+    return await openai_responses(request, compact=True)
 
 
 async def openai_models(request: Request):
